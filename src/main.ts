@@ -71,7 +71,7 @@ function describeHotkey(h: HotkeyConfig): string {
 
 // app() 全局 Alpine 组件
 (window as any).app = () => ({
-  section: "history",
+  section: "general",
   search: "",
   recording: false,
   partial: "",
@@ -101,6 +101,7 @@ function describeHotkey(h: HotkeyConfig): string {
     defaultPrompt: "",
     histSearch: "",
     quickTerm: "",
+    settingsOpen: false,
     llmModelsError: "",
   permWarning: "",
   prioSel: 0,
@@ -550,6 +551,23 @@ function describeHotkey(h: HotkeyConfig): string {
     ];
   },
 
+  // 主界面切换器
+  async switchAsr(ev: Event) {
+    if (!this.cfg) return;
+    this.cfg.active_asr_id = (ev.target as HTMLSelectElement).value;
+    await this.saveCfg();
+  },
+  async togglePolish() {
+    if (!this.cfg) return;
+    this.cfg.active_llm_id = this.cfg.active_llm_id ? "" : (this.cfg.llm_profiles[0]?.id ?? "");
+    await this.saveCfg();
+  },
+  async switchMic(ev: Event) {
+    if (!this.cfg) return;
+    this.cfg.mic_device_uid = (ev.target as HTMLSelectElement).value;
+    await this.saveCfg();
+    try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {}
+  },
   // 顶栏状态条: 当前组合一眼可见
   statusLine(): string {
     if (!this.cfg) return "加载中…";

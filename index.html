@@ -7,9 +7,73 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body x-data="app()" x-init="init()">
-    <aside class="sidebar">
+    <main class="content">
+      <div class="topbar">
+        <select class="picker" @change="switchAsr($event)" title="切换引擎">
+          <template x-for="p in (cfg?.asr_profiles || [])" :key="p.id">
+            <option :value="p.id" :selected="p.id === cfg?.active_asr_id" x-text="'🎙 ' + p.name"></option>
+          </template>
+        </select>
+        <button class="picker" :class="{on: cfg?.active_llm_id}" @click="togglePolish()"
+             x-text="cfg?.active_llm_id ? '✦ 润色开' : '✧ 润色关'"></button>
+        <select class="picker" @change="switchMic($event)" title="切换麦克风">
+          <option value="" :selected="!cfg?.mic_device_uid">🎤 自动</option>
+          <template x-for="m in mics" :key="m.uid">
+            <option :value="m.uid" :selected="m.uid === cfg?.mic_device_uid" x-text="'🎤 ' + m.name"></option>
+          </template>
+        </select>
+        <span style="flex:1"></span>
+        <button class="rec-btn small" @click="toggleRec()" x-text="recording ? '■ 停止' : '试音'"></button>
+        <button class="gear" @click="settingsOpen = true" title="设置">⚙</button>
+      </div>
+
+      <!-- 历史 -->
+      <section x-show="!settingsOpen" class="page wide-page">
+        
+        <input class="inp" type="text" placeholder="搜索转写内容…" x-model="histSearch" style="margin-bottom: 10px" />
+        <div class="card" x-show="history.length">
+          <table class="tbl">
+            <thead><tr><th>时间</th><th>引擎</th><th>最终结果</th><th>LLM</th><th>交付</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="h in filteredHist" :key="h.ts + h.raw">
+                <tr :class="{sel: selHist === h}" @click="selHist = selHist === h ? null : h" @dblclick="copyHist(h)">
+                  <td class="dim" x-text="h.ts"></td>
+                  <td class="dim" x-text="h.engine"></td>
+                  <td class="clip" x-text="h.final_text"></td>
+                  <td x-text="h.llm_used ? '✓' : ''"></td>
+                  <td class="dim" x-text="h.delivered"></td>
+                  <td class="btns">
+                    <button class="mini" @click.stop="copyHist(h)">复制</button>
+                    <button class="mini" x-show="h.audio_path" @click.stop="playHist(h)">播放</button>
+                    <button class="mini" x-show="h.audio_path" @click.stop="rerunHist(h)">重转</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint" x-show="!history.length" x-text="`暂无记录 — 按住 ${hotkeyLabel() || '快捷键'} 说一段话`"></p>
+        <div class="btns" style="margin-top: 10px">
+          <button class="mini" @click="clearHist()">清空历史</button>
+        </div>
+        <div class="card" x-show="selHist">
+          <div class="row-title">详情 <button class="mini" x-show="selHist?.audio_path" @click="openAudio(selHist)">显示录音</button></div>
+          <div class="detail"><b>原始转写</b><div class="result-text" x-text="selHist?.raw"></div></div>
+          <div class="detail"><b>最终结果</b><div class="result-text" x-text="selHist?.final_text"></div></div>
+          <div class="warn" x-show="selHist?.warning" x-text="selHist?.warning"></div>
+        </div>
+      </section>
+    </main>
+    <div class="settings-overlay" x-show="settingsOpen" x-transition.opacity.duration.150ms>
+      <div class="settings-frame">
+        <div class="settings-head">
+          <button class="picker" @click="settingsOpen = false">‹ 返回</button>
+          <span class="status-chip" x-text="statusLine()"></span>
+        </div>
+        <div class="settings-body">
+    <div class="sidebar">
       <div class="search-box">
-        <input type="text" placeholder="搜索设置…" x-model="search" />
+        <input type="text" placeholder="搜索…" x-model="search" />
       </div>
       <nav>
         <template x-for="s in filteredSections()" :key="s.id">
@@ -17,16 +81,10 @@
                x-text="s.title" @click="section = s.id"></button>
         </template>
       </nav>
-    </aside>
+    </div>
+          <div class="content-in">
 
     <div class="perm" x-show="permWarning" x-text="permWarning"></div>
-    <main class="content">
-      <!-- 顶栏: 当前组合状态条(使用中心, 常显) -->
-      <div class="topbar">
-        <span class="status-chip" x-text="statusLine()"></span>
-        <span style="flex:1"></span>
-        <button class="rec-btn small" @click="toggleRec()" x-text="recording ? '■ 停止' : '试音'"></button>
-      </div>
       <!-- 通用 -->
       <section x-show="section === 'general'" class="page">
         <h1>通用</h1>
@@ -326,43 +384,6 @@
           </div>        </div></template>
       </section>
 
-      <!-- 历史 -->
-      <section x-show="section === 'history'" class="page wide-page">
-        <h1>历史</h1>
-        <input class="inp" type="text" placeholder="搜索转写内容…" x-model="histSearch" style="margin-bottom: 10px" />
-        <div class="card" x-show="history.length">
-          <table class="tbl">
-            <thead><tr><th>时间</th><th>引擎</th><th>最终结果</th><th>LLM</th><th>交付</th><th></th></tr></thead>
-            <tbody>
-              <template x-for="h in filteredHist" :key="h.ts + h.raw">
-                <tr :class="{sel: selHist === h}" @click="selHist = selHist === h ? null : h" @dblclick="copyHist(h)">
-                  <td class="dim" x-text="h.ts"></td>
-                  <td class="dim" x-text="h.engine"></td>
-                  <td class="clip" x-text="h.final_text"></td>
-                  <td x-text="h.llm_used ? '✓' : ''"></td>
-                  <td class="dim" x-text="h.delivered"></td>
-                  <td class="btns">
-                    <button class="mini" @click.stop="copyHist(h)">复制</button>
-                    <button class="mini" x-show="h.audio_path" @click.stop="playHist(h)">播放</button>
-                    <button class="mini" x-show="h.audio_path" @click.stop="rerunHist(h)">重转</button>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-        </div>
-        <p class="hint" x-show="!history.length" x-text="`暂无记录 — 按住 ${hotkeyLabel() || '快捷键'} 说一段话`"></p>
-        <div class="btns" style="margin-top: 10px">
-          <button class="mini" @click="clearHist()">清空历史</button>
-        </div>
-        <div class="card" x-show="selHist">
-          <div class="row-title">详情 <button class="mini" x-show="selHist?.audio_path" @click="openAudio(selHist)">显示录音</button></div>
-          <div class="detail"><b>原始转写</b><div class="result-text" x-text="selHist?.raw"></div></div>
-          <div class="detail"><b>最终结果</b><div class="result-text" x-text="selHist?.final_text"></div></div>
-          <div class="warn" x-show="selHist?.warning" x-text="selHist?.warning"></div>
-        </div>
-      </section>
-
       <!-- 关于 -->
       <section x-show="section === 'about'" class="page">
         <h1>关于</h1>
@@ -372,7 +393,10 @@
           <div class="row-hint">麦克风需要"输入监控"外的系统麦克风权限; 自动粘贴需要"辅助功能"权限(系统设置 → 隐私与安全性)</div>
         </div>
       </section>
-    </main>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+          </div>
+        </div>
+      </div>
+    </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
 </html>
