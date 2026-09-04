@@ -1,0 +1,46 @@
+[package]
+name = "tauri-app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+default-run = "tauri-app"
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "tauri_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-tungstenite = { version = "0.30.0", features = ["native-tls"] }
+cpal = "0.18.2"
+futures-util = "0.3.34"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+flate2 = "1.1.10"
+uuid = { version = "1.26.0", features = ["v4"] }
+http = "1.5.0"
+base64 = "0.23.1"
+pinyin = "0.11.0"
+reqwest = { version = "0.13.4", features = ["json", "multipart"] }
+enigo = "0.6.1"
+tauri-plugin-global-shortcut = "2.3.2"
+tauri-plugin-clipboard-manager = "2.3.3"
+regex = "1.13.1"
+tauri-plugin-single-instance = "2.4.4"
+core-foundation = "0.10.1"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSGeometry"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSStatusBar", "NSStatusItem", "NSButton", "NSMenu", "NSMenuItem", "NSImage", "NSResponder", "NSApplication", "NSControl", "NSColor", "NSPasteboard", "NSSound"] }
+tauri-plugin-autostart = "2.5.1"
+
