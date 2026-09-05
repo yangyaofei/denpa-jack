@@ -553,6 +553,12 @@ function describeHotkey(h: HotkeyConfig): string {
   },
 
   // 主界面切换器
+  toggleRec() { return this.toggleRecording(); },
+  async saveKeys() {
+    if (!this.cfg) return;
+    this.cfg.keys = this.keysText.split(/[,\n]/).map((x: string) => x.trim()).filter(Boolean);
+    await this.saveCfg();
+  },
   async openSettings() {
     try {
       await invoke("open_settings_window");
