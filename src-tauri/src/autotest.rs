@@ -22,28 +22,42 @@ pub fn maybe_spawn(app: &AppHandle) {
 /// 文件回放: 强制 clipboard_only → 录音会话 → 按真实节奏喂 wav PCM → Finish → 等交付
 fn run_file(app: tauri::AppHandle, wavpath: String) {
     std::thread::sleep(std::time::Duration::from_millis(1200));
-    log::log(&app, "AUTOTEST-FILE: begin(真实交付路径, 非 clip_only)");
-    {
-        let st = app.state::<std::sync::Mutex<AppState>>();
-        if let Err(e) = crate::recording::ctrl_start(app.clone(), &st) {
-            log::log(&app, &format!("AUTOTEST-FILE: start 失败: {e}"));
-            app.exit(1);
-            return;
-        }
-    }
+    log::log(&app, "AUTOTEST-FILE: begin(文件回放=唯一输入源; 自建会话不碰真实麦克风)");
     match std::fs::read(&wavpath) {
         Err(e) => log::log(&app, &format!("AUTOTEST-FILE: 读失败 {e}")),
         Ok(raw) => {
             let pcm = wav_data_chunk(&raw).unwrap_or_default();
             log::log(&app, &format!("AUTOTEST-FILE: pcm {}B", pcm.len()));
+            // 自建会话: resolve→spawn→mirror, 与 ctrl_start 完全隔离(无双输入)
+            use tauri::Manager;
+            let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+            let (profile, key) = match crate::recording::resolve_asr(&cfg) {
+                Ok(x) => x,
+                Err(e) => { log::log(&app, &format!("AUTOTEST-FILE: resolve 失败: {e}")); app.exit(1); return; }
+            };
+            let (tx, rx) = tokio::sync::mpsc::channel::<doubao::Cmd>(64);
+            let handoff: crate::engines::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
+            crate::engines::spawn_session(
+                app.clone(), profile.provider.clone(), key,
+                crate::recording::budget_hotwords(&cfg.dict), handoff.clone(), rx,
+            );
+            {
+                let st = app.state::<std::sync::Mutex<AppState>>();
+                st.lock().unwrap().engine_mirror = Some(tx.clone());
+            }
             for (i, chunk) in pcm.chunks(6400).enumerate() {
                 log::elog(&format!("[at] feed #{}", i + 1));
-                crate::engines::send_current(&app, doubao::Cmd::Feed(chunk.to_vec()));
+                let _ = tx.try_send(doubao::Cmd::Feed(chunk.to_vec()));
                 std::thread::sleep(std::time::Duration::from_millis(190));
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
-            crate::recording::send_cmd_pub(&app, doubao::Cmd::Finish);
+            let _ = tx.try_send(doubao::Cmd::Finish);
             log::log(&app, "AUTOTEST-FILE: fed+finish");
+            // 交付期间 engine_mirror 保留给 pipeline 可用(pipeline 不用 mirror, 无碍)
+            std::thread::sleep(std::time::Duration::from_millis(15000));
+            log::log(&app, "AUTOTEST-FILE: done");
+            app.exit(0);
+            return;
         }
     }
     std::thread::sleep(std::time::Duration::from_millis(15000));

@@ -92,7 +92,6 @@ pub fn wav_header(data_len: usize) -> [u8; 44] {
     h[12..16].copy_from_slice(b"fmt ");
     h[16..20].copy_from_slice(&16u32.to_le_bytes());
     h[20..22].copy_from_slice(&1u16.to_le_bytes());
-    h[21..22].copy_from_slice(&1u16.to_le_bytes()[..1]);
     h[22..24].copy_from_slice(&1u16.to_le_bytes());
     h[24..28].copy_from_slice(&16000u32.to_le_bytes());
     h[28..32].copy_from_slice(&32000u32.to_le_bytes());

@@ -33,6 +33,8 @@ pub async fn run_zhipu_session(
     }
     let wav = wrap_wav(&pcm);
     crate::log::elog(&format!("[zhipu] wav {}B, 上传中...", wav.len()));
+    // C40 诊断: 落盘实际产物, 供 curl 重放对照
+    let _ = std::fs::write("../tmp/zhipu_upload.wav", &wav);
     match transcribe(&api_key, wav).await {
         Ok(Some(t)) => {
             crate::log::elog(&format!("[zhipu] result: {t}"));
