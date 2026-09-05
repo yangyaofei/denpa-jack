@@ -552,6 +552,11 @@ function describeHotkey(h: HotkeyConfig): string {
   },
 
   // 主界面切换器
+  async openSettings() {
+    try {
+      await invoke("open_settings_window");
+    } catch { this.settingsOpen = true; }
+  },
   async switchAsr(ev: Event) {
     if (!this.cfg) return;
     this.cfg.active_asr_id = (ev.target as HTMLSelectElement).value;

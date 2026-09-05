@@ -366,3 +366,19 @@ pub async fn llm_selftest(
 pub fn get_default_prompt() -> String {
     crate::settings::DEFAULT_LLM_PROMPT.to_string()
 }
+
+/// HIG settings: 独立固定尺寸设置窗(隐藏 min/max), 已开则聚焦
+#[tauri::command]
+pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.show(); let _ = w.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("settings.html".into()))
+        .title("设置")
+        .inner_size(560.0, 600.0)
+        .resizable(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
