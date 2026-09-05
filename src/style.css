@@ -177,3 +177,22 @@ body {
 .picker.on { background: #0a84ff; color: #fff; border-color: #0a84ff; }
 .gear { font-size: 16px; background: none; border: none; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
 .gear:hover { background: rgba(0,0,0,0.06); }
+
+/* 主窗双栏: 列表 | 详情 */
+.split { display: flex; gap: 14px; flex: 1; min-height: 0; }
+.pane-left { width: 360px; flex: none; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.hist-list { flex: 1; overflow-y: auto; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; background: rgba(255,255,255,0.55); }
+.hist-item { padding: 9px 12px; border-bottom: 1px solid rgba(0,0,0,0.05); cursor: pointer; }
+.hist-item:hover { background: rgba(0,0,0,0.04); }
+.hist-item.sel { background: rgba(10,132,255,0.12); }
+.hi-meta { display: flex; justify-content: space-between; font-size: 11px; color: #86868b; }
+.hi-text { font-size: 13px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hi-tags { display: flex; gap: 5px; margin-top: 4px; }
+.hi-tags .chip { font-size: 10px; }
+.pane-right { flex: 1; min-width: 0; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; background: rgba(255,255,255,0.55); overflow-y: auto; }
+.detail { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.d-row label { display: block; font-size: 11px; color: #86868b; margin-bottom: 4px; }
+.d-text { font-size: 14px; line-height: 1.5; }
+.d-text.strong { font-weight: 500; }
+.d-meta { font-size: 11px; color: #86868b; }
+.dim2 { color: #9a9aa0; }

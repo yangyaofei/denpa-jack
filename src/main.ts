@@ -582,6 +582,12 @@ function describeHotkey(h: HotkeyConfig): string {
   activeMicName(): string {
     return this.activeMic?.name ?? "自动(默认麦克风)";
   },
+  // 详情面板: 把该条文本放进词典快加框(切到设置→词典页)
+  addTermFromHist(h: any) {
+    this.quickTerm = (h.final_text || h.raw || "").slice(0, 40);
+    this.section = "dict";
+    this.settingsOpen = true;
+  },
   filteredHist() {
     const q = this.histSearch.trim().toLowerCase();
     if (!q) return this.history;
