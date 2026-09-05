@@ -194,6 +194,7 @@ function describeHotkey(h: HotkeyConfig): string {
     return "★★★".slice(0, Math.max(0, boost)) + "☆☆☆".slice(0, Math.max(0, 3 - boost));
   },
   weightStars(b: number): string { return this.stars(b); },
+  describeHotkey,
   hotkeyLabel() { return this.cfg?.hotkey ? describeHotkey(this.cfg.hotkey) : ""; },
   startHotkeyRecord() {
     if (this.hotkeyRecording || !this.cfg) return;

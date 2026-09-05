@@ -27,6 +27,46 @@
         <button class="gear" @click="openSettings()" title="设置 (⌘,)">⚙</button>
       </div>
 
+      <section x-show="!settingsOpen" class="split">
+        <div class="pane-left">
+          <input class="inp" type="text" placeholder="搜索转写内容…" x-model="histSearch" />
+          <div class="hist-list">
+            <template x-for="h in filteredHist()" :key="h.ts">
+              <div class="hist-item" :class="{sel: selHist?.ts === h.ts}" @click="selHist = h">
+                <div class="hi-meta"><span x-text="h.ts"></span><span x-text="h.engine"></span></div>
+                <div class="hi-text" x-text="h.final_text || h.raw"></div>
+                <div class="hi-tags">
+                  <span class="chip" x-show="h.llm_used">✦LLM</span>
+                  <span class="chip" x-show="h.warning" style="color:#ff6961" x-text="'⚠ ' + (h.warning||'').slice(0,24)"></span>
+                  <span class="chip" x-text="h.delivered"></span>
+                </div>
+              </div>
+            </template>
+            <div class="dim" x-show="!filteredHist().length" style="padding:20px">无记录（按住热键说话即产生）</div>
+          </div>
+        </div>
+        <div class="pane-right">
+          <template x-if="selHist">
+            <div class="detail">
+              <div class="d-row"><label>最终结果</label><div class="d-text strong" x-text="selHist.final_text || selHist.raw"></div>
+                <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" @click="rerunHist(selHist)">重转</button></div></div>
+              <div class="d-row" x-show="selHist.raw && selHist.raw !== selHist.final_text"><label>原始转写</label><div class="d-text dim2" x-text="selHist.raw"></div></div>
+              <div class="d-row" x-show="selHist.warning"><label>问题</label><div class="d-text" style="color:#ff6961" x-text="selHist.warning"></div></div>
+              <div class="d-meta">
+                <span x-text="selHist.ts"></span> · <span x-text="selHist.engine"></span> ·
+                <span x-text="selHist.delivered"></span> · LLM <span x-text="selHist.llm_used ? '✓' : '—'"></span>
+              </div>
+              <div class="btns">
+                <button class="mini" x-show="selHist.audio_path" @click="playHist(selHist)">▶ 播放</button>
+                <button class="mini" x-show="selHist.audio_path" @click="openAudio(selHist)">显示录音</button>
+                <button class="mini" @click="addTermFromHist(selHist)">把本条加为词条</button>
+              </div>
+            </div>
+          </template>
+          <div class="dim" x-show="!selHist" style="padding:40px">选择左侧记录查看详情</div>
+        </div>
+      </section>
+
       <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
