@@ -11,7 +11,7 @@ use objc2_app_kit::{
     NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem,
     NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{ns_string, NSString};
+use objc2_foundation::{NSData, ns_string, NSString};
 use std::sync::mpsc::Sender;
 
 type TrayTx = Sender<String>;
@@ -39,12 +39,21 @@ impl MacTray {
     pub fn set_recording(&self, on: bool) {
         if let Some(mtm) = MainThreadMarker::new() {
             if let Some(btn) = self.item.button(mtm) {
-                let tint = if on {
-                    Some(&*NSColor::systemRedColor())
+                let png: &[u8] = if on {
+                    include_bytes!("../icons/menubar-rec.png")
                 } else {
-                    None
+                    include_bytes!("../icons/menubar.png")
                 };
-                btn.setContentTintColor(tint);
+                let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
+                if let Some(icon) = unsafe { NSImage::initWithData(NSImage::alloc(), &data) } {
+                    unsafe {
+                        icon.setTemplate(true);
+                        let _ = icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
+                        btn.setImage(Some(&icon));
+                        let tint = if on { Some(NSColor::systemRedColor()) } else { None };
+                        btn.setContentTintColor(tint.as_deref());
+                    }
+                }
             }
         }
     }
@@ -110,19 +119,20 @@ impl MacTray {
         let handler: Retained<TrayHandler> = unsafe { msg_send![super(alloc.set_ivars(tx)), init] };
         let status_bar = unsafe { NSStatusBar::systemStatusBar() };
         let item = unsafe { status_bar.statusItemWithLength(-1f64) }; // NSVariableStatusItemLength
-        let icon = unsafe {
-            NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("mic.fill"), None)
-                .ok_or("system symbol mic.fill 不可用")?
+        // C41: 菜单栏图标沿用 Swift 版自绘(声波→箭头→文本框), @2x 位图 + template 适配深浅色
+        let png: &[u8] = if recording {
+            include_bytes!("../icons/menubar-rec.png")
+        } else {
+            include_bytes!("../icons/menubar.png")
         };
+        let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
+        let icon = unsafe { NSImage::initWithData(NSImage::alloc(), &data) }.ok_or("menubar.png 解码失败")?;
         unsafe {
-            let _ = icon.setSize(objc2_foundation::NSSize::new(18.0, 18.0));
             icon.setTemplate(true);
+            icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
             if let Some(btn) = item.button(mtm) {
                 btn.setImage(Some(&icon));
                 btn.setToolTip(Some(&*NSString::from_str("Voice 输入")));
-                if recording {
-                    btn.setContentTintColor(Some(&*NSColor::systemRedColor()));
-                }
             }
         }
         let menu = unsafe { NSMenu::new(mtm) };
