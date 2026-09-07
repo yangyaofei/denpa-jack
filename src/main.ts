@@ -71,7 +71,7 @@ function describeHotkey(h: HotkeyConfig): string {
 
 // app() 全局 Alpine 组件
 (window as any).app = () => ({
-  section: "general",
+  section: "history",
   search: "",
   recording: false,
   partial: "",
@@ -560,9 +560,7 @@ function describeHotkey(h: HotkeyConfig): string {
     await this.saveCfg();
   },
   async openSettings() {
-    try {
-      await invoke("open_settings_window");
-    } catch { this.settingsOpen = true; }
+    this.section = "general";
   },
   async switchAsr(ev: Event) {
     if (!this.cfg) return;
@@ -598,7 +596,6 @@ function describeHotkey(h: HotkeyConfig): string {
   addTermFromHist(h: any) {
     this.quickTerm = (h.final_text || h.raw || "").slice(0, 40);
     this.section = "dict";
-    this.settingsOpen = true;
   },
   filteredHist() {
     const q = this.histSearch.trim().toLowerCase();

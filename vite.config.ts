@@ -16,7 +16,6 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         hud: resolve(__dirname, "hud.html"),
-        settings: resolve(__dirname, "settings.html"),
       },
     },
   },

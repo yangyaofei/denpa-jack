@@ -186,7 +186,7 @@ body {
 .hist-item:hover { background: rgba(0,0,0,0.04); }
 .hist-item.sel { background: rgba(10,132,255,0.12); }
 .hi-meta { display: flex; justify-content: space-between; font-size: 11px; color: #86868b; }
-.hi-text { font-size: 13px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hi-text { font-size: 13px; margin-top: 3px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hi-tags { display: flex; gap: 5px; margin-top: 4px; }
 .hi-tags .chip { font-size: 10px; }
 .pane-right { flex: 1; min-width: 0; border: 1px solid rgba(0,0,0,0.08); border-radius: 10px; background: rgba(255,255,255,0.55); overflow-y: auto; }
@@ -196,6 +196,15 @@ body {
 .d-text.strong { font-weight: 500; }
 .d-meta { font-size: 11px; color: #86868b; }
 .dim2 { color: #9a9aa0; }
+
+/* 宽屏历史页: 空态统计/引导 */
+.empty-wrap { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; color: var(--label2); }
+.stat-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: 100%; max-width: 520px; }
+.stat-card { background: var(--bg3); border-radius: 10px; padding: 14px 16px; text-align: center; }
+.stat-num { font-size: 22px; font-weight: 600; color: var(--label); }
+.stat-label { font-size: 11px; color: var(--label2); margin-top: 2px; }
+.guide-card { width: 100%; max-width: 520px; background: var(--bg3); border-radius: 10px; padding: 14px 16px; font-size: 13px; line-height: 1.8; }
+.guide-card kbd { background: var(--bg2); border: 1px solid var(--sep); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
 
 /* ===== 设计 tokens(HIG): Clarity/Deference/Depth =====
    间距 4/8/12/16/24/32 · 字号 Body13/Footnote11/Title2 17 · 控件高 22-28
@@ -222,3 +231,21 @@ h1 { font-size: 17px; font-weight: 600; }          /* Title2 */
 .hist-list, .pane-right { border: none; background: var(--bg2); }
 .inp, .picker { background: var(--bg2); border: 1px solid var(--sep); color: var(--label); }
 .card { background: var(--bg2); border: none; box-shadow: none; }
+
+/* ===== 主窗一体化(sidebar 布局) ===== */
+.page-wide { max-width: none !important; width: 100%; height: 100%; display: flex; flex-direction: column; }
+.page-wide .split { flex: 1; min-height: 0; }
+.page-wide .pane-left { width: 460px; }
+body.settings-win .side-status {
+  margin-top: auto; padding: 10px 12px;
+  font-size: 11px; color: var(--label2);
+  border-top: 1px solid var(--sep);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+body.settings-win { width: 100vw; height: 100vh; }
+.page-wide { display: flex; flex-direction: column; height: 100%; }
+.page-wide .topbar { flex: none; }
+.page-wide .split { flex: 1; min-height: 0; }
+.detail .d-text.strong { font-size: 16px; line-height: 1.6; }
+.detail .d-row { max-width: 720px; }
+.detail .btns { display: flex; gap: 8px; }
