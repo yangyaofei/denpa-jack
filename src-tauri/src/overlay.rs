@@ -119,6 +119,14 @@ pub fn show_hud(app: &tauri::AppHandle) {
         if let Err(e) = w.show() {
             log::log(app, &format!("hud show 失败: {e}"));
         } else {
+            // B42: 浮窗绝不抢焦点——抢了就把 app 退到后台(hud 是 always_on_top 仍可见),
+            // 否则用户随后 CmdV 会贴进浮窗
+            if w.is_focused().unwrap_or(false) {
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    unsafe { objc2_app_kit::NSApplication::sharedApplication(mtm).deactivate() };
+                    log::log(app, "hud 抢了焦点, 已交还");
+                }
+            }
             let vis = w.is_visible().unwrap_or(false);
             let focused = w.is_focused().unwrap_or(false);
             log::log(app, &format!("hud show ok visible={vis} focused={focused}"));

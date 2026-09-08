@@ -65,17 +65,13 @@ listen<any>("asr-final", (e) => {
   }
 });
 listen<string>("asr-error", (e) => {
-  // ASR 层失败: 浮窗+partial 文本保留, 给重试
+  // 用户定则: 浮窗必消失——错误显示 2.5s 自动关(期间可点重试); 重试入口也在历史页
   dot.className = "dot err";
   statusEl.textContent = "⚠️ 转写失败";
   fill.style.width = "0";
-  if (retried) {
-    failActions.classList.add("show");
-    failMsg.textContent = `重试失败(${e.payload.slice(0, 40)}); 可到 设置→历史 选中记录重跑`;
-  } else {
-    failActions.classList.add("show");
-    failMsg.textContent = String(e.payload).slice(0, 60);
-  }
+  failActions.classList.add("show");
+  failMsg.textContent = String(e.payload).slice(0, 60);
+  setTimeout(() => invoke("hud_hide"), 2500);
 });
 listen<number>("asr-level", (e) => {
   const lv = Math.min(1, (e.payload / 1000) * 6);

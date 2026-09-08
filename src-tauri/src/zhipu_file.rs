@@ -46,7 +46,12 @@ pub async fn run_zhipu_session(
         }
         Err(e) => {
             crate::log::elog(&format!("[zhipu] err: {e}"));
-            emit(AsrEvent::Error(e))
+            let msg = if e.contains("no audio segment") {
+                "没听清(无语音)".to_string()
+            } else {
+                e
+            };
+            emit(AsrEvent::Error(msg))
         }
     }
 }
