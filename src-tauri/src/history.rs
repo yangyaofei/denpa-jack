@@ -134,3 +134,45 @@ fn chrono_like_ts() -> String {
         .as_millis();
     format!("rec_{now}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wav_header_valid_pcm16_mono_16k() {
+        // C40 回归: 曾因半字节拷贝把 audio_format 写成 0x0101(257) 智谱拒收
+        let h = wav_header(1000);
+        assert_eq!(&h[0..4], b"RIFF");
+        assert_eq!(&h[8..12], b"WAVE");
+        assert_eq!(&h[12..16], b"fmt ");
+        assert_eq!(u32::from_le_bytes(h[16..20].try_into().unwrap()), 16); // fmt 块长
+        assert_eq!(u16::from_le_bytes(h[20..22].try_into().unwrap()), 1); // PCM!
+        assert_eq!(u16::from_le_bytes(h[22..24].try_into().unwrap()), 1); // mono
+        assert_eq!(u32::from_le_bytes(h[24..28].try_into().unwrap()), 16000);
+        assert_eq!(u32::from_le_bytes(h[28..32].try_into().unwrap()), 32000); // byte rate
+        assert_eq!(u16::from_le_bytes(h[32..34].try_into().unwrap()), 2); // block align
+        assert_eq!(u16::from_le_bytes(h[34..36].try_into().unwrap()), 16); // bits
+        assert_eq!(&h[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(h[40..44].try_into().unwrap()), 1000);
+        assert_eq!(u32::from_le_bytes(h[4..8].try_into().unwrap()), 36 + 1000);
+    }
+    #[test]
+    fn history_roundtrip() {
+        let r = HistoryRecord {
+            ts: "2026-09-05 12:00:00".into(),
+            engine: "zhipu".into(),
+            raw: "些克数学".into(),
+            final_text: "谢克数学".into(),
+            llm_used: true,
+            delivered: "pasted-ax".into(),
+            audio_path: "/tmp/a.wav".into(),
+            duration_ms: 1200,
+            warning: None,
+        };
+        let line = serde_json::to_string(&r).unwrap();
+        let back: HistoryRecord = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.final_text, "谢克数学");
+        assert_eq!(back.duration_ms, 1200);
+    }
+}

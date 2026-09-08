@@ -294,3 +294,45 @@ fn ws_key() -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(raw)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_roundtrip_no_seq() {
+        // type=0b0010(音频) flags=0(无 seq) comp=1(gzip)
+        let payload = b"hello".to_vec();
+        let f = frame([0x11, 0x20 | 0x01, 0x01, 0x00], &payload);
+        let (typ, comp, body) = parse_frame(&f).unwrap();
+        assert_eq!(typ, 0x2);
+        assert_eq!(comp, 0x1);
+        assert_eq!(body, payload);
+    }
+    #[test]
+    fn frame_with_seq() {
+        // flags=0b0011(带 4B sequence)
+        let mut data = vec![0x11, 0x23, 0x01, 0x00];
+        data.extend_from_slice(&7u32.to_be_bytes()); // seq
+        data.extend_from_slice(&(5u32).to_be_bytes()); // size
+        data.extend_from_slice(b"hello");
+        let (typ, comp, body) = parse_frame(&data).unwrap();
+        assert_eq!(typ, 0x2);
+        assert_eq!(comp, 0x1);
+        assert_eq!(body, b"hello".to_vec());
+    }
+    #[test]
+    fn parse_garbage_none() {
+        assert!(parse_frame(&[0u8; 4]).is_none());
+        assert!(parse_frame(&[]).is_none());
+    }
+    #[test]
+    fn gzip_roundtrip() {
+        let d = b"compress me please".to_vec();
+        let c = gzip(&d);
+        assert_eq!(gunzip(&c), d);
+    }
+    // C33 回归: latest_text 必须是"替换"语义——已由 run_session 内单变量实现保证,
+    // 状态机由集成测试(VOICEMAC_AUTOTEST_FILE 长音频无重复)覆盖
+    // C30 回归: uid 每会话唯一——run_session 内 uuid 生成, 由集成测试覆盖
+}

@@ -141,16 +141,49 @@ pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<St
     if !status.is_success() {
         return Err(format!("LLM HTTP {status}: {}", body));
     }
+    match extract_text(&body) {
+        Some(t) => Ok(t),
+        None => Err(format!("LLM 无有效输出: {body}")),
+    }
+}
+
+/// 从响应体提取修正文本: tool_calls[0].args.corrected_text 优先, 降级 message.content
+fn extract_text(body: &Value) -> Option<String> {
     let choice = &body["choices"][0];
     if let Some(args) = choice["message"]["tool_calls"][0]["function"]["arguments"].as_str() {
         if let Ok(v) = serde_json::from_str::<Value>(args) {
             if let Some(t) = v["corrected_text"].as_str() {
-                return Ok(t.to_string());
+                return Some(t.to_string());
             }
         }
     }
-    if let Some(c) = choice["message"]["content"].as_str() {
-        return Ok(c.to_string());
+    choice["message"]["content"].as_str().map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_from_tool_call() {
+        let body = json!({"choices":[{"message":{"tool_calls":[{"function":{"arguments":"{\"corrected_text\":\"谢克数学\"}"}}]}}]});
+        assert_eq!(extract_text(&body).unwrap(), "谢克数学");
     }
-    Err(format!("LLM 无有效输出: {body}"))
+    #[test]
+    fn extract_fallback_content() {
+        let body = json!({"choices":[{"message":{"content":"裸输出"}}]});
+        assert_eq!(extract_text(&body).unwrap(), "裸输出");
+    }
+    #[test]
+    fn extract_none_when_empty() {
+        let body = json!({"choices":[{"message":{}}]});
+        assert!(extract_text(&body).is_none());
+    }
+    #[test]
+    fn extract_malformed_args_falls_back() {
+        // arguments 不是合法 JSON → 降级 content
+        let body = json!({"choices":[{"message":{"tool_calls":[{"function":{"arguments":"not-json"}}],"content":"降级"}}]});
+        assert_eq!(extract_text(&body).unwrap(), "降级");
+    }
 }

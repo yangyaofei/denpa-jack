@@ -164,3 +164,55 @@ impl TextCorrector {
         (text, matches)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::DictEntry;
+    fn entry(term: &str, variants: &[&str], guard: &[&str]) -> DictEntry {
+        DictEntry { term: term.into(), variants: variants.iter().map(|s| s.to_string()).collect(),
+            guard_words: guard.iter().map(|s| s.to_string()).collect(), boost: 5 }
+    }
+    fn corr(entries: Vec<DictEntry>, norms: &[(String, String)]) -> TextCorrector {
+        TextCorrector { entries, normalizations: norms.iter().map(|(p, r)| (p.to_string(), r.to_string())).collect() }
+    }
+    #[test]
+    fn variant_replace() {
+        let c = corr(vec![entry("谢克数学", &["些克数学", "歇课数学"], &[])], &[]);
+        let (t, m) = c.correct("这个些克数学很好");
+        assert_eq!(t, "这个谢克数学很好");
+        assert!(m.iter().any(|x| x.term == "谢克数学" && x.kind == "variant"));
+    }
+    #[test]
+    fn guard_word_blocks() {
+        let c = corr(vec![entry("机器学习", &["机器学西"], &["我们一起学习"])], &[]);
+        let (t, _) = c.correct("我们一起学习吧");
+        assert_eq!(t, "我们一起学习吧");
+    }
+    #[test]
+    fn already_correct_skipped() {
+        let c = corr(vec![entry("腾讯云", &["腾讯韵"], &[])], &[]);
+        let (t, m) = c.correct("用腾讯云部署");
+        assert_eq!(t, "用腾讯云部署");
+        assert!(m.is_empty());
+    }
+    #[test]
+    fn no_self_replace_by_substring_variant() {
+        // 变体是词条子串时必须跳过(防 term 先替换后变体又命中)
+        let c = corr(vec![entry("AGENTS.md", &["AGENTS"], &[])], &[]);
+        let (t, _) = c.correct("看 AGENTS.md 文档");
+        assert_eq!(t, "看 AGENTS.md 文档");
+    }
+    #[test]
+    fn normalization_regex_applied() {
+        let c = corr(vec![], &[("\\s+".to_string(), " ".into())]);
+        let (t, _) = c.correct("a   b");
+        assert_eq!(t, "a b");
+    }
+    #[test]
+    fn term_priority_longest_first() {
+        let c = corr(vec![entry("谢克数学", &["些克数学"], &[]), entry("谢克", &["些克"], &[])], &[]);
+        let (t, _) = c.correct("些克数学");
+        assert_eq!(t, "谢克数学");
+    }
+}

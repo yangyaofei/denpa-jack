@@ -411,3 +411,77 @@ pub fn wav_data_chunk(raw: &[u8]) -> Option<Vec<u8>> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wav_data_chunk_skips_fllr_padding() {
+        // C40 回归: 真实录音 wav 有 FLLR 填充块, data 不在 offset 44
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(1000u32).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&(16u32).to_le_bytes());
+        w.extend_from_slice(&[0u8; 16]);
+        w.extend_from_slice(b"FLLR");
+        w.extend_from_slice(&(4044u32).to_le_bytes());
+        w.extend_from_slice(&vec![0xEEu8; 4044]);
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&(10u32).to_le_bytes());
+        w.extend_from_slice(b"0123456789");
+        let pcm = wav_data_chunk(&w).unwrap();
+        assert_eq!(pcm, b"0123456789");
+    }
+    #[test]
+    fn wav_data_chunk_rejects_garbage() {
+        assert!(wav_data_chunk(b"").is_none());
+        assert!(wav_data_chunk(b"RIFFshort").is_none());
+        assert!(wav_data_chunk(b"NOTAWAVE........").is_none());
+    }
+    #[test]
+    fn budget_hotwords_respects_100_token_budget() {
+        // C8: cost = 字数 + 2; 装不下跳过
+        let d = vec![
+            crate::settings::DictEntry { term: "谢克数学".into(), variants: vec![], guard_words: vec![], boost: 10 },
+            crate::settings::DictEntry { term: "a".repeat(90), variants: vec![], guard_words: vec![], boost: 9 },
+            crate::settings::DictEntry { term: "腾讯云".into(), variants: vec![], guard_words: vec![], boost: 5 },
+        ];
+        let out = budget_hotwords(&d);
+        // 92 token 的词装不下跳过, 后面的还能继续装
+        assert_eq!(out.len(), 2);
+        assert!(out[0].contains("谢克数学"));
+    }
+    #[test]
+    fn resolve_asr_rejects_unknown_provider() {
+        let mut cfg = crate::settings::default_config();
+        cfg.active_asr_id = "x".into();
+        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), hotwords_enabled: true,
+        }];
+        assert!(resolve_asr(&cfg).is_err());
+    }
+    #[test]
+    fn resolve_asr_falls_back_to_first_profile() {
+        let mut cfg = crate::settings::default_config();
+        cfg.active_asr_id = "nope".into();
+        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), hotwords_enabled: true,
+        }];
+        let (p, k) = resolve_asr(&cfg).unwrap();
+        assert_eq!(p.id, "p1");
+        assert_eq!(k, "k1");
+    }
+    #[test]
+    fn resolve_asr_empty_key_uses_pool() {
+        let mut cfg = crate::settings::default_config();
+        cfg.keys = vec!["pool-key".into()];
+        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), hotwords_enabled: true,
+        }];
+        let (_, k) = resolve_asr(&cfg).unwrap();
+        assert_eq!(k, "pool-key");
+    }
+}

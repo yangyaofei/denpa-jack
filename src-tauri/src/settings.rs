@@ -167,11 +167,11 @@ pub struct Config {
     pub use_llm_correction: bool,
     #[serde(default)]
     pub clipboard_only: bool,
-    #[serde(default)]
+    #[serde(default = "d_max_rec")]
     pub max_recording_seconds: u32, // 1800
-    #[serde(default)]
+    #[serde(default = "d_min_rec")]
     pub min_recording_seconds: f64, // 0.3
-    #[serde(default)]
+    #[serde(default = "d_keep_audio")]
     pub keep_audio_count: u32,
     #[serde(default)]
     pub mic_device_uid: String, // 指定输入设备(设备名, 空=自动)
@@ -258,7 +258,10 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
     fs::write(&p, json).map_err(|e| e.to_string())
 }
 
-fn default_config() -> Config {
+pub fn d_max_rec() -> u32 { 1800 }
+fn d_min_rec() -> f64 { 0.3 }
+fn d_keep_audio() -> u32 { 50 }
+pub fn default_config() -> Config {
     Config {
         use_llm_correction: true,
         clipboard_only: false,
@@ -363,4 +366,50 @@ fn default_overlay_position() -> String {
 
 fn default_history_limit() -> u64 {
     200
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_key_basics() {
+        assert_eq!(normalize_key("f5"), "F5");
+        assert_eq!(normalize_key(""), "F5");
+        assert_eq!(normalize_key("space"), "Space");
+        assert_eq!(normalize_key("esc"), "Escape");
+        assert_eq!(normalize_key("KeyA"), "KeyA");
+        assert_eq!(normalize_key("a"), "KeyA");
+        assert_eq!(normalize_key("1"), "Digit1");
+        assert_eq!(normalize_key("/"), "Slash");
+    }
+    #[test]
+    fn shortcut_str_order_and_modifiers() {
+        let hk = HotkeyConfig { key: "f5".into(), ctrl: true, alt: true, ..Default::default() };
+        assert_eq!(hk.shortcut_str(), "ctrl+alt+F5");
+        let hk2 = HotkeyConfig { key: "".into(), ..Default::default() };
+        assert_eq!(hk2.shortcut_str(), "F5");
+    }
+    #[test]
+    fn c17_deserialize_partial_config_no_wipe() {
+        // C17 回归: 缺字段不能把已有默认值清空/panic——全 serde(default)
+        let cfg: Result<Config, _> = serde_json::from_str("{}");
+        assert!(cfg.is_ok());
+        let c = cfg.unwrap();
+        assert!(!c.hotkey.key.is_empty());
+        assert!(c.min_recording_seconds > 0.0);
+    }
+    #[test]
+    fn config_roundtrip_preserves_profiles() {
+        let mut c = default_config();
+        c.keys = vec!["k1".into()];
+        c.llm_profiles = vec![LlmProfile {
+            id: "l1".into(), name: "n".into(), provider: "deepseek".into(), base_url: "".into(),
+            model: "m".into(), api_key: "k".into(), prompt: "p".into(), thinking: false, effort: "high".into(),
+        }];
+        let s = serde_json::to_string(&c).unwrap();
+        let back: Config = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.llm_profiles[0].model, "m");
+        assert_eq!(back.keys[0], "k1");
+    }
 }

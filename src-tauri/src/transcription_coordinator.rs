@@ -69,3 +69,87 @@ pub fn spawn(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn drive(cmds: Vec<CoordCmd>) -> Vec<Effect> {
+        let (ctx, crx) = mpsc::channel();
+        let (etx, erx) = mpsc::channel();
+        spawn(crx, etx);
+        for c in cmds {
+            ctx.send(c).unwrap();
+        }
+        // 给协调线程时间处理
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let mut out = vec![];
+        while let Ok(e) = erx.try_recv() {
+            out.push(e);
+        }
+        out
+    }
+
+    #[test]
+    fn idle_press_starts() {
+        assert_eq!(drive(vec![CoordCmd::Input { pressed: true }]), vec![Effect::Start]);
+    }
+    #[test]
+    fn recording_release_stops() {
+        assert_eq!(
+            drive(vec![CoordCmd::Input { pressed: true }, CoordCmd::Input { pressed: false }]),
+            vec![Effect::Start, Effect::Stop]
+        );
+    }
+    #[test]
+    fn press_while_recording_ignored() {
+        // 按住期间 auto-repeat/重复按不产生新 Start
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true },
+                CoordCmd::Input { pressed: true },
+                CoordCmd::Input { pressed: true },
+            ]),
+            vec![Effect::Start]
+        );
+    }
+    #[test]
+    fn release_without_recording_noop() {
+        assert_eq!(drive(vec![CoordCmd::Input { pressed: false }]), vec![]);
+    }
+    #[test]
+    fn double_stop_single() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true },
+                CoordCmd::Input { pressed: false },
+                CoordCmd::Input { pressed: false },
+            ]),
+            vec![Effect::Start, Effect::Stop]
+        );
+    }
+    #[test]
+    fn cancel_aborts_recording() {
+        assert_eq!(
+            drive(vec![CoordCmd::Input { pressed: true }, CoordCmd::Cancel]),
+            vec![Effect::Start, Effect::Abort]
+        );
+    }
+    #[test]
+    fn cancel_when_idle_noop() {
+        assert_eq!(drive(vec![CoordCmd::Cancel]), vec![]);
+    }
+    #[test]
+    fn full_cycle_restart() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true },
+                CoordCmd::Input { pressed: false },
+                CoordCmd::Input { pressed: true },
+                CoordCmd::Input { pressed: false },
+            ]),
+            vec![Effect::Start, Effect::Stop, Effect::Start, Effect::Stop]
+        );
+    }
+}
