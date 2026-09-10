@@ -117,7 +117,11 @@ pub fn show_hud(app: &tauri::AppHandle) {
     position_hud_at_cursor(app);
     if let Some(w) = app.get_webview_window("hud") {
         // B42: 根治抢焦点——hud 窗口永不成为 key window(用户实测"抢焦点"后输入光标丢失)
+        // Handy 语义对照(crates/handy/src/macos/overlay.rs:7 FloatingPanel: NSPanel):
+        //   nonactivatingPanel ≙ set_focusable(false) ✓
+        //   canJoinAllSpaces+fullScreenAuxiliary ≙ visible_on_all_workspaces(全屏 App 上浮窗可见)
         let _ = w.set_focusable(false);
+        let _ = w.set_visible_on_all_workspaces(true);
         if let Err(e) = w.show() {
             log::log(app, &format!("hud show 失败: {e}"));
         } else {
