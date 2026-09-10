@@ -116,6 +116,8 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
 pub fn show_hud(app: &tauri::AppHandle) {
     position_hud_at_cursor(app);
     if let Some(w) = app.get_webview_window("hud") {
+        // B42: 根治抢焦点——hud 窗口永不成为 key window(用户实测"抢焦点"后输入光标丢失)
+        let _ = w.set_focusable(false);
         if let Err(e) = w.show() {
             log::log(app, &format!("hud show 失败: {e}"));
         } else {
@@ -132,6 +134,7 @@ pub fn show_hud(app: &tauri::AppHandle) {
             log::log(app, &format!("hud show ok visible={vis} focused={focused}"));
         }
         let _ = Emitter::emit_to(app, "hud", "hud-state", "recording");
+        crate::hud_set(|h| { h.status = "recording".into(); h.partial.clear(); h.finished = None; h.err = None; });
     }
 }
 

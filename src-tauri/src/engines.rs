@@ -103,8 +103,19 @@ pub fn spawn_session(
                     ("asr-error", t)
                 }
             };
-            // C43: 定向发 hud(全局广播在本机实测不达 webview)
-            let _ = Emitter::emit_to(&app, "hud", &tag, payload);
+            // C43: 定向发 hud(全局广播在本机实测不达 webview); 返回值落日志定位投递失败
+            // C43b: 快照轮询源(与 emit 并行, 事件通道失效时由前端拉取)
+            crate::hud_set(|h| match tag {
+                "asr-partial" => h.partial = payload.clone(),
+                "asr-result" => h.status = "transcribing".into(),
+                "asr-error" => h.err = Some(payload.clone()),
+                _ => {}
+            });
+            let r = Emitter::emit_to(&app, "hud", &tag, payload);
+            if let Err(e) = &r {
+                crate::log::elog(&format!("[emit] {tag} 投递失败: {e}"));
+            }
+            drop(r);
         };
         match provider.as_str() {
             "zhipu" => crate::zhipu_file::run_zhipu_session(api_key, hotwords, rx, emit).await,

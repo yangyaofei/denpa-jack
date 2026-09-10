@@ -52,6 +52,30 @@ pub fn send_cancel() {
 }
 
 /// C43: asr-final 类事件双发(main 历史页 + hud 浮窗), 替代全局广播
+/// C43b: Tauri 2 事件通道(Rust→webview)在本机打包版实测不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
+/// HUD 改为前端 150ms 轮询拉取(invoke 通道已证可靠)。写入点: 各层在原 emit 处同步写快照。
+#[derive(Default, Clone, serde::Serialize)]
+pub struct HudSnapshot {
+    pub version: u64,
+    pub status: String,   // recording | transcribing | busy | "" 
+    pub partial: String,
+    pub level: u32,
+    pub msg: String,      // 一次性提示(显示后清)
+    pub finished: Option<serde_json::Value>, // asr-final 载荷(一次性, 取后清)
+    pub err: Option<String>,
+}
+
+pub static HUD: std::sync::Mutex<HudSnapshot> = std::sync::Mutex::new(HudSnapshot {
+    version: 0, status: String::new(), partial: String::new(), level: 0,
+    msg: String::new(), finished: None, err: None,
+});
+
+pub fn hud_set(f: impl FnOnce(&mut HudSnapshot)) {
+    let mut g = HUD.lock().unwrap();
+    f(&mut g);
+    g.version += 1;
+}
+
 pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value) {
     use tauri::Emitter;
     let _ = Emitter::emit_to(app, "main", event, payload.clone());
@@ -171,7 +195,7 @@ pub fn run() {
             commands::ping, commands::list_mics, commands::get_active_mic, commands::list_llm_models, commands::llm_selftest, commands::get_default_prompt, commands::ui_log, commands::get_history,
             commands::clear_history, commands::copy_text, commands::get_hotwords,
             recording::recording_start, recording::recording_stop,
-            recording::recording_abort, commands::hud_hide, commands::hud_resize, commands::dev_nav,
+            recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::hud_resize, commands::dev_nav,
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
             commands::check_permissions,

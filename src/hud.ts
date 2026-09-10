@@ -3,6 +3,8 @@
 //   ASR 失败=浮窗保留(partial 文本不动)+重试按钮; 重试一次仍失败=引导去设置页
 //   LLM 失败但 ASR 成功=贴 ASR 原文+显示问题 2.5s 后关
 import { listen } from "@tauri-apps/api/event";
+import type { EventTarget as ET } from "@tauri-apps/api/event";
+const HUD_TARGET = { kind: "AnyLabel", label: "hud" } as unknown as ET;
 import { invoke } from "@tauri-apps/api/core";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -113,3 +115,77 @@ listen<string>("asr-partial", (e) => {
     invoke("ui_log", { msg: `hud partial #${partialCount} len=${e.payload.length}` }).catch(() => {});
   }
 });
+
+// C43 A/B 实验: 同事件带显式 AnyLabel target 再注册, 收到则打日志(区分默认 target 与定向 target 的路由差异)
+listen<string>("hud-state", (e) => {
+  invoke("ui_log", { msg: `hud-state via AnyLabel: ${e.payload}` }).catch(() => {});
+}, { target: HUD_TARGET });
+
+// C43b 轮询模式: 事件通道(Rust→webview)在本机打包版不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
+// 前端改为 150ms 拉取快照驱动状态机——invoke 通道已证可靠。
+let pollVer = -1;
+let hideTimer: number | undefined;
+let lastFinal = "";
+async function pollOnce() {
+  try {
+    const s = await invoke<any>("hud_poll");
+    if (s.version === pollVer) return;
+    pollVer = s.version;
+    // level
+    const lv = Math.min(1, (s.level / 1000) * 6);
+    fill.style.width = `${Math.max(4, lv * 100)}%`;
+    fill.className = lv > 0.9 ? "fill hot" : "fill";
+    // status
+    if (s.status === "recording") {
+      setState("", "● 录音中", false);
+      document.getElementById("hint")!.textContent = "松开结束 · esc 取消";
+      fill.style.width = "0";
+    } else if (s.status === "transcribing") {
+      setState("idle", "… 转写中");
+      fill.style.width = "0";
+    } else if (s.status === "busy") {
+      setState("idle", "✦ AI 润色中…");
+    }
+    // partial
+    if (s.partial) {
+      textEl.textContent = s.partial;
+      textEl.scrollTop = textEl.scrollHeight;
+    }
+    // msg
+    if (s.msg) {
+      setState("idle", s.msg, false);
+      fill.style.width = "0";
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => invoke("hud_hide"), 2500);
+    }
+    // error
+    if (s.err) {
+      setState("idle", `⚠️ ${String(s.err).slice(0, 60)}`);
+      failActions.classList.add("show");
+      fill.style.width = "0";
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => invoke("hud_hide"), 2500);
+    }
+    // finished
+    if (s.finished) {
+      const d = s.finished;
+      if (JSON.stringify(d) !== lastFinal) {
+        lastFinal = JSON.stringify(d);
+        if (d.warning) {
+          setState("ok", `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"} ⚠️ ${String(d.warning).slice(0, 30)}`);
+          textEl.textContent = d.final || d.raw || "";
+          setTimeout(() => invoke("hud_hide"), 2500);
+        } else {
+          setState("ok", `✓ ${d.delivered === "copied" ? "已复制到剪贴板" : "已粘贴"}`);
+          textEl.textContent = d.final || d.raw || "";
+          setTimeout(() => invoke("hud_hide"), 2500);
+        }
+      }
+    }
+  } catch {
+    // poll 失败静默(窗口隐藏期间)
+  }
+}
+setInterval(pollOnce, 150);
+pollOnce();
+invoke("ui_log", { msg: "hud poll loop started" }).catch(() => {});

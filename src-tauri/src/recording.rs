@@ -166,7 +166,9 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-            let _ = Emitter::emit_to(&app, "hud", "asr-level", level.load(std::sync::atomic::Ordering::SeqCst));
+            let lv = level.load(std::sync::atomic::Ordering::SeqCst);
+            crate::hud_set(|h| h.level = lv);
+            let _ = Emitter::emit_to(&app, "hud", "asr-level", lv);
         }
     });
 }
@@ -354,6 +356,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
     if let Some(w) = app.get_webview_window("hud") {
         let _ = Emitter::emit_to(&app, "hud", "hud-state", "transcribing");
+    crate::hud_set(|h| h.status = "transcribing".into());
         let _ = w.show();
     }
     if let Some(t) = TRAY.lock().unwrap().as_ref() {

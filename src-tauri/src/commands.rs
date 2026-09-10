@@ -382,3 +382,14 @@ pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[tauri::command]
+pub fn hud_poll() -> crate::HudSnapshot {
+    let mut g = crate::HUD.lock().unwrap();
+    let snap = g.clone();
+    // 一次性字段取后清(前端拿到即消费)
+    g.finished = None;
+    g.err = None;
+    g.msg = String::new();
+    snap
+}

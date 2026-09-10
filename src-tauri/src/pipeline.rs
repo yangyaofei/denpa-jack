@@ -33,6 +33,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
         Ok(c) => c,
         Err(e) => {
             let _ = crate::emit_both(&app, "asr-final", serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": format!("配置读取失败: {e}")}));
+            crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": format!("配置读取失败: {e}")})));
             return;
         }
     };
@@ -42,6 +43,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
             "raw": raw, "final": "", "llm_used": false, "delivered": "none",
             "warning": "未识别到语音内容",
         }));
+        crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": "", "llm_used": false, "delivered": "none", "warning": "未识别到语音内容"})));
         return;
     }
 
@@ -101,6 +103,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                     })
                     .collect();
                 let _ = Emitter::emit_to(&app, "hud", "hud-busy", "✦ AI 润色中…");
+                crate::hud_set(|h| h.status = "busy".into());
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build();
@@ -177,10 +180,12 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     crate::history::enforce_limit(&app, cfg.history_limit);
     crate::log::elog(&format!("[pipeline] delivered={delivered} history appended"));
 
-    let _ = crate::emit_both(&app, "asr-final", serde_json::json!({
+    let fin_payload = serde_json::json!({
         "raw": rec.raw, "final": final_text, "llm_used": llm_used,
         "delivered": delivered, "warning": warning,
-    }));
+    });
+    let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
+    crate::hud_set(|h| { h.status.clear(); h.finished = Some(fin_payload); });
     // 转写态收尾: 托盘复位(三态: 默认/红=录音/黄=转写)
     if let Some(t) = crate::tray_events::TRAY.lock().unwrap().as_ref() {
         t.set_transcribing(false);
