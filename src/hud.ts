@@ -171,15 +171,10 @@ async function pollOnce() {
       const d = s.finished;
       if (JSON.stringify(d) !== lastFinal) {
         lastFinal = JSON.stringify(d);
-        if (d.warning) {
-          setState("ok", `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"} ⚠️ ${String(d.warning).slice(0, 30)}`);
-          textEl.textContent = d.final || d.raw || "";
-          setTimeout(() => invoke("hud_hide"), 2500);
-        } else {
-          setState("ok", `✓ ${d.delivered === "copied" ? "已复制到剪贴板" : "已粘贴"}`);
-          textEl.textContent = d.final || d.raw || "";
-          setTimeout(() => invoke("hud_hide"), 2500);
-        }
+        // 用户定则: 文字贴出去(交付完成)浮窗立即消失——不搞展示期
+        setState("ok", d.warning ? `⚠️ ${String(d.warning).slice(0, 40)}` : `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"}`);
+        textEl.textContent = d.final || d.raw || "";
+        setTimeout(() => invoke("hud_hide"), 350);
       }
     }
   } catch {

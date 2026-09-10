@@ -55,6 +55,14 @@ pub fn get_hotwords(app: tauri::AppHandle) -> Vec<String> {
 
 #[tauri::command]
 pub fn hud_hide(app: tauri::AppHandle) {
+    // A 修复: 关闭时清快照——下次 show 不会闪上一次的内容
+    crate::hud_set(|h| {
+        h.partial.clear();
+        h.status.clear();
+        h.finished = None;
+        h.err = None;
+        h.msg.clear();
+    });
     hide_hud(&app);
 }
 
