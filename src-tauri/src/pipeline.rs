@@ -219,6 +219,9 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     let cfg_h: crate::settings::Config = crate::settings::get_config(app.clone()).unwrap_or_default();
     let app2_h = app.clone();
     if clipboard_only {
+        // 审计#1(对齐 Handy clipboard.rs:74): 只复制模式也必须真写剪贴板
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        app.clipboard().write_text(text.to_string()).map_err(|e| format!("写剪贴板失败: {e}"))?;
         return Ok("copied".into());
     }
     // 3) 焦点已变 → 不粘贴防串应用(B10)
@@ -231,7 +234,9 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         let _ = crate::paste_tx::reliable_paste(&text2, &app2_h, &cfg_h);
     });
     if r.is_err() {
-        // 主线程调度失败兜底: 老路径
+        // 审计#11: 兜底也先写文本再注入(Handy clipboard.rs:74 注入失败路径同样先写)
+        use tauri_plugin_clipboard_manager::ClipboardExt;
+        let _ = app.clipboard().write_text(text.to_string());
         paste_cmd_v()?;
     }
     Ok("pasted-cmdv".into())

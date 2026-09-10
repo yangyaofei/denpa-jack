@@ -221,10 +221,9 @@ fn flush_pending(app_handle: &AppHandle) {
         Err(_) => None,
     };
     if let Some(previous) = previous {
-        let ah = app_handle.clone();
-        let _ = app_handle.run_on_main_thread(move || {
-            settle(&previous, &ah);
-        });
+        // 审计#3(对齐 Handy macos.rs:186): 调用方(reliable_paste)已在主线程,
+        // 同步结算旧事务再快照——异步派发会让快照读到上一条的懒承诺
+        settle(&previous, app_handle);
     }
 }
 

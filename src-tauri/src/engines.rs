@@ -21,7 +21,7 @@ pub fn send_current(app: &tauri::AppHandle, cmd: doubao::Cmd) {
 pub type HandoffBox = Arc<Mutex<Option<crate::pipeline::SessionHandoff>>>;
 
 /// 引擎收尾等待窗口(松开后等服务端最终结果的兜底上限)——全引擎统一
-pub const FINALIZE_TIMEOUT_SECS: u64 = 3;
+pub const FINALIZE_TIMEOUT_SECS: u64 = 30;
 
 /// 结算契约(恰好一次): 空文本=没听清错误, 非空=Result——三引擎共用, 只写一次
 pub fn settle(emit: &impl Fn(doubao::AsrEvent), text: &str) {

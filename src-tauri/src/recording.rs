@@ -7,6 +7,9 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc as ttx;
 
+/// 最近一次会话的代际(stop 时写入; 转写中 Esc 兜底取消用——审计#4)
+pub(crate) static LAST_GEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
 use crate::audio;
 use crate::deliver;
 use crate::doubao;
@@ -278,7 +281,10 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             if bridge_cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 break;
             }
-            if cmd_tx.try_send(doubao::Cmd::Feed(chunk)).is_err() {
+            // 审计#2(对齐 Handy transcription.rs:169 无界阻塞保序): 会话通道满=引擎背压,
+            // 阻塞等而不是丢帧(丢帧=文本截尾无告警); 会话已死时 send 立即返回 Err
+            if cmd_tx.blocking_send(doubao::Cmd::Feed(chunk)).is_err() {
+                log::elog("[bridge] 引擎通道已关闭, 停止喂入(余量音频丢弃)");
                 break;
             }
         }
@@ -350,8 +356,13 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         let mut st = state.lock().unwrap();
         st.last_audio = ho.audio_path.clone();
     }
+    *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
-    let _ = cmd_tx.try_send(doubao::Cmd::Finish);
+    // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
+    if cmd_tx.blocking_send(doubao::Cmd::Finish).is_err() {
+        crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
+        let _ = Emitter::emit_to(&app, "hud", "asr-error", "引擎会话异常中断");
+    }
     session_cleanup(&app, Some(crate::audio_feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
     if let Some(w) = app.get_webview_window("hud") {
@@ -373,6 +384,11 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     // 转写中 esc: 标记本代被取消——若 Result 已在途, 交付层据此跳过粘贴
     if let Some(s) = sess.as_ref() {
         pipeline::CANCELLED_GEN.store(s.gen, std::sync::atomic::Ordering::SeqCst);
+    } else {
+        // 审计#4: session 已 take(Result 在途/post_process 已跑)——用最近一代 gen 兜底取消
+        if let Some(g) = LAST_GEN.lock().unwrap().take() {
+            pipeline::CANCELLED_GEN.store(g, std::sync::atomic::Ordering::SeqCst);
+        }
     }
     // 会话 drop=cancel 置位; 无论有无会话, 清理路径一致
     if let Some(s) = sess {
