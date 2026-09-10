@@ -70,7 +70,7 @@ pub fn spawn_session(
                                 .or_else(|| p.downcast_ref::<String>().cloned())
                                 .unwrap_or_else(|| "未知 panic".into());
                             crate::log::elog(&format!("[pipeline] panic: {msg}"));
-                            let _ = tauri::Emitter::emit(&app2, "asr-final", serde_json::json!({
+                            let _ = crate::emit_both(&app2, "asr-final", serde_json::json!({
                                 "raw": t2, "final": "", "llm_used": false,
                                 "warning": format!("内部错误: {msg}")
                             }));
@@ -103,7 +103,8 @@ pub fn spawn_session(
                     ("asr-error", t)
                 }
             };
-            let _ = Emitter::emit(&app, tag, payload);
+            // C43: 定向发 hud(全局广播在本机实测不达 webview)
+            let _ = Emitter::emit_to(&app, "hud", &tag, payload);
         };
         match provider.as_str() {
             "zhipu" => crate::zhipu_file::run_zhipu_session(api_key, hotwords, rx, emit).await,

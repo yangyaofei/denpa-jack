@@ -166,7 +166,7 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-            let _ = Emitter::emit(&app, "asr-level", level.load(std::sync::atomic::Ordering::SeqCst));
+            let _ = Emitter::emit_to(&app, "hud", "asr-level", level.load(std::sync::atomic::Ordering::SeqCst));
         }
     });
 }
@@ -251,7 +251,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
                         m.contains("permission") || m.contains("denied") || m.contains("0x80070005")
                     };
                     if perm {
-                        let _ = tauri::Emitter::emit(&app, "recording-error", serde_json::json!({"error_type": "microphone_permission_denied", "message": e}));
+                        let _ = tauri::Emitter::emit_to(&app, "main", "recording-error", serde_json::json!({"error_type": "microphone_permission_denied", "message": e}));
                     }
                     return Err(e);
                 }
@@ -353,7 +353,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     session_cleanup(&app, Some(crate::audio_feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
     if let Some(w) = app.get_webview_window("hud") {
-        let _ = Emitter::emit(&app, "hud-state", "transcribing");
+        let _ = Emitter::emit_to(&app, "hud", "hud-state", "transcribing");
         let _ = w.show();
     }
     if let Some(t) = TRAY.lock().unwrap().as_ref() {

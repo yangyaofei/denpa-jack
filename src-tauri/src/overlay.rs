@@ -131,13 +131,13 @@ pub fn show_hud(app: &tauri::AppHandle) {
             let focused = w.is_focused().unwrap_or(false);
             log::log(app, &format!("hud show ok visible={vis} focused={focused}"));
         }
-        let _ = Emitter::emit(app, "hud-state", "recording");
+        let _ = Emitter::emit_to(app, "hud", "hud-state", "recording");
     }
 }
 
 pub fn show_hud_msg(app: &tauri::AppHandle, msg: &str) {
     if let Some(w) = app.get_webview_window("hud") {
-        let _ = Emitter::emit(app, "hud-msg", msg);
+        let _ = Emitter::emit_to(app, "hud", "hud-msg", msg);
         let _ = w.show();
     }
 }

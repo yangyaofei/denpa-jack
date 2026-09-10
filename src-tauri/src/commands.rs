@@ -154,7 +154,7 @@ pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
 pub fn check_permissions(app: tauri::AppHandle) -> bool {
     let ok = deliver::ax_trusted(false);
     if !ok {
-        let _ = Emitter::emit(&app, "permission-ax", false);
+        let _ = Emitter::emit_to(&app, "main", "permission-ax", false);
     }
     ok
 }

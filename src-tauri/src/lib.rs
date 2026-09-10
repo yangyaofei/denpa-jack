@@ -51,6 +51,13 @@ pub fn send_cancel() {
         .map(|tx| tx.send(transcription_coordinator::CoordCmd::Cancel));
 }
 
+/// C43: asr-final 类事件双发(main 历史页 + hud 浮窗), 替代全局广播
+pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value) {
+    use tauri::Emitter;
+    let _ = Emitter::emit_to(app, "main", event, payload.clone());
+    let _ = Emitter::emit_to(app, "hud", event, payload);
+}
+
 pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 
 pub fn run() {
@@ -82,7 +89,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 if !deliver::ax_trusted(true) {
                     use tauri::Emitter;
-                    let _ = Emitter::emit(&h, "permission-ax", false);
+                    let _ = Emitter::emit_to(&h, "main", "permission-ax", false);
                 }
             });
             // hud 浮窗

@@ -54,7 +54,7 @@ pub fn handle_tray_event(app: &tauri::AppHandle, ev: &str) {
             if let Ok(mut c) = settings::get_config(app.clone()) {
                 c.use_llm_correction = !c.use_llm_correction;
                 let _ = settings::save_config(app.clone(), c);
-                let _ = Emitter::emit(app, "config-changed", ());
+                let _ = Emitter::emit_to(app, "main", "config-changed", ());
                 let _ = refresh_tray(app);
             }
         }
@@ -62,7 +62,7 @@ pub fn handle_tray_event(app: &tauri::AppHandle, ev: &str) {
             if let Ok(mut c) = settings::get_config(app.clone()) {
                 c.clipboard_only = !c.clipboard_only;
                 let _ = settings::save_config(app.clone(), c);
-                let _ = Emitter::emit(app, "config-changed", ());
+                let _ = Emitter::emit_to(app, "main", "config-changed", ());
                 let _ = refresh_tray(app);
             }
         }

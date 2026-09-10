@@ -32,13 +32,13 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     let cfg: Config = match crate::settings::get_config(app.clone()) {
         Ok(c) => c,
         Err(e) => {
-            let _ = Emitter::emit(&app, "asr-final", serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": format!("配置读取失败: {e}")}));
+            let _ = crate::emit_both(&app, "asr-final", serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": format!("配置读取失败: {e}")}));
             return;
         }
     };
 
     if raw.trim().is_empty() {
-        let _ = Emitter::emit(&app, "asr-final", serde_json::json!({
+        let _ = crate::emit_both(&app, "asr-final", serde_json::json!({
             "raw": raw, "final": "", "llm_used": false, "delivered": "none",
             "warning": "未识别到语音内容",
         }));
@@ -100,7 +100,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                         }
                     })
                     .collect();
-                let _ = Emitter::emit(&app, "hud-busy", "✦ AI 润色中…");
+                let _ = Emitter::emit_to(&app, "hud", "hud-busy", "✦ AI 润色中…");
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build();
@@ -141,7 +141,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     }
 
     // 3) 交付: 剪贴板(+粘贴)
-    let _ = Emitter::emit(&app, "hud-busy", "交付中…");
+    let _ = Emitter::emit_to(&app, "hud", "hud-busy", "交付中…");
     crate::log::elog(&format!("[pipeline] deliver begin clip_only={}", cfg.clipboard_only));
     let cancelled = ho.gen != 0 && ho.gen == CANCELLED_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let delivered = if cancelled {
@@ -177,7 +177,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     crate::history::enforce_limit(&app, cfg.history_limit);
     crate::log::elog(&format!("[pipeline] delivered={delivered} history appended"));
 
-    let _ = Emitter::emit(&app, "asr-final", serde_json::json!({
+    let _ = crate::emit_both(&app, "asr-final", serde_json::json!({
         "raw": rec.raw, "final": final_text, "llm_used": llm_used,
         "delivered": delivered, "warning": warning,
     }));
