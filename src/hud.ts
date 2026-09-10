@@ -101,3 +101,15 @@ listen<string>("hud-msg", (e) => {
   fill.style.width = "0";
   setTimeout(() => invoke("hud_hide"), 2500);
 });
+
+// C43 诊断: 前端事件监听注册完成落日志(Rust 侧正常但前端无反应时, 由此定位断联)
+invoke("ui_log", { msg: "hud listeners ready" }).catch(() => {});
+let partialCount = 0;
+listen<string>("asr-partial", (e) => {
+  textEl.textContent = e.payload;
+  textEl.scrollTop = textEl.scrollHeight;
+  partialCount += 1;
+  if (partialCount === 1 || partialCount % 5 === 0) {
+    invoke("ui_log", { msg: `hud partial #${partialCount} len=${e.payload.length}` }).catch(() => {});
+  }
+});
