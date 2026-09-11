@@ -336,3 +336,55 @@ mod tests {
     // 状态机由集成测试(VOICEMAC_AUTOTEST_FILE 长音频无重复)覆盖
     // C30 回归: uid 每会话唯一——run_session 内 uuid 生成, 由集成测试覆盖
 }
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    #[test]
+    fn frame_parse_rejects_truncated() {
+        assert!(parse_frame(&[0x11, 0x09, 0x01, 0x00]).is_none());
+        assert!(parse_frame(&[]).is_none());
+    }
+
+    #[test]
+    fn frame_parse_large_size_rejected() {
+        // 声明 size 超过实际数据
+        let mut v = vec![0x11u8, 0x09, 0x01, 0x00];
+        v.extend_from_slice(&u32::MAX.to_be_bytes());
+        v.extend_from_slice(b"ab");
+        assert!(parse_frame(&v).is_none());
+    }
+
+    #[test]
+    fn frame_roundtrip_various_flags() {
+        // 协议: byte0=0x11(magic), byte1=(type<<4)|flags, byte2=(ser<<4)|comp
+        for flags in [0b0000u8, 0b0001, 0b0010, 0b0011] {
+            let b1 = (0b1001 << 4) | flags;
+            let f = frame([0x11, b1, 0x10, 0x00], b"x"); // ser=0b0001(json), comp=0
+            let (typ, comp, body) = parse_frame(&f).unwrap();
+            assert_eq!(typ, 0b1001, "type 位还原");
+            assert_eq!(body, b"x", "载荷还原(flags 各值含 seq 偏移自校正)");
+            assert_eq!(comp, 0);
+        }
+    }
+
+    #[test]
+    fn gunzip_invalid_is_empty_no_panic() {
+        assert!(gunzip(b"not gzip").is_empty());
+        assert!(gunzip(&[]).is_empty());
+    }
+
+    #[test]
+    fn settle_empty_is_error_nonempty_is_result() {
+        use super::AsrEvent;
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let g2 = got.clone();
+        settle(&move |e| g2.lock().unwrap().push(e), "");
+        let g2 = got.clone();
+        settle(&move |e| g2.lock().unwrap().push(e), "文本");
+        let g = got.lock().unwrap();
+        assert!(matches!(g[0], AsrEvent::Error(_)));
+        assert!(matches!(g[1], AsrEvent::Result(_)));
+    }
+}

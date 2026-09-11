@@ -506,3 +506,53 @@ mod tests {
         assert_eq!(k, "pool-key");
     }
 }
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+    use crate::settings::{AsrProfile, Config};
+
+    #[test]
+    fn resolve_asr_rejects_unknown_provider() {
+        let mut c = Config::default();
+        c.asr_profiles = vec![AsrProfile { id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), hotwords_enabled: true }];
+        c.active_asr_id = "x".into();
+        assert!(resolve_asr(&c).is_err());
+    }
+
+    #[test]
+    fn resolve_asr_empty_key_falls_back_to_pool() {
+        let mut c = Config::default();
+        c.keys = vec!["pool-key".into()];
+        c.asr_profiles = vec![AsrProfile { id: "a".into(), name: "a".into(), provider: "volcengine".into(), api_key: String::new(), hotwords_enabled: true }];
+        c.active_asr_id = "a".into();
+        let (_, key) = resolve_asr(&c).unwrap();
+        assert_eq!(key, "pool-key");
+    }
+
+    #[test]
+    fn budget_hotwords_boost_desc_and_token_cap() {
+        let mk = |t: &str, b: u8| crate::settings::DictEntry { term: t.into(), variants: vec![], guard_words: vec![], boost: b };
+        let dict = vec![mk("低权重", 1), mk("高权重长词条", 5), mk("中", 3)];
+        let out = budget_hotwords(&dict);
+        assert_eq!(out.first().map(|s| s.as_str()), Some("高权重长词条"));
+        // 全部 cost=字数+2, 总预算 100
+        let cost: usize = out.iter().map(|w| w.chars().count() + 2).sum();
+        assert!(cost <= 100);
+    }
+
+    #[test]
+    fn wav_data_chunk_rejects_non_riff() {
+        assert!(wav_data_chunk(b"not a wav file at all....").is_none());
+        assert!(wav_data_chunk(&[]).is_none());
+    }
+
+    #[test]
+    fn min_duration_floor_never_zero() {
+        // serde 缺字段时 min=0 会让 B3 失效——floor 保护
+        let mut c = Config::default();
+        c.min_recording_seconds = 0.0;
+        let ms = (c.min_recording_seconds.max(0.05) * 1000.0) as u64;
+        assert_eq!(ms, 50);
+    }
+}

@@ -157,7 +157,11 @@ fn extract_text(body: &Value) -> Option<String> {
             }
         }
     }
-    choice["message"]["content"].as_str().map(|s| s.to_string())
+    // 空 content 返回 None(让上层降级/报错)——Some("") 会用空串覆盖词典结果
+    choice["message"]["content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
 }
 
 #[cfg(test)]
@@ -185,5 +189,44 @@ mod tests {
         // arguments 不是合法 JSON → 降级 content
         let body = json!({"choices":[{"message":{"tool_calls":[{"function":{"arguments":"not-json"}}],"content":"降级"}}]});
         assert_eq!(extract_text(&body).unwrap(), "降级");
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    #[test]
+    fn default_base_url_known_providers() {
+        assert_eq!(default_base_url("deepseek"), "https://api.deepseek.com");
+        assert_eq!(default_base_url("zhipu"), "https://open.bigmodel.cn/api/paas/v4");
+    }
+
+    #[test]
+    fn extract_text_tool_call_beats_content() {
+        let v: serde_json::Value = serde_json::json!({
+            "choices": [{"message": {
+                "content": "裸输出不应采用",
+                "tool_calls": [{"function": {"arguments": "{\"corrected_text\":\"工具结果\"}"}}]
+            }}]
+        });
+        assert_eq!(extract_text(&v).unwrap(), "工具结果");
+    }
+
+    #[test]
+    fn extract_text_malformed_args_falls_back_to_content() {
+        let v: serde_json::Value = serde_json::json!({
+            "choices": [{"message": {
+                "content": "降级内容",
+                "tool_calls": [{"function": {"arguments": "not-json"}}]
+            }}]
+        });
+        assert_eq!(extract_text(&v).unwrap(), "降级内容");
+    }
+
+    #[test]
+    fn extract_text_empty_returns_none() {
+        let v: serde_json::Value = serde_json::json!({"choices": [{"message": {"content": ""}}]});
+        assert!(extract_text(&v).is_none());
     }
 }

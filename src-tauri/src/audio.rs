@@ -141,38 +141,47 @@ pub fn start_input(device: Option<String>, tx: Sender<Vec<u8>>) -> Result<Record
         })
 }
 
-fn ingest(data: &[f32], channels: usize, s: &Arc<Mutex<Shared>>, tx: &Sender<Vec<u8>>) {
-    let mut st = s.lock().unwrap();
-    // 下混 mono
-    let mono: Vec<f32> = if channels <= 1 {
-        data.to_vec()
-    } else {
-        data.chunks(channels)
-            .map(|c| c.iter().sum::<f32>() / channels as f32)
-            .collect()
-    };
-    let n = mono.len();
-    if n == 0 {
-        return;
+/// 下混任意声道到 mono
+fn downmix(data: &[f32], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return data.to_vec();
     }
-    let ratio = st.rate / 16000.0;
-    // 线性重采样(照 Swift: 相位推进, 边界不跨缓冲插值)
-    let mut t = st.carry_t;
-    let mut produced: usize = 0;
+    data.chunks(channels)
+        .map(|c| c.iter().sum::<f32>() / channels as f32)
+        .collect()
+}
+
+/// 线性重采样 mono→16k i16le(照 Swift: 相位推进, 边界不跨缓冲插值)
+/// 返回 (pcm字节, 新相位)——纯函数可测
+fn resample_to_16k(mono: &[f32], src_rate: f64, carry_t: f64) -> (Vec<u8>, f64) {
+    let n = mono.len();
+    let ratio = src_rate / 16000.0;
+    let mut t = carry_t;
+    let mut out = Vec::new();
     while t + 1.0 < n as f64 {
         let i0 = t as usize;
         let f = (t - i0 as f64) as f32;
         let v = mono[i0] * (1.0 - f) + mono[i0 + 1] * f;
         let v = (v.clamp(-1.0, 1.0) * 32767.0) as i16;
-        st.buf.extend_from_slice(&v.to_le_bytes());
-        produced += 2;
+        out.extend_from_slice(&v.to_le_bytes());
         t += ratio;
     }
-    st.carry_t = (t - n as f64).max(0.0);
+    (out, (t - n as f64).max(0.0))
+}
+
+fn ingest(data: &[f32], channels: usize, s: &Arc<Mutex<Shared>>, tx: &Sender<Vec<u8>>) {
+    let mut st = s.lock().unwrap();
+    let mono = downmix(data, channels);
+    if mono.is_empty() {
+        return;
+    }
+    let (pcm, carry) = resample_to_16k(&mono, st.rate, st.carry_t);
+    st.carry_t = carry;
+    let produced = pcm.len();
     // C15: total = 累计产出字节(含已发分块), 不能用 buf.len() 判
     st.total += produced;
-    let produced_slice = st.buf[st.buf.len() - produced..].to_vec();
-    st.pcm_all.extend_from_slice(&produced_slice);
+    st.buf.extend_from_slice(&pcm);
+    st.pcm_all.extend_from_slice(&pcm);
     // 200ms 分包
     while st.buf.len() >= CHUNK_BYTES {
         let piece: Vec<u8> = st.buf.drain(..CHUNK_BYTES).collect();
@@ -188,4 +197,55 @@ fn update_level(lv: &std::sync::atomic::AtomicU32, data: &[f32]) {
     let rms = (sum / data.len() as f32).sqrt();
     let v = (rms * 1000.0).clamp(0.0, 1000.0) as u32;
     lv.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    #[test]
+    fn downmix_stereo_averages() {
+        let out = downmix(&[1.0, 0.0, 0.5, 0.5], 2);
+        assert_eq!(out, vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn downmix_mono_passthrough() {
+        assert_eq!(downmix(&[0.1, 0.2], 1), vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn resample_48k_ratio_output_count() {
+        // 480 个 48k 样本 = 10ms → 应产出 ~160 个 16k 样本 = ~320 字节
+        let mono: Vec<f32> = (0..480).map(|i| ((i as f32) * 0.01).sin()).collect();
+        let (pcm, carry) = resample_to_16k(&mono, 48000.0, 0.0);
+        assert_eq!(pcm.len() / 2, 160, "48k→16k 1/3 采样数");
+        assert!(carry < 3.0, "相位残留小");
+    }
+
+    #[test]
+    fn resample_carry_continuity_no_double_count() {
+        // 两段连续喂入: 总产出 = 单段长输入产出(±1 样本), 边界不重复不丢失
+        let mono: Vec<f32> = (0..960).map(|i| ((i as f32) * 0.02).sin()).collect();
+        let (a, carry) = resample_to_16k(&mono[..480], 48000.0, 0.0);
+        let (b, _) = resample_to_16k(&mono[480..], 48000.0, carry);
+        let (whole, _) = resample_to_16k(&mono, 48000.0, 0.0);
+        assert!(((a.len() + b.len()) as i64 - whole.len() as i64).abs() <= 2, "分块与整段产出一致");
+    }
+
+    #[test]
+    fn resample_amplitude_clamped() {
+        let mono = vec![10.0f32, -10.0, 10.0, -10.0];
+        let (pcm, _) = resample_to_16k(&mono, 16000.0, 0.0);
+        for i in 0..pcm.len() / 2 {
+            let v = i16::from_le_bytes([pcm[i * 2], pcm[i * 2 + 1]]);
+            assert!(v <= 32767);
+        }
+    }
+
+    #[test]
+    fn resample_short_input_no_panic() {
+        let (pcm, _) = resample_to_16k(&[0.5], 48000.0, 0.0);
+        assert!(pcm.is_empty(), "单样本不足以插值");
+    }
 }

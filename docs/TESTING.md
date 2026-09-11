@@ -3,7 +3,7 @@
 ## 三层结构
 | 层 | 命令 | 覆盖 | 状态 |
 |---|---|---|---|
-| 1. Rust 单元测试 | `cd src-tauri && cargo test --lib` | 纯逻辑+tempfile 文件系统测试, 全部不依赖 app 环境(同 Handy 风格) | 36 用例 |
+| 1. Rust 单元测试 | `cd src-tauri && cargo test --lib` | 纯逻辑+tempfile+重采样纯函数(audio resample_to_16k 提取), 全部不依赖 app 环境 | 70 用例 |
 | 2. 前端冒烟 | 起 dev server 后 `node tests/smoke.mjs <port>` | dev server 可用+关键 DOM(同 Handy Playwright 冒烟语义, 零依赖实现) | 4 检查 |
 | 3. 链路回归+打包 | `bash scripts/regression.sh` | 真实人声文件回放→转写→交付→历史断言 + e2e 真麦 + 打包签名 | 每次打包必跑 |
 

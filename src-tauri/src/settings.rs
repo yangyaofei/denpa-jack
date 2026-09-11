@@ -422,3 +422,49 @@ mod tests {
         assert_eq!(back.keys[0], "k1");
     }
 }
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_key_whitespace_and_case() {
+        assert_eq!(normalize_key("  f5  "), "F5");
+        assert_eq!(normalize_key("SPACE"), "Space");
+        assert_eq!(normalize_key("Enter"), "Enter");
+        assert_eq!(normalize_key("KeyA"), "KeyA");
+        assert_eq!(normalize_key("Digit7"), "Digit7");
+    }
+
+    #[test]
+    fn normalize_key_fallback_f5() {
+        assert_eq!(normalize_key(""), "F5");
+        assert_eq!(normalize_key("   "), "F5");
+        // 非空未知键保持原样(不悄悄重置用户配置)
+        assert_eq!(normalize_key("unknown!!"), "unknown!!");
+    }
+
+    #[test]
+    fn shortcut_str_modifier_order_stable() {
+        let h = HotkeyConfig { key: "KeyJ".into(), ctrl: true, alt: true, cmd: false, shift: false };
+        assert_eq!(h.shortcut_str(), "ctrl+alt+KeyJ");
+        let h2 = HotkeyConfig { key: "F9".into(), ctrl: false, alt: false, cmd: true, shift: true };
+        assert_eq!(h2.shortcut_str(), "shift+cmd+F9");
+    }
+
+    #[test]
+    fn config_json_missing_optional_fields_never_zero() {
+        let c: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(c.min_recording_seconds, 0.3);
+        assert_eq!(c.max_recording_seconds, 1800);
+        assert_eq!(c.keep_audio_count, 50);
+        assert_eq!(c.history_limit, 200);
+    }
+
+    #[test]
+    fn config_legacy_key_mapping_salvage() {
+        let c: Config = serde_json::from_str(r#"{"keys": ["k1"], "hotkey_key_code": 96}"#).unwrap();
+        assert_eq!(c.keys, vec!["k1".to_string()]);
+        assert!(c.llm_profiles.is_empty());
+    }
+}

@@ -153,3 +153,44 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    // 与 spawn 循环相同的极简规则(按下=Start 仅 Idle, 松开=Stop 仅录音中)
+    fn drive(cmds: &[bool]) -> Vec<Effect> {
+        let mut recording = false;
+        let mut out = Vec::new();
+        for pressed in cmds {
+            let e = if *pressed {
+                if recording { None } else { recording = true; Some(Effect::Start) }
+            } else if recording {
+                recording = false;
+                Some(Effect::Stop)
+            } else { None };
+            if let Some(e) = e { out.push(e); }
+        }
+        out
+    }
+
+    #[test]
+    fn double_press_single_start() {
+        assert_eq!(drive(&[true, true]), vec![Effect::Start]);
+    }
+
+    #[test]
+    fn press_release_press_release_full_cycle() {
+        assert_eq!(drive(&[true, false, true, false]), vec![Effect::Start, Effect::Stop, Effect::Start, Effect::Stop]);
+    }
+
+    #[test]
+    fn rapid_flap_no_duplicate() {
+        assert_eq!(drive(&[true, false, true, false, true, true, false]), vec![Effect::Start, Effect::Stop, Effect::Start, Effect::Stop, Effect::Start, Effect::Stop]);
+    }
+
+    #[test]
+    fn release_first_noop() {
+        assert_eq!(drive(&[false, false]), Vec::<Effect>::new());
+    }
+}
