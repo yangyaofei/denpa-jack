@@ -164,6 +164,23 @@ fn run_ui_chain(app: tauri::AppHandle) {
     let v0 = crate::history::history_version();
     crate::history::HISTORY_VER.fetch_add(0, std::sync::atomic::Ordering::SeqCst);
     let _ = v0;
-    crate::log::elog("[ui-chain] PASS: 数据链与磁盘一致");
+    // 4) 实时性: append→版本递增→recent 立即可见(pipeline 交付后前端 800ms 轮询的实际数据源)
+    let v0 = crate::history::history_version();
+    let probe = crate::history::HistoryRecord {
+        ts: "PROBE".into(), engine: "uitest".into(), raw: "实时性探针".into(),
+        final_text: "实时性探针".into(), llm_used: false, delivered: "test".into(),
+        audio_path: String::new(), duration_ms: 0, warning: None,
+    };
+    crate::history::append(&app, &probe);
+    let v1 = crate::history::history_version();
+    let visible = crate::history::recent(&app, 3).iter().any(|r| r.ts == "PROBE");
+    crate::log::elog(&format!("[ui-chain] 实时性: 版本 {}→{} 探针可见={}", v0, v1, visible));
+    assert!(v1 > v0 && visible, "append 后版本未递增或 recent 不可见");
+    // 清理探针行(重写 jsonl)
+    let jsonl = dir.join("history.jsonl");
+    let kept: Vec<&str> = std::fs::read_to_string(&jsonl).unwrap()
+        .lines().filter(|l| !l.contains("\"ts\":\"PROBE\"")).collect();
+    std::fs::write(&jsonl, kept.join("\n") + "\n").ok();
+    crate::log::elog("[ui-chain] PASS: 数据链与磁盘一致+实时性 OK");
     app.exit(0);
 }
