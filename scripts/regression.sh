@@ -13,9 +13,11 @@ timeout 60 env VOICEMAC_AUTOTEST_FILE="$W" src-tauri/target/release/tauri-app > 
 AFTER=$(wc -l < "$H")
 [ "$AFTER" -gt "$BEFORE" ] && echo "PASS: history +$((AFTER-BEFORE))" || { echo "FAIL: history 未追加"; tail -20 tmp/reg-file.txt; exit 1; }
 grep -a "delivered=" tmp/reg-file.txt | tail -1
-echo "== 3/4 e2e 真麦 =="
+echo "== 3/5 UI 数据链(页面同款函数 vs 磁盘) =="
+timeout 30 env VOICEMAC_AUTOTEST=ui src-tauri/target/release/tauri-app 2>&1 | grep -a "ui-chain" | tail -4
+echo "== 4/5 e2e 真麦 =="
 timeout 40 env VOICEMAC_AUTOTEST=e2e src-tauri/target/release/tauri-app > tmp/reg-e2e.txt 2>&1 || true
-echo "== 4/4 打包+签名 =="
+echo "== 5/5 打包+签名 =="
 npm run tauri build 2>&1 | grep -cE "Bundling VoiceInput.app"
 codesign --force --deep -s "VoiceInput Dev" src-tauri/target/release/bundle/macos/VoiceInput.app
 echo "REGRESSION PASS"

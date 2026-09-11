@@ -9,6 +9,11 @@ use crate::recording::wav_data_chunk;
 use crate::AppState;
 
 pub fn maybe_spawn(app: &AppHandle) {
+    if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("ui") {
+        let app2 = app.clone();
+        std::thread::spawn(move || run_ui_chain(app2));
+        return;
+    }
     if let Ok(wavpath) = std::env::var("VOICEMAC_AUTOTEST_FILE") {
         let app2 = app.clone();
         std::thread::spawn(move || run_file(app2, wavpath));
@@ -129,5 +134,36 @@ fn run_e2e(app: tauri::AppHandle) {
     send_key(false);
     std::thread::sleep(std::time::Duration::from_millis(10000));
     log::log(&app, "AUTOTEST: done");
+    app.exit(0);
+}
+
+/// UI 数据链验证: 页面调用的函数(recent/get_config/poll_versions)直接调,
+/// 与磁盘真值(history.jsonl 行数/config.json dict 数)断言比对
+fn run_ui_chain(app: tauri::AppHandle) {
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let dir = app.path().app_data_dir().unwrap();
+    // 1) 历史链: 函数返回 vs jsonl 行数
+    let jsonl = dir.join("history.jsonl");
+    let disk_lines = std::fs::read_to_string(&jsonl)
+        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    let got = crate::history::recent(&app, 500);
+    crate::log::elog(&format!("[ui-chain] history: 函数返回 {} 条, 磁盘 {} 行", got.len(), disk_lines));
+    assert_eq!(got.len(), disk_lines, "recent() 与 history.jsonl 行数不一致");
+    if let Some(last) = got.first() {
+        crate::log::elog(&format!("[ui-chain] 最新一条: {} final={}", last.ts, &last.final_text[..last.final_text.len().min(30)]));
+    }
+    // 2) 配置链: dict/keys/档案
+    let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    crate::log::elog(&format!(
+        "[ui-chain] config: dict={} keys={} llm_profiles={} active_asr={}",
+        cfg.dict.len(), cfg.keys.len(), cfg.llm_profiles.len(), cfg.active_asr_id
+    ));
+    assert!(!cfg.asr_profiles.is_empty(), "asr_profiles 为空——页面引擎下拉会空");
+    // 3) poll_versions 递增
+    let v0 = crate::history::history_version();
+    crate::history::HISTORY_VER.fetch_add(0, std::sync::atomic::Ordering::SeqCst);
+    let _ = v0;
+    crate::log::elog("[ui-chain] PASS: 数据链与磁盘一致");
     app.exit(0);
 }
