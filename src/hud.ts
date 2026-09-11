@@ -2,9 +2,6 @@
 //   按住=录音中(逐字滚动) → 松开=转写/润色/交付(不自动消失) → 粘贴成功=立即关闭
 //   ASR 失败=浮窗保留(partial 文本不动)+重试按钮; 重试一次仍失败=引导去设置页
 //   LLM 失败但 ASR 成功=贴 ASR 原文+显示问题 2.5s 后关
-import { listen } from "@tauri-apps/api/event";
-import type { EventTarget as ET } from "@tauri-apps/api/event";
-const HUD_TARGET = { kind: "AnyLabel", label: "hud" } as unknown as ET;
 import { invoke } from "@tauri-apps/api/core";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -45,81 +42,14 @@ function showRetryFailed(err: string) {
   failActions.classList.add("show");
   failMsg.textContent = `重试失败(${err.slice(0, 40)}); 可到 设置→历史 选中记录重跑`;
 }
-
-listen<string>("asr-partial", (e) => {
-  textEl.textContent = e.payload;
-  textEl.scrollTop = textEl.scrollHeight;
-});
-listen<string>("asr-result", () => {
-  setState("idle", "… 处理中");
-  fill.style.width = "0";
-});
-listen<any>("asr-final", (e) => {
-  const d = e.payload;
-  if (d.warning) {
-    // LLM/交付环节有问题但文本已交付(ASR 原文兜底): 显示问题 2.5s 后关
-    setState("ok", `✓ 已交付 ⚠️ ${String(d.warning).slice(0, 60)}`);
-    textEl.textContent = d.final || d.raw || "";
-    setTimeout(() => invoke("hud_hide"), 2500);
-  } else {
-    // 干净交付: 立即关闭
-    invoke("hud_hide");
-  }
-});
-listen<string>("asr-error", (e) => {
-  // 用户定则: 浮窗必消失——错误显示 2.5s 自动关(期间可点重试); 重试入口也在历史页
-  dot.className = "dot err";
-  statusEl.textContent = "⚠️ 转写失败";
-  fill.style.width = "0";
-  failActions.classList.add("show");
-  failMsg.textContent = String(e.payload).slice(0, 60);
-  setTimeout(() => invoke("hud_hide"), 2500);
-});
-listen<number>("asr-level", (e) => {
-  const lv = Math.min(1, (e.payload / 1000) * 6);
-  fill.style.width = `${Math.max(4, lv * 100)}%`;
-  fill.className = lv > 0.9 ? "fill hot" : "fill";
-});
-listen<string>("hud-state", (e) => {
-  if (e.payload === "recording") {
-    retried = false; // 新录音重置重试计数
-    retryBtn.disabled = false;
-    setState("", "● 录音中", false);
-    document.getElementById("hint")!.textContent = "松开结束 · esc 取消";
-    fill.style.width = "0";
-  } else if (e.payload === "transcribing") {
-    setState("idle", "… 转写中");
-    document.getElementById("hint")!.textContent = "";
-    fill.style.width = "0";
-  }
-});
-// 阶段状态: 无自动隐藏——从松开一直显示到 asr-final(交付完成)
-listen<string>("hud-busy", (e) => {
-  setState("idle", e.payload);
-  fill.style.width = "0";
-});
-listen<string>("hud-msg", (e) => {
-  setState("idle", e.payload, false);
-  fill.style.width = "0";
-  setTimeout(() => invoke("hud_hide"), 2500);
-});
+;;;;;;
+// 阶段状态: 无自动隐藏——从松开一直显示到 asr-final(交付完成);;
 
 // C43 诊断: 前端事件监听注册完成落日志(Rust 侧正常但前端无反应时, 由此定位断联)
 invoke("ui_log", { msg: "hud listeners ready" }).catch(() => {});
-let partialCount = 0;
-listen<string>("asr-partial", (e) => {
-  textEl.textContent = e.payload;
-  textEl.scrollTop = textEl.scrollHeight;
-  partialCount += 1;
-  if (partialCount === 1 || partialCount % 5 === 0) {
-    invoke("ui_log", { msg: `hud partial #${partialCount} len=${e.payload.length}` }).catch(() => {});
-  }
-});
+let partialCount = 0;;
 
-// C43 A/B 实验: 同事件带显式 AnyLabel target 再注册, 收到则打日志(区分默认 target 与定向 target 的路由差异)
-listen<string>("hud-state", (e) => {
-  invoke("ui_log", { msg: `hud-state via AnyLabel: ${e.payload}` }).catch(() => {});
-}, { target: HUD_TARGET });
+// C43 A/B 实验: 同事件带显式 AnyLabel target 再注册, 收到则打日志(区分默认 target 与定向 target 的路由差异);
 
 // C43b 轮询模式: 事件通道(Rust→webview)在本机打包版不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
 // 前端改为 150ms 拉取快照驱动状态机——invoke 通道已证可靠。

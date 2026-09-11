@@ -49,6 +49,12 @@ for (const m of methods) {
 }
 check("组件方法无模块顶层裸调(C46 根因)", bareCalls === 0);
 
+// 2.5) 死事件监听残留(C43: 事件通道不可达, listen 即死代码)
+for (const f of ["src/main.ts", "src/hud.ts"]) {
+  const t = readFileSync(f, "utf8");
+  check(`${f} 无 listen 残留`, !/\blisten\s*</.test(t));
+}
+
 // 3) Rust 命令注册
 const lib = readFileSync("src-tauri/src/lib.rs", "utf8");
 check("poll_versions 已注册 invoke_handler", /commands::poll_versions/.test(lib));

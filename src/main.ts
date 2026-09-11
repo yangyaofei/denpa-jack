@@ -123,23 +123,7 @@ function describeHotkey(h: HotkeyConfig): string {
       if (["general","asr","dict","llm","history","about"].includes(sec)) this.section = sec;
     });
     const hasTauri = !!(window as any).__TAURI_INTERNALS__;
-    if (!hasTauri) return this.initMock();
-    listen<string>("asr-partial", (e) => { this.partial = e.payload; this.error = ""; });
-    listen<string>("asr-result", (e) => { this.result = e.payload; this.partial = ""; this.recording = false; });
-    listen<string>("asr-error", (e) => { this.error = e.payload; this.partial = ""; this.recording = false; });
-    listen<any>("recording-error", (e) => {
-      if (e.payload?.error_type === "microphone_permission_denied") {
-        this.permWarning = "麦克风权限被拒: 系统设置 → 隐私与安全性 → 麦克风 → 允许 VoiceInput";
-      }
-    });
-    listen<any>("asr-final", async (e) => {
-      this.finalInfo = e.payload;
-      this.partial = "";
-      await this.refreshHistory();
-    });
-    listen<boolean>("permission-ax", () => {
-      this.permWarning = "需要辅助功能权限: 系统设置 → 隐私与安全性 → 辅助功能 → 添加本应用";
-    });
+    if (!hasTauri) return this.initMock();;;;;;;
     listen("config-changed", async () => {
       const keepSection = this.section;
       await this.loadCfg();
@@ -153,12 +137,7 @@ function describeHotkey(h: HotkeyConfig): string {
       this.mics = raw.map(([uid, name]) => ({ uid, name }));
     } catch (e) { console.error("list_mics:", e); }
     try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {}
-    // 录音开始后刷新"当前输入设备"(运行时事实)
-    listen<string>("hud-state", async (e) => {
-      if (e.payload === "recording") {
-        try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {}
-      }
-    });
+    // 录音开始后刷新"当前输入设备"(运行时事实);
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
     invoke("check_permissions").catch(() => {});
     this.uiSelftest();
@@ -192,6 +171,7 @@ function describeHotkey(h: HotkeyConfig): string {
     try {
       this.cfg = await invoke("get_config");
       this.keysText = this.cfg.keys.join("\n");
+      if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
   },
   async saveCfg() {
@@ -466,6 +446,11 @@ function describeHotkey(h: HotkeyConfig): string {
 
   // ── 历史 ──
   async refreshHistory() {
+    // E: 详情是快照——列表刷新时按 ts 重找, 保证重转/重跑后详情同步
+    if (this.selHist) {
+      const fresh = (this.history || []).find((h: any) => h.ts === this.selHist.ts);
+      if (fresh) this.selHist = fresh;
+    }
     try { this.history = await invoke("get_history", { limit: 500 }); }
     catch (e) { console.error("get_history:", e); }
   },
