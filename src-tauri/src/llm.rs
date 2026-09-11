@@ -71,7 +71,14 @@ fn dump_call(dir_tag: &str, url: &str, payload: &serde_json::Value, resp: &str) 
     }
 }
 
-pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<String, String> {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LlmOut {
+    pub text: String,
+    /// C50: 思考模型链路(reasoning_content), 存入历史供人工审查
+    pub thinking: Option<String>,
+}
+
+pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<LlmOut, String> {
     let base = if o.base_url.is_empty() {
         default_base_url(&o.provider).to_string()
     } else {
@@ -141,10 +148,19 @@ pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<St
     if !status.is_success() {
         return Err(format!("LLM HTTP {status}: {}", body));
     }
+    let thinking = extract_thinking(&body);
     match extract_text(&body) {
-        Some(t) => Ok(t),
+        Some(t) => Ok(LlmOut { text: t, thinking }),
         None => Err(format!("LLM 无有效输出: {body}")),
     }
+}
+
+/// C50: 提取思考链(deepseek/zhipu 均为 message.reasoning_content)
+fn extract_thinking(body: &Value) -> Option<String> {
+    body["choices"][0]["message"]["reasoning_content"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
 }
 
 /// 从响应体提取修正文本: tool_calls[0].args.corrected_text 优先, 降级 message.content

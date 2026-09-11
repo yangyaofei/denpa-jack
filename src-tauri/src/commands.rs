@@ -256,6 +256,7 @@ pub fn ui_log(app: tauri::AppHandle, msg: String) {
 pub struct LlmSelftestResult {
     dict_text: String,
     llm_text: String,
+    pub thinking: Option<String>,
     tool_used: bool,
     latency_ms: u128,
     error: Option<String>,
@@ -340,9 +341,10 @@ pub async fn llm_selftest(
     let terms: Vec<String> = cfg.dict.iter().map(|d| d.term.clone()).collect();
     let input = dict_text.clone();
     let t0 = std::time::Instant::now();
-    let llm_text = crate::llm::polish(&input, &terms, &opts)
+    let llm_out = crate::llm::polish(&input, &terms, &opts)
         .await
         .map_err(|e| format!("LLM 调用失败: {e}"))?;
+    let llm_text = llm_out.text;
     let latency_ms = t0.elapsed().as_millis();
     // tool_used 判定: 看 llm_logs 最新一条响应里有没有 tool_calls
     let home = std::env::var("HOME").unwrap_or_default();
@@ -362,6 +364,7 @@ pub async fn llm_selftest(
     }
     Ok(LlmSelftestResult {
         dict_text,
+        thinking: llm_out.thinking,
         llm_text,
         tool_used,
         latency_ms,

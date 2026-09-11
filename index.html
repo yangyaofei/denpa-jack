@@ -62,6 +62,9 @@
                 <div class="d-row"><label>最终结果</label><div class="d-text strong" x-text="selHist.final_text || selHist.raw"></div>
                   <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" @click="rerunHist(selHist)">重转</button></div></div>
                 <div class="d-row" x-show="selHist.raw && selHist.raw !== selHist.final_text"><label>原始转写</label><div class="d-text dim2" x-text="selHist.raw"></div></div>
+                <div class="d-row" x-show="selHist.llm_thinking"><label>LLM 思考</label>
+                  <details class="think"><summary>展开思考链</summary><pre class="d-text dim2" x-text="selHist.llm_thinking"></pre></details>
+                </div>
                 <div class="d-row" x-show="selHist.warning"><label>问题</label><div class="d-text" style="color:#ff6961" x-text="selHist.warning"></div></div>
                 <div class="d-meta">
                   <span x-text="selHist.ts"></span> · <span x-text="selHist.engine"></span> ·
@@ -125,9 +128,16 @@
           <div class="row">
             <div>
               <div class="row-title">仅复制到剪贴板</div>
-              <div class="row-hint">关闭则自动粘贴到当前输入位置</div>
+              <div class="row-hint">开启=只复制不粘贴; 关闭=自动粘贴到光标处</div>
             </div>
             <input type="checkbox" class="switch" x-model="cfg.clipboard_only" @change="saveCfg()" />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">粘贴后保留转写到剪贴板</div>
+              <div class="row-hint">开启=粘贴后剪贴板里是转写文本(可再贴他处; 原剪贴板被覆盖); 关闭=恢复你原来的剪贴板</div>
+            </div>
+            <input type="checkbox" class="switch" x-model="cfg.keep_in_clipboard" @change="saveCfg()" />
           </div>
           <div class="row">
             <div>

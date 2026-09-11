@@ -67,6 +67,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     let mut final_text = raw.clone(); // 默认交付=ASR 原文; LLM 成功→润色版, 失败/超时→保持原文
     let mut llm_used = false;
     let mut warning: Option<String> = None;
+    let mut history_thinking: Option<String> = None;
 
     // 2) LLM 润色(可选; 提供tools模型自主决定; 5s 超时/失败降级词典版——永不阻塞交付)
     if cfg.use_llm_correction {
@@ -104,9 +105,11 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                     .collect();
                 let _ = Emitter::emit_to(&app, "hud", "hud-busy", "✦ AI 润色中…");
                 crate::hud_set(|h| h.status = "busy".into());
+                let mut llm_thinking: Option<String> = None;
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build();
+
                 let polished = rt.map(|r| {
                     r.block_on(async {
                         match tokio::time::timeout(
@@ -115,7 +118,10 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                         )
                         .await
                         {
-                            Ok(Ok(t)) => Some(t),
+                            Ok(Ok(out)) => {
+                                llm_thinking = out.thinking;
+                                Some(out.text)
+                            }
                             Ok(Err(e)) => {
                                 warning = Some(format!("LLM 失败: {e}"));
                                 final_text = raw.clone(); // 降级=ASR 原文
@@ -129,6 +135,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                         }
                     })
                 });
+                history_thinking = llm_thinking.clone();
                 if let Ok(Some(t)) = polished {
                     if !t.trim().is_empty() {
                         final_text = t;
@@ -166,6 +173,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     // 4) 历史
     let audio_path = ho.audio_path.clone().unwrap_or_default();
     let rec = crate::history::HistoryRecord {
+        llm_thinking: history_thinking.clone(),
         ts: now_local_pub(),
         engine: if ho.engine.is_empty() { cfg.active_asr_id.clone() } else { ho.engine.clone() },
         raw,

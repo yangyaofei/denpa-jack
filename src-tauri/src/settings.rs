@@ -183,6 +183,9 @@ pub struct Config {
     pub audio_feedback: bool,
     #[serde(default = "default_true")]
     pub restore_clipboard: bool,
+    /// C50: 粘贴后把转写文本保留在剪贴板(与 restore_clipboard 互斥, 保存时反向同步)
+    #[serde(default)]
+    pub keep_in_clipboard: bool,
     /// 松开后尾音缓冲毫秒(蓝牙麦词尾截断时调大; 0=立即停)
     #[serde(default)]
     pub extra_tail_ms: u32,
@@ -260,6 +263,11 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
 
 #[tauri::command]
 pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), String> {
+    // C50 互斥: 保留剪贴板 与 恢复原剪贴板 不同时成立
+    if config.keep_in_clipboard {
+        config.restore_clipboard = false;
+    }
+
     CONFIG_VER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     config.hotkey.key = normalize_key(&config.hotkey.key);
     let p = config_path(&app);

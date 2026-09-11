@@ -169,7 +169,7 @@ fn run_ui_chain(app: tauri::AppHandle) {
     let probe = crate::history::HistoryRecord {
         ts: "PROBE".into(), engine: "uitest".into(), raw: "实时性探针".into(),
         final_text: "实时性探针".into(), llm_used: false, delivered: "test".into(),
-        audio_path: String::new(), duration_ms: 0, warning: None,
+        audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
     };
     crate::history::append(&app, &probe);
     let v1 = crate::history::history_version();

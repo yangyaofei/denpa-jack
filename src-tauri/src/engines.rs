@@ -97,6 +97,7 @@ pub fn spawn_session(
                             audio_path,
                             warning: Some(msg),
                             duration_ms: 0,
+                llm_thinking: None,
                         };
                         crate::history::append(&app2, &rec);
                     });

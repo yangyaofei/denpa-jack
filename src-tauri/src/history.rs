@@ -12,6 +12,8 @@ pub struct HistoryRecord {
     pub raw: String,
     pub final_text: String,
     pub llm_used: bool,
+    #[serde(default)]
+    pub llm_thinking: Option<String>,
     pub delivered: String, // clipboard+paste | clipboard
     pub audio_path: String,
     #[serde(default)]
