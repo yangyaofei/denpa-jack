@@ -412,3 +412,16 @@ pub fn poll_versions() -> Versions {
         config: crate::settings::config_version(),
     }
 }
+
+#[cfg(test)]
+mod gap_tests {
+    #[test]
+    fn poll_versions_reflects_history_and_config_counters() {
+        use super::*;
+        crate::history::HISTORY_VER.store(7, std::sync::atomic::Ordering::SeqCst);
+        crate::settings::CONFIG_VER.store(3, std::sync::atomic::Ordering::SeqCst);
+        let v = poll_versions();
+        assert_eq!(v.history, 7);
+        assert_eq!(v.config, 3);
+    }
+}

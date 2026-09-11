@@ -15,6 +15,8 @@ AFTER=$(wc -l < "$H")
 grep -a "delivered=" tmp/reg-file.txt | tail -1
 echo "== 3/5 UI 数据链(页面同款函数 vs 磁盘) =="
 timeout 30 env VOICEMAC_AUTOTEST=ui src-tauri/target/release/tauri-app 2>&1 | grep -a "ui-chain" | tail -4
+echo "== 前端静态检查 =="
+(cd .. && npm run build > /dev/null 2>&1 && node tests/frontend-checks.mjs) || exit 1
 echo "== 4/5 e2e 真麦 =="
 timeout 40 env VOICEMAC_AUTOTEST=e2e src-tauri/target/release/tauri-app > tmp/reg-e2e.txt 2>&1 || true
 echo "== 5/5 打包+签名 =="

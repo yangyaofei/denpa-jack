@@ -162,6 +162,30 @@ function describeHotkey(h: HotkeyConfig): string {
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
     invoke("check_permissions").catch(() => {});
     this.uiSelftest();
+  
+    // C46 主窗轮询(组件作用域 this 可用): 800ms 拉版本, 变化才刷新
+    let lastHistVer = -1;
+    let lastCfgVer = -1;
+    let tick = 0;
+    setInterval(async () => {
+      try {
+        tick++;
+        const v = await invoke<any>("poll_versions");
+        if (tick % 10 === 1) invoke("ui_log", { msg: `poll alive histVer=${v.history}` }).catch(() => {});
+        if (v.history !== lastHistVer) {
+          const from = lastHistVer;
+          lastHistVer = v.history;
+          await this.refreshHistory();
+          invoke("ui_log", { msg: `history ${from}→${v.history} 刷新完成 ${this.history.length} 条` }).catch(() => {});
+        }
+        if (v.config !== lastCfgVer) {
+          lastCfgVer = v.config;
+          await this.loadCfg();
+        }
+      } catch (e) {
+        invoke("ui_log", { msg: `poll 异常: ${e}` }).catch(() => {});
+      }
+    }, 800);
   },
 
   async loadCfg() {
@@ -622,19 +646,4 @@ function describeHotkey(h: HotkeyConfig): string {
 
 Alpine.start();
 
-// C43b 主窗轮询: 事件通道不可达——800ms 拉 versions, 变化才刷新(历史/顶栏状态)
-let lastHistVer = -1;
-let lastCfgVer = -1;
-setInterval(async () => {
-  try {
-    const v = await invoke<any>("poll_versions");
-    if (v.history !== lastHistVer) {
-      lastHistVer = v.history;
-      refreshHistory();
-    }
-    if (v.config !== lastCfgVer) {
-      lastCfgVer = v.config;
-      await loadCfg();
-    }
-  } catch {}
-}, 800);
+
