@@ -5,6 +5,8 @@
 const CTRL: u64 = 0x0004_0000;
 const ALT: u64 = 0x0008_0000;
 const CMD: u64 = 0x0010_0000;
+/// Fn/Globe 键 flags(NX_FUNCTIONKEYMASK): 闪电说/Handy 同款可捕获——单 Fn 即 flags 恰为该值
+const FN: u64 = 0x0080_0000;
 
 pub fn flags_of(s: &str) -> Option<u64> {
     let mut f = 0u64;
@@ -14,6 +16,7 @@ pub fn flags_of(s: &str) -> Option<u64> {
             "alt" | "option" => f |= ALT,
             "cmd" | "super" | "meta" => f |= CMD,
             "shift" => f |= 0x0002_0000,
+            "fn" | "function" | "globe" => f |= FN,
             _ => return None,
         }
     }
