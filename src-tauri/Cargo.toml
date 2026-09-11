@@ -44,3 +44,6 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray
 objc2-app-kit = { version = "0.3.2", features = ["NSStatusBar", "NSStatusItem", "NSButton", "NSMenu", "NSMenuItem", "NSImage", "NSResponder", "NSApplication", "NSControl", "NSColor", "NSPasteboard", "NSSound"] }
 tauri-plugin-autostart = "2.5.1"
 
+
+[dev-dependencies]
+tempfile = "3"

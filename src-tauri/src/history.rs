@@ -57,26 +57,60 @@ pub fn history_version() -> u64 {
 
 pub fn append(app: &tauri::AppHandle, rec: &HistoryRecord) {
     HISTORY_VER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    append_record_to(&history_dir(app), rec);
+}
+
+/// 追加一条记录到指定目录的 history.jsonl(可测核心)
+pub fn append_record_to(dir: &std::path::Path, rec: &HistoryRecord) {
+    let _ = fs::create_dir_all(dir);
     if let Ok(mut line) = serde_json::to_string(rec) {
         line.push('\n');
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(history_path(app)) {
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("history.jsonl")) {
             let _ = f.write_all(line.as_bytes());
         }
     }
 }
 
-pub fn recent(app: &tauri::AppHandle, limit: usize) -> Vec<HistoryRecord> {
-    let Ok(raw) = fs::read_to_string(history_path(app)) else { return vec![] };
+/// 读取指定目录全部记录(时间倒序)
+pub fn read_all_from(dir: &std::path::Path) -> Vec<HistoryRecord> {
+    let Ok(raw) = fs::read_to_string(dir.join("history.jsonl")) else { return vec![] };
     let mut out: Vec<HistoryRecord> = raw
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
     out.reverse();
+    out
+}
+
+pub fn recent(app: &tauri::AppHandle, limit: usize) -> Vec<HistoryRecord> {
+    let mut out = read_all_from(&history_dir(app));
     out.truncate(limit);
     out
 }
 
+/// 保留最近 N 个 wav(按文件名排序=时间序)——可测核心
+pub fn prune_wavs_in(dir: &std::path::Path, keep: usize) {
+    let mut wavs: Vec<std::path::PathBuf> = fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|x| x == "wav").unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    wavs.sort();
+    if wavs.len() > keep {
+        for p in &wavs[..wavs.len() - keep] {
+            let _ = fs::remove_file(p);
+        }
+    }
+}
+
 /// 保留最近 N 个录音, 删多余
+fn history_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
 pub fn prune_recordings(app: &tauri::AppHandle, keep: usize) {
     let dir = recordings_dir(app);
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
@@ -182,5 +216,41 @@ mod tests {
         let back: HistoryRecord = serde_json::from_str(&line).unwrap();
         assert_eq!(back.final_text, "谢克数学");
         assert_eq!(back.duration_ms, 1200);
+    }
+}
+
+#[cfg(test)]
+mod fs_tests {
+    use super::*;
+    use std::fs;
+
+    fn tmpdir() -> (std::path::PathBuf, tempfile::TempDir) {
+        let d = tempfile::tempdir().unwrap();
+        (d.path().to_path_buf(), d)
+    }
+
+    #[test]
+    fn append_and_recent_roundtrip_real_file() {
+        let (dir, _g) = tmpdir();
+        let rec = HistoryRecord {
+            ts: "2026-01-01 00:00:00".into(), engine: "volcengine".into(),
+            raw: "原文".into(), final_text: "终稿".into(), llm_used: true,
+            delivered: "pasted-cmdv".into(), audio_path: String::new(), duration_ms: 1000, warning: None,
+        };
+        append_record_to(&dir, &rec);
+        append_record_to(&dir, &rec);
+        let all = read_all_from(&dir);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn prune_oldest_by_filename_order() {
+        let (dir, _g) = tmpdir();
+        for i in 0..5 {
+            fs::write(dir.join(format!("2026010{i}-000000.wav")), b"x").unwrap();
+        }
+        prune_wavs_in(&dir, 2);
+        let left = fs::read_dir(&dir).unwrap().count();
+        assert_eq!(left, 2, "应只留最新 2 个");
     }
 }
