@@ -82,6 +82,8 @@ async function pollOnce() {
       document.getElementById("hint")!.textContent = "";
     }
     textEl.textContent = s.partial || "";
+    // 用户定则: 文字超窗后始终显示最新部分——旧内容上滚, 视口钉在底部
+    textEl.scrollTop = textEl.scrollHeight;
     if (!s.msg && !s.err) failActions.classList.remove("show");
     if (s.msg) {
       setState("idle", s.msg, false);
