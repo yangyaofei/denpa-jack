@@ -21,3 +21,8 @@
 ## 防复发
 - frontend-checks.mjs: 断言产物含轮询+无死 listen 残留+组件方法无模块顶层裸调
 - index.html 双 script（main.ts 双执行=双轮询双监听）已删——新增页面引用必须唯一
+
+## C51b 热键方案对比(闪电说 strings 逆向实锤)
+- 闪电说: 纯 CGEventTap 自写(keyboard_macos_configurable.rs)+辅助功能权限+tap 超时自愈(DISABLED by timeout→re-enabled)+legacy dual hotkey mode
+- 我们: global-shortcut(Carbon, 免辅助功能)+flags 40ms 轮询(纯修饰/Fn)
+- 判定: 方案同构, 各有优劣——它事件驱动延迟低但强依赖辅助功能+有 tap 超时坑(已自愈); 我们零权限零 tap 沦理, 延迟≤40ms 无感。暂不换; 若轮询实测漏帧再升级 CGEventTap
