@@ -211,6 +211,7 @@ mod tests {
             llm_used: true,
             delivered: "pasted-ax".into(),
             audio_path: "/tmp/a.wav".into(),
+            llm_thinking: None,
             duration_ms: 1200,
             warning: None,
         };
@@ -237,7 +238,7 @@ mod fs_tests {
         let rec = HistoryRecord {
             ts: "2026-01-01 00:00:00".into(), engine: "volcengine".into(),
             raw: "原文".into(), final_text: "终稿".into(), llm_used: true,
-            delivered: "pasted-cmdv".into(), audio_path: String::new(), duration_ms: 1000, warning: None,
+            delivered: "pasted-cmdv".into(), audio_path: String::new(), duration_ms: 1000, warning: None, llm_thinking: None,
         };
         append_record_to(&dir, &rec);
         append_record_to(&dir, &rec);
