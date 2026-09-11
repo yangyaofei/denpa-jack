@@ -16,3 +16,8 @@
 - **结论: 可行且速度远超"够快"门槛**——RTF 0.018 意味着 200ms 分片即时重推理全程无压力
 - **架构定案**: 本地 Python server(mlx-qwen3-asr)暴露流式协议(分片喂 PCM→窗口重推理→partial 修正→finish 终稿), Rust 引擎加 "local" provider(与 doubao 同构), 彻底去线上化
 - 下一步: spike P1=起 mlx-qwen3-asr server+最小客户端实测 RTF; P2=Rust local provider
+
+## 修正(用户指正, HF 原始档核验): Qwen3-TTS 已开源
+- Collection: huggingface.co/collections/Qwen/qwen3-tts —— 12Hz-0.6B/1.7B × Base/CustomVoice/VoiceDesign, Apache-2.0, 架构 Qwen3TTSForConditionalGeneration(多码本 LM+12Hz codec+speaker_encoder)
+- 修正前述"TTS 闭源"结论; 计算量判据更新: 12Hz codec 把自回归步数压到 12 token/s(传统 25-86), 本地可行级; 同秒仍重于 ASR(多码本+vocoder)但同栈可及
+- 本地 TTS 选型更新: 首选 Qwen3-TTS-0.6B(与 Qwen3-ASR 同栈), Kokoro 降为备选
