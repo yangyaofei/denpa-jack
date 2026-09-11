@@ -178,7 +178,8 @@ fn run_ui_chain(app: tauri::AppHandle) {
     assert!(v1 > v0 && visible, "append 后版本未递增或 recent 不可见");
     // 清理探针行(重写 jsonl)
     let jsonl = dir.join("history.jsonl");
-    let kept: Vec<&str> = std::fs::read_to_string(&jsonl).unwrap()
+    let raw = std::fs::read_to_string(&jsonl).unwrap_or_default();
+    let kept: Vec<&str> = raw
         .lines().filter(|l| !l.contains("\"ts\":\"PROBE\"")).collect();
     std::fs::write(&jsonl, kept.join("\n") + "\n").ok();
     crate::log::elog("[ui-chain] PASS: 数据链与磁盘一致+实时性 OK");
