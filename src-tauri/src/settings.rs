@@ -205,7 +205,15 @@ pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
 }
 
 
+/// 配置变更信号(save_config 时递增; 主窗轮询刷新顶栏状态)
+pub static CONFIG_VER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn config_version() -> u64 {
+    CONFIG_VER.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 #[tauri::command]
+
 pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
     let p = config_path(&app);
     if !p.exists() {
@@ -252,6 +260,7 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
 
 #[tauri::command]
 pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), String> {
+    CONFIG_VER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     config.hotkey.key = normalize_key(&config.hotkey.key);
     let p = config_path(&app);
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;

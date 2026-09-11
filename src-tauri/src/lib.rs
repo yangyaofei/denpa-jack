@@ -195,7 +195,7 @@ pub fn run() {
             commands::ping, commands::list_mics, commands::get_active_mic, commands::list_llm_models, commands::llm_selftest, commands::get_default_prompt, commands::ui_log, commands::get_history,
             commands::clear_history, commands::copy_text, commands::get_hotwords,
             recording::recording_start, recording::recording_stop,
-            recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::hud_resize, commands::dev_nav,
+            recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::dev_nav,
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
             commands::check_permissions,

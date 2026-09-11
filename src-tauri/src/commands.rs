@@ -401,3 +401,14 @@ pub fn hud_poll() -> crate::HudSnapshot {
     g.msg = String::new();
     snap
 }
+
+#[derive(serde::Serialize)]
+pub struct Versions { pub history: u64, pub config: u64 }
+
+#[tauri::command]
+pub fn poll_versions() -> Versions {
+    Versions {
+        history: crate::history::history_version(),
+        config: crate::settings::config_version(),
+    }
+}

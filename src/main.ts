@@ -621,3 +621,20 @@ function describeHotkey(h: HotkeyConfig): string {
 });
 
 Alpine.start();
+
+// C43b 主窗轮询: 事件通道不可达——800ms 拉 versions, 变化才刷新(历史/顶栏状态)
+let lastHistVer = -1;
+let lastCfgVer = -1;
+setInterval(async () => {
+  try {
+    const v = await invoke<any>("poll_versions");
+    if (v.history !== lastHistVer) {
+      lastHistVer = v.history;
+      refreshHistory();
+    }
+    if (v.config !== lastCfgVer) {
+      lastCfgVer = v.config;
+      await loadCfg();
+    }
+  } catch {}
+}, 800);

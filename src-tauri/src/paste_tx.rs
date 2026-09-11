@@ -197,9 +197,11 @@ fn settle(pending: &Arc<Mutex<Pending>>, app_handle: &AppHandle) {
         && NSPasteboard::generalPasteboard().changeCount() == p.change_count;
     if !still_ours {
         crate::log::elog("[paste-tx] 剪贴板已被外部修改, 不动它");
-    } else if p.preserve_transcript {
+    } else if p.preserve_transcript || !receipt_seen {
+        // 审计B修复: 无回执(目标窗口可能不可输入)——保留转写文本供手动 CmdV,
+        // 不恢复旧内容(否则用户手动粘贴拿到的是旧剪贴板, 体感"没复制")
         let _ = app_handle.clipboard().write_text(&p.transcript);
-        crate::log::elog("[paste-tx] 转写文本保留在剪贴板");
+        crate::log::elog("[paste-tx] 无回执/保留模式: 转写文本保留在剪贴板");
     } else {
         let clipboard = app_handle.clipboard();
         if let Some(text) = &p.saved_text {

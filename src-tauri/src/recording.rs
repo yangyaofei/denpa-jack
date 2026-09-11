@@ -343,7 +343,9 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         }
     }
     let (ho, cmd_tx, handoff) = sess.finish(&app, &engine);
-    if ho.duration_ms < min_duration_ms(&app) {
+    // B3 判据改为实际音频字节数(9600B=0.3s@16k)——duration_ms 含引擎/采集启动开销,
+    // 200ms 音频会因 duration 300ms 被放行成"就是"级别的垃圾交付
+    if ho.pcm.len() < 9600 {
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
         let _ = cmd_tx.try_send(doubao::Cmd::Abort);
         session_cleanup(&app, None);
