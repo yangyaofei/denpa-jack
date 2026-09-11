@@ -179,6 +179,9 @@ pub struct Config {
     pub mic_priority: Vec<String>, // 优先级(设备名序列, 按序取第一个在线)
     #[serde(default)]
     pub hotkey: HotkeyConfig,
+    /// C51 多热键: 任一触发即录音(迁移: 空=仅 hotkey 一组)
+    #[serde(default)]
+    pub hotkeys: Vec<HotkeyConfig>,
     #[serde(default)]
     pub audio_feedback: bool,
     #[serde(default = "default_true")]
@@ -474,5 +477,19 @@ mod gap_tests {
         let c: Config = serde_json::from_str(r#"{"keys": ["k1"], "hotkey_key_code": 96}"#).unwrap();
         assert_eq!(c.keys, vec!["k1".to_string()]);
         assert!(c.llm_profiles.is_empty());
+    }
+}
+
+
+impl Config {
+    /// C51 全部生效热键(hotkeys 为空回落 [hotkey]; 去重)
+    pub fn all_hotkeys(&self) -> Vec<HotkeyConfig> {
+        let mut out = self.hotkeys.clone();
+        if out.is_empty() {
+            out.push(self.hotkey.clone());
+        }
+        out.sort_by(|a, b| a.shortcut_str().cmp(&b.shortcut_str()));
+        out.dedup_by(|a, b| a.shortcut_str() == b.shortcut_str());
+        out
     }
 }

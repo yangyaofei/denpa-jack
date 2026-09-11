@@ -91,6 +91,7 @@ function describeHotkey(h: HotkeyConfig): string {
   dictEdit: null as any,
   dictIsNew: false,
   keysText: "",
+    extraHotkeys: "",
   hotwordsPreview: [] as string[],
   dictSearch: "",
   hotkeyRecording: false,
@@ -171,8 +172,26 @@ function describeHotkey(h: HotkeyConfig): string {
     try {
       this.cfg = await invoke("get_config");
       this.keysText = this.cfg.keys.join("\n");
+      this.extraHotkeys = this.cfg.hotkeys.map((h: any) => h.key ? h.shortcut_str ?? "" : h.shortcut_str ?? "").join("\n");
       if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
+  },
+  async saveExtraHotkeys() {
+    if (!this.cfg) return;
+    const parse = (line: string): any => {
+      const parts = line.trim().toLowerCase().split("+").map((x) => x.trim()).filter(Boolean);
+      const h = { key: "", ctrl: false, alt: false, cmd: false, shift: false };
+      for (const p of parts) {
+        if (p === "ctrl" || p === "control") h.ctrl = true;
+        else if (p === "alt" || p === "option") h.alt = true;
+        else if (p === "cmd" || p === "super" || p === "meta") h.cmd = true;
+        else if (p === "shift") h.shift = true;
+        else h.key = p;
+      }
+      return h.key || h.ctrl || h.alt || h.cmd || h.shift ? h : null;
+    };
+    this.cfg.hotkeys = this.extraHotkeys.split("\n").map(parse).filter(Boolean);
+    await this.saveCfg();
   },
   async saveCfg() {
     if (!this.cfg) return;

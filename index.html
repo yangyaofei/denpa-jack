@@ -113,6 +113,13 @@
           </div>
           <div class="row">
             <div>
+              <div class="row-title">额外快捷键(任一触发)</div>
+              <div class="row-hint">每行一组, 如 ctrl+alt+k; 纯修饰组合如 ctrl+cmd+alt(无需字母键); Fn 单键为 macOS 系统保留, 无法全局捕获</div>
+            </div>
+            <textarea class="inp" rows="2" style="width:220px" x-model="extraHotkeys" @change="saveExtraHotkeys()" placeholder="ctrl+cmd+alt&#10;ctrl+alt+k"></textarea>
+          </div>
+          <div class="row">
+            <div>
               <div class="row-title">保留音频条数</div>
               <div class="row-hint">超出自动清理最旧录音</div>
             </div>

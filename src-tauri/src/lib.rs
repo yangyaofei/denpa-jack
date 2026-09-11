@@ -1,6 +1,7 @@
 pub mod audio;
 mod audio_feedback;
 mod autotest;
+mod flags_hotkey;
 mod commands;
 mod deliver;
 pub mod dict;
@@ -168,15 +169,33 @@ pub fn run() {
                     }
                 }
             });
+            // C51 多热键: 全部注册, 任一触发
             let app_hk = app.handle().clone();
-            if let Err(e) = app.global_shortcut()
-                .on_shortcut(s, move |_app, _sc, event| {
-                    log::log(&app_hk, &format!("hotkey event: {:?}", event.state));
+            // 纯修饰组合(无字母键)走 flags 轮询
+            {
+                let targets: Vec<String> = cfg
+                    .all_hotkeys()
+                    .iter()
+                    .map(|h| h.shortcut_str())
+                    .filter(|s| crate::flags_hotkey::flags_of(s).is_some())
+                    .collect();
+                if !targets.is_empty() {
+                    flags_hotkey::spawn(targets, Box::new(send_ctrl));
+                }
+            }
+            for hk in cfg.all_hotkeys() {
+                let sc: Shortcut = match hk.shortcut_str().parse() {
+                    Ok(x) => x,
+                    Err(_) => continue,
+                };
+                let app_each = app_hk.clone();
+                match app.global_shortcut().on_shortcut(sc, move |_app, _sc, event| {
+                    log::log(&app_each, &format!("hotkey event: {:?}", event.state));
                     send_ctrl(event.state == ShortcutState::Pressed);
                 }) {
-                log::log(app.handle(), &format!("快捷键注册失败: {e}"));
-            } else {
-                log::log(app.handle(), "快捷键注册成功");
+                    Ok(()) => log::log(&app_hk, &format!("快捷键注册成功: {}", hk.shortcut_str())),
+                    Err(e) => log::log(&app_hk, &format!("快捷键注册失败 {}: {e}", hk.shortcut_str())),
+                }
             }
             log::log(app.handle(), "setup done");
 
