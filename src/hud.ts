@@ -135,7 +135,8 @@ async function pollOnce() {
     const lv = Math.min(1, (s.level / 1000) * 6);
     fill.style.width = `${Math.max(4, lv * 100)}%`;
     fill.className = lv > 0.9 ? "fill hot" : "fill";
-    // status
+    // C47 幂等全量重绘: 快照=唯一真相, 空=清——杜绝 hide 清快照后 DOM 残留旧内容
+    // (旧实现 if(s.partial) 只写不清, 下次 show 瞬间闪现上一次的文本)
     if (s.status === "recording") {
       setState("", "● 录音中", false);
       document.getElementById("hint")!.textContent = "松开结束 · esc 取消";
@@ -145,20 +146,19 @@ async function pollOnce() {
       fill.style.width = "0";
     } else if (s.status === "busy") {
       setState("idle", "✦ AI 润色中…");
+    } else {
+      // 空状态(idle/隐藏): 状态行+文本全清
+      setState("", "", false);
+      document.getElementById("hint")!.textContent = "";
     }
-    // partial
-    if (s.partial) {
-      textEl.textContent = s.partial;
-      textEl.scrollTop = textEl.scrollHeight;
-    }
-    // msg
+    textEl.textContent = s.partial || "";
+    if (!s.msg && !s.err) failActions.classList.remove("show");
     if (s.msg) {
       setState("idle", s.msg, false);
       fill.style.width = "0";
       if (hideTimer) clearTimeout(hideTimer);
       hideTimer = window.setTimeout(() => invoke("hud_hide"), 2500);
     }
-    // error
     if (s.err) {
       setState("idle", `⚠️ ${String(s.err).slice(0, 60)}`);
       failActions.classList.add("show");
