@@ -114,8 +114,8 @@
           </div>
           <div class="row">
             <div>
-              <div class="row-title">额外快捷键(任一触发)</div>
-              <div class="row-hint">每行一组: 修饰+键如 ctrl+alt+k; 纯修饰如 ctrl+cmd+alt; Fn 请直接手填 fn 或 fn+ctrl(录制按钮捕获不到 Fn); 任一组合触发录音</div>
+              <div class="row-title">额外快捷键(可选)</div>
+              <div class="row-hint">在主热键之外加备用组合, 每行一组, 留空=只用主热键。格式: 修饰+键如 ctrl+alt+k; 纯修饰如 ctrl+cmd+alt; Fn 单键填 fn。与主热键任一触发录音, 保存即生效</div>
             </div>
             <textarea class="inp" rows="2" style="width:220px" x-model="extraHotkeys" @change="saveExtraHotkeys()" placeholder="ctrl+cmd+alt&#10;ctrl+alt+k"></textarea>
           </div>

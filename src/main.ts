@@ -196,6 +196,8 @@ function describeHotkey(h: HotkeyConfig): string {
     };
     this.cfg.hotkeys = this.extraHotkeys.split("\n").map(parse).filter(Boolean);
     await this.saveCfg();
+    // C52c: 额外热键保存后同步重注册(主热键录制同待遇), 否则改了不生效
+    try { await invoke("reapply_hotkey"); } catch (x: any) { this.error = String(x); }
   },
   async saveCfg() {
     if (!this.cfg) return;
