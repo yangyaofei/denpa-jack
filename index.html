@@ -104,111 +104,20 @@
           </div>
         </div>
         <div class="card">
-          <div class="row">
-            <div>
-              <div class="row-title">按住说话快捷键</div>
-              <div class="row-hint">点击录制新组合键; 必须带修饰键(Ctrl/Opt/Cmd/Shift)或功能键; Esc 取消</div>
-            </div>
-            <button class="rec-key" @click="startHotkeyRecord()" x-text="hotkeyRecording ? '按下新键…' : (cfg?.hotkey ? describeHotkey(cfg.hotkey) : 'F5')"></button>
-            <div class="row-hint" x-show="hotkeyHint" x-text="hotkeyHint" style="color:#ff9f0a"></div>
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">额外快捷键(可选)</div>
-              <div class="row-hint">在主热键之外加备用组合, 每行一组, 留空=只用主热键。格式: 修饰+键如 ctrl+alt+k; 纯修饰如 ctrl+cmd+alt; Fn 单键填 fn。与主热键任一触发录音, 保存即生效</div>
-            </div>
-            <textarea class="inp" rows="2" style="width:220px" x-model="extraHotkeys" @change="saveExtraHotkeys()" placeholder="ctrl+cmd+alt&#10;ctrl+alt+k"></textarea>
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">保留音频条数</div>
-              <div class="row-hint">超出自动清理最旧录音</div>
-            </div>
-            <input class="inp num" type="number" min="0" max="1000" x-model.number="cfg.keep_audio_count" @change="saveCfg()" />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">AI 润色(LLM 纠错)</div>
-              <div class="row-hint">交付前大模型纠错(词典注入/工具调用); 最长等 1 分钟, 失败降级 ASR 原文</div>
-            </div>
-            <input type="checkbox" class="switch" x-model="cfg.use_llm_correction" @change="saveCfg()" />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">仅复制到剪贴板</div>
-              <div class="row-hint">开启=只复制不粘贴; 关闭=自动粘贴到光标处</div>
-            </div>
-            <input type="checkbox" class="switch" x-model="cfg.clipboard_only" @change="saveCfg()" />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">粘贴后保留转写到剪贴板</div>
-              <div class="row-hint">开启=粘贴后剪贴板里是转写文本(可再贴他处; 原剪贴板被覆盖); 关闭=恢复你原来的剪贴板</div>
-            </div>
-            <input type="checkbox" class="switch" x-model="cfg.keep_in_clipboard" @change="saveCfg()" />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">录音提示音</div>
-              <div class="row-hint">开始/结束播放系统音效</div>
-            </div>
-            <input type="checkbox" class="switch" x-model="cfg.audio_feedback" @change="saveCfg()" />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">浮窗位置</div>
-              <div class="row-hint">跟随鼠标所在屏幕的显示位置</div>
-            </div>
-            <select class="inp" x-model="cfg.overlay_position" @change="saveCfg()">
-              <option value="bottom">底部</option>
-              <option value="center">中间</option>
-              <option value="top">顶部</option>
-            </select>
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">历史条数上限</div>
-              <div class="row-hint">超出自动清理最旧记录; 0 不限</div>
-            </div>
-            <input class="inp num" type="number" min="0" max="10000" step="50" x-model.number="cfg.history_limit" @change="saveCfg()" />
-          </div>
-          <div class="row">
-            <div>
-              <div class="row-title">登录自动启动</div>
-              <div class="row-hint">开机后台常驻菜单栏</div>
-            </div>
-            <input type="checkbox" class="switch" x-model="autostartOn" @change="toggleAutostart()" />
-          </div>
-          <button class="add-btn" @click="openDataDir()">打开数据目录</button>
-          <button class="add-btn" @click="openConfigFile()">打开词典配置</button>
-        </div>
-      </section>
-      <section x-show="section === 'asr'" class="page">
-        <h1>语音识别</h1>
-        <div class="card">
-          <div class="row-title">Key 池</div>
-          <div class="row-hint">每行一个; 档案 Key 留空时按序取第一个</div>
-          <textarea class="inp" rows="3" x-model="keysText" @change="saveKeys()" placeholder="sk-..."></textarea>
-        </div>
-        <template x-for="p in cfg?.asr_profiles ?? []" :key="p.id">
-          <div class="card" :class="{active: cfg?.active_asr_id === p.id}" style="margin-bottom: 8px">
-            <div class="row">
-              <div>
-                <div class="row-title">
-                  <span x-text="p.name"></span>
-                  <span class="tag" x-text="p.provider"></span>
-                  <span class="tag" x-show="cfg?.active_asr_id === p.id">使用中</span>
+            <div class="row-title" style="padding:0 2px">录音快捷键</div>
+            <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点击 + 录制新组合, 点击 × 删除; Fn 键无法录制(系统限制), 其余任意组合均可</div>
+            <div class="hk-list">
+              <template x-for="(h, idx) in hkList()" :key="idx + h.key">
+                <div class="hk-item">
+                  <span class="hk-name" x-text="describeHotkey(h)"></span>
+                  <button class="hk-del" @click="removeHotkey(idx)">×</button>
                 </div>
-                <div class="row-hint" x-text="'Key: ' + (p.api_key ? p.api_key.slice(0, 8) + '…' : '用 Key 池') + (p.hotwords_enabled ? ' · 热词开' : '')"></div>
-              </div>
-              <div style="display: flex; gap: 6px">
-                <button class="mini" @click="useAsr(p)" x-show="cfg?.active_asr_id !== p.id">使用</button>
-                <button class="mini" @click="editAsr(p)">编辑</button>
-                <button class="mini danger" @click="delAsr(p)">删除</button>
-              </div>
+              </template>
             </div>
+            <button class="hk-add" @click="startHotkeyRecord()" x-text="hotkeyRecording ? '按下新组合键… (Esc 取消)' : '+ 录制新组合'"></button>
+            <div class="row-hint" x-show="hotkeyHint" x-text="hotkeyHint" style="color:#ff9f0a; padding:4px 2px 0"></div>
           </div>
-        </template>
+        </div>
         <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
         <div class="card">
           <div class="row-title">热词直传预览</div>

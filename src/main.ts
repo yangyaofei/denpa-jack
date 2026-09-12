@@ -91,8 +91,7 @@ function describeHotkey(h: HotkeyConfig): string {
   dictEdit: null as any,
   dictIsNew: false,
   keysText: "",
-    extraHotkeys: "",
-  hotwordsPreview: [] as string[],
+    hotwordsPreview: [] as string[],
   dictSearch: "",
   hotkeyRecording: false,
   hotkeyHint: "",
@@ -180,25 +179,6 @@ function describeHotkey(h: HotkeyConfig): string {
       if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
   },
-  async saveExtraHotkeys() {
-    if (!this.cfg) return;
-    const parse = (line: string): any => {
-      const parts = line.trim().toLowerCase().split("+").map((x) => x.trim()).filter(Boolean);
-      const h = { key: "", ctrl: false, alt: false, cmd: false, shift: false };
-      for (const p of parts) {
-        if (p === "ctrl" || p === "control") h.ctrl = true;
-        else if (p === "alt" || p === "option") h.alt = true;
-        else if (p === "cmd" || p === "super" || p === "meta") h.cmd = true;
-        else if (p === "shift") h.shift = true;
-        else h.key = p;
-      }
-      return h.key || h.ctrl || h.alt || h.cmd || h.shift ? h : null;
-    };
-    this.cfg.hotkeys = this.extraHotkeys.split("\n").map(parse).filter(Boolean);
-    await this.saveCfg();
-    // C52c: 额外热键保存后同步重注册(主热键录制同待遇), 否则改了不生效
-    try { await invoke("reapply_hotkey"); } catch (x: any) { this.error = String(x); }
-  },
   async saveCfg() {
     if (!this.cfg) return;
     this.cfg.keys = this.keysText.split("\n").map((s: string) => s.trim()).filter(Boolean);
@@ -225,11 +205,27 @@ function describeHotkey(h: HotkeyConfig): string {
   weightStars(b: number): string { return this.stars(b); },
   describeHotkey,
   hotkeyLabel() { return this.cfg?.hotkey ? describeHotkey(this.cfg.hotkey) : ""; },
+  // 快捷键列表: hotkeys 为空时回落[hotkey](Rust all_hotkeys 同语义)
+  hkList(): HotkeyConfig[] {
+    const hs = this.cfg?.hotkeys ?? [];
+    return hs.length ? hs : (this.cfg?.hotkey ? [this.cfg.hotkey] : []);
+  },
+  removeHotkey(idx: number) {
+    if (!this.cfg) return;
+    const list = this.hkList();
+    if (list.length <= 1) { this.error = "至少保留一个快捷键"; return; }
+    if (this.cfg.hotkeys.length) {
+      this.cfg.hotkeys.splice(idx, 1);
+    } else {
+      // 删的是回落显示的主热键 → 转为显式 hotkeys 数组(删掉后为空再回落)
+      this.cfg.hotkeys = list.filter((_, i) => i !== idx);
+    }
+    this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
+  },
   startHotkeyRecord() {
     if (this.hotkeyRecording || !this.cfg) return;
     this.hotkeyRecording = true;
-    this.hotkeyHint = "按下新组合键（修饰键+字母/数字/F键）；Esc 取消；Fn 无法录制请手填";
-    // C52b: 所有拒绝路径给出可见提示(之前静默 return=用户视角"动不了")
+    this.hotkeyHint = "";
     const reject = (msg: string) => { this.hotkeyHint = msg; };
     const handler = (e: KeyboardEvent) => {
       e.preventDefault();
@@ -241,23 +237,29 @@ function describeHotkey(h: HotkeyConfig): string {
         return;
       }
       if (e.key === "Fn" || e.code === "Fn") {
-        reject("Fn 键系统层不产生 keydown，无法录制——请在下方额外快捷键手填 fn");
+        reject("Fn 键系统层不产生 keydown，无法录制");
         return;
       }
       const key = codeToKey(e.code);
       if (!key) {
-        reject(`无法识别按键 ${e.code}——请用字母/数字/F 键+修饰键`);
+        reject(`无法识别按键 ${e.code}`);
         return;
       }
       if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !/^[fF]\d+$/.test(e.code)) {
-        reject("必须带修饰键（Ctrl/Opt/Cmd/Shift），纯字母会被全局占用");
+        reject("必须带修饰键（Ctrl/Opt/Cmd/Shift）");
         return;
       }
-      this.cfg!.hotkey = { key, ctrl: e.ctrlKey, alt: e.altKey, cmd: e.metaKey, shift: e.shiftKey };
+      const hk = { key, ctrl: e.ctrlKey, alt: e.altKey, cmd: e.metaKey, shift: e.shiftKey };
+      if (!this.cfg.hotkeys?.length && this.cfg.hotkey) {
+        // 现有主热键转为数组首项, 新录制的追加
+        this.cfg.hotkeys = [this.cfg.hotkey, hk];
+      } else {
+        this.cfg.hotkeys = [...(this.cfg.hotkeys ?? []), hk];
+      }
       this.hotkeyRecording = false;
       this.hotkeyHint = "";
       window.removeEventListener("keydown", handler, true);
-      this.saveCfg().then(() => invoke("reapply_hotkey").catch((x) => (this.error = String(x))));
+      this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
     };
     window.addEventListener("keydown", handler, true);
   },
