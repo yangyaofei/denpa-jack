@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Voice 输入</title>
-    <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body class="settings-win" x-data="app()" x-init="init()">
     <div class="sidebar">
@@ -117,7 +116,6 @@
             <button class="hk-add" @click="startHotkeyRecord()" x-text="hotkeyRecording ? '按下新组合键… (Esc 取消)' : '+ 录制新组合'"></button>
             <div class="row-hint" x-show="hotkeyHint" x-text="hotkeyHint" style="color:#ff9f0a; padding:4px 2px 0"></div>
           </div>
-        </div>
         <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
         <div class="card">
           <div class="row-title">热词直传预览</div>

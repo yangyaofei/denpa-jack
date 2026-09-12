@@ -98,7 +98,7 @@ body {
 
 .btns { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 .btns.end { justify-content: flex-end; margin-top: 6px; }
-.mini { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: #fff; font-size: 12px; cursor: pointer; }
+.mini { white-space: nowrap; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border); background: #fff; font-size: 12px; cursor: pointer; }
 .mini:hover { background: #f5f5f7; }
 .mini.red { color: #c53030; border-color: #f3c9c9; }
 .mini.primary { background: var(--accent); color: #fff; border-color: var(--accent); }

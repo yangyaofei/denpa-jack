@@ -1,3 +1,4 @@
+import "./style.css";
 import Alpine from "alpinejs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

@@ -2,6 +2,12 @@ import { resolve } from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  server: {
+    watch: {
+      // cargo build 产物在项目树内, 触发 vite 无限 page reload(截图裸 HTML 畸形元凶)
+      ignored: ["**/src-tauri/target/**"],
+    },
+  },
   clearScreen: false,
   server: {
     port: 1420,
