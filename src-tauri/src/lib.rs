@@ -172,18 +172,22 @@ pub fn run() {
             });
             // C51 多热键: 全部注册, 任一触发
             let app_hk = app.handle().clone();
-            // 纯修饰组合(无字母键)走 flags 轮询
+            // C52 统一引擎: 纯修饰/fn 组合走 key_engine 触发(精确集合匹配), flags-tap 轮询已废弃
             {
                 let targets: Vec<String> = cfg
                     .all_hotkeys()
                     .iter()
                     .map(|h| h.shortcut_str())
-                    .filter(|s| crate::flags_hotkey::flags_of(s).is_some())
+                    .filter(|s| !s.is_empty())
                     .collect();
-                if !targets.is_empty() {
-                    flags_hotkey::spawn(targets, Box::new(send_ctrl));
-                }
+                let app_tap = app_hk.clone();
+                key_engine::spawn_tap().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                key_engine::set_trigger_targets(targets.clone(), Box::new(move |pressed| {
+                    send_ctrl(pressed);
+                    let _ = &app_tap;
+                }));
             }
+            // 带字母/F 键的组合仍走 global-shortcut 插件(可靠); 纯修饰/fn 解析失败由引擎兜住
             for hk in cfg.all_hotkeys() {
                 let sc: Shortcut = match hk.shortcut_str().parse() {
                     Ok(x) => x,

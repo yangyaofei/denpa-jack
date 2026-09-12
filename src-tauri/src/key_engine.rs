@@ -27,6 +27,63 @@ static PRESSED: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 /// Fn 是否按下(B51: keycode=63 事件驱动, 非 flags 位)
 static FN_DOWN: Mutex<bool> = Mutex::new(false);
 
+// ── 常规触发(Handy 同构: 精确集合匹配, 单引擎) ──
+/// 注册的触发目标(组合字符串, 如 "ctrl+cmd+alt"/"fn"/"ctrl+alt+f5")
+static TRIGGER_TARGETS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// 目标是否被按下(tap 回调置 true → lib 控制线程消费发 Pressed)
+static TARGET_HIT: AtomicBool = AtomicBool::new(false);
+/// 上轮命中的目标索引(全部抬起时发 Released; -1=无)
+static HIT_INDEX: Mutex<i32> = Mutex::new(-1);
+/// 触发回调(lib.rs setup 注入, 内部只发信号——C13 回调不阻塞)
+static TRIGGER_SEND: Mutex<Option<Box<dyn Fn(bool) + Send>>> = Mutex::new(None);
+
+/// 解析组合字符串 → 语义名集合(与 key_name 输出对齐)
+fn combo_parts(s: &str) -> Vec<String> {
+    s.split('+')
+        .map(|p| p.trim().to_ascii_lowercase())
+        .filter(|p| !p.is_empty())
+        .map(|p| match p.as_str() {
+            "option" => "alt".into(),
+            "super" | "meta" => "cmd".into(),
+            other => other.into(),
+        })
+        .collect()
+}
+
+/// 修饰键 keycode → 语义名(Handy keycode.rs:256 对齐; key_name 对修饰键无覆盖, 单独映射)
+fn modifier_name(kc: i64) -> Option<&'static str> {
+    Some(match kc {
+        0x37 => "cmd",   // kVK_Command
+        0x38 => "shift", // kVK_Shift
+        0x3A => "alt",   // kVK_Option
+        0x3B => "ctrl",  // kVK_Control
+        0x3C => "shift", // kVK_RightShift
+        0x3D => "alt",   // kVK_RightOption
+        0x3E => "ctrl",  // kVK_RightControl
+        _ => return None,
+    })
+}
+
+/// 精确集合匹配(Handy types/modifiers.rs:142 语义):
+/// event 的语义集合必须与目标完全一致——多余修饰位/缺失位都=不匹配。
+fn matches_target(event_parts: &[String], target_parts: &[String]) -> bool {
+    if event_parts.len() != target_parts.len() {
+        return false;
+    }
+    target_parts.iter().all(|t| event_parts.contains(t))
+}
+
+/// 对注册目标做一次完整匹配; 命中返回索引
+fn hit_index(event_parts: &[String]) -> Option<usize> {
+    TRIGGER_TARGETS
+        .lock()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .find(|(_, t)| matches_target(event_parts, &combo_parts(t)))
+        .map(|(i, _)| i)
+}
+
 /// macOS Fn 专用键码(kVK_Function/kVK_ANSI_Fn=63); flagsChanged 事件携带它
 const KEYCODE_FN: i64 = 63;
 
@@ -50,6 +107,29 @@ extern "C" {
     fn CFRunLoopRun();
     fn CGEventGetIntegerValueField(ev: *mut std::ffi::c_void, field: u32) -> i64;
     fn CGEventTapEnable(tap: *mut std::ffi::c_void, on: bool);
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFStringCreateWithCString(alloc: *mut std::ffi::c_void, c_str: *const i8, enc: u32) -> *mut std::ffi::c_void;
+}
+
+/// kCFRunLoopDefaultMode 的字符串值(CFStringCreateWithCString 现造 CFStringRef 传入).
+/// 坑史(C53): ①传 Rust 字节串裸指针→CF 当 CFStringRef 解引用→CFHash EXC_BREAKPOINT(页面点+即死)
+/// ②extern static kCFRunLoopDefaultMode: c_void→c_void 是零大小类型, extern static ZST 的引用
+///   地址≠符号地址(垃圾)→CFRunLoopAddSource SIGBUS(实测 probe exit=138)
+/// ③extern static 声明为指针类型→仍然 SIGBUS(静态符号引用在本环境不可靠)
+/// ④CFStringCreateWithCString 运行时现造→冒烟 PASS(唯一可靠路径)
+const K_CFSTRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+fn default_mode_cfstring() -> *mut std::ffi::c_void {
+    unsafe {
+        CFStringCreateWithCString(
+            std::ptr::null_mut(),
+            b"com.apple.runloop.defaultMode\0".as_ptr() as *const i8,
+            K_CFSTRING_ENCODING_UTF8,
+        )
+    }
 }
 
 /// kCGEventKeyDown(10) | kCGEventKeyUp(11) | kCGEventFlagsChanged(12)
@@ -109,23 +189,31 @@ unsafe extern "C" fn tap_callback(
     event: *mut std::ffi::c_void,
     _user_info: *mut std::ffi::c_void,
 ) -> *mut std::ffi::c_void {
-    if !CAPTURE_ON.load(Ordering::SeqCst) {
-        return std::ptr::null_mut();
-    }
     let keycode = CGEventGetIntegerValueField(event, FIELD_KEYCODE);
+    let mut state_changed = false;
     match event_type {
         10 => {
             // keyDown: 入集合(去重——系统 auto-repeat 不重复计)
             let mut pressed = PRESSED.lock().unwrap();
             if !pressed.contains(&keycode) {
                 pressed.push(keycode);
+                state_changed = true;
             }
         }
         11 => {
             // keyUp: 出集合(含 Fn 抬起)
-            PRESSED.lock().unwrap().retain(|&x| x != keycode);
+            let mut pressed = PRESSED.lock().unwrap();
+            let n = pressed.len();
+            pressed.retain(|&x| x != keycode);
+            if pressed.len() != n {
+                state_changed = true;
+            }
             if keycode == KEYCODE_FN {
-                *FN_DOWN.lock().unwrap() = false;
+                let mut fn_down = FN_DOWN.lock().unwrap();
+                if *fn_down {
+                    *fn_down = false;
+                    state_changed = true;
+                }
             }
         }
         12 => {
@@ -135,17 +223,116 @@ unsafe extern "C" fn tap_callback(
             if keycode == KEYCODE_FN {
                 let flags = CGEventGetIntegerValueField(event, FIELD_FLAGS) as u64;
                 let fn_down = (flags & 0x0000_0008) != 0 || (flags & 0x0080_0000) != 0;
-                *FN_DOWN.lock().unwrap() = fn_down;
-                if fn_down && !PRESSED.lock().unwrap().contains(&KEYCODE_FN) {
-                    PRESSED.lock().unwrap().push(KEYCODE_FN);
+                let mut fn_lock = FN_DOWN.lock().unwrap();
+                if *fn_lock != fn_down {
+                    *fn_lock = fn_down;
+                    state_changed = true;
+                }
+                drop(fn_lock);
+                let mut pressed = PRESSED.lock().unwrap();
+                if fn_down && !pressed.contains(&KEYCODE_FN) {
+                    pressed.push(KEYCODE_FN);
+                    state_changed = true;
                 } else if !fn_down {
-                    PRESSED.lock().unwrap().retain(|&x| x != KEYCODE_FN);
+                    let n = pressed.len();
+                    pressed.retain(|&x| x != KEYCODE_FN);
+                    if pressed.len() != n {
+                        state_changed = true;
+                    }
+                }
+            } else {
+                // 修饰键 down/up(FlagsChanged): 也入/出 PRESSED——纯修饰组合靠它成立
+                let mut pressed = PRESSED.lock().unwrap();
+                let flags = CGEventGetIntegerValueField(event, FIELD_FLAGS) as u64;
+                // 修饰键按下判定: 事件 flags 含该键自身的位(Handy reconcile 思路的轻量版)
+                let is_down = match modifier_name(keycode) {
+                    Some("cmd") => flags & 0x0010_0000 != 0,
+                    Some("shift") => flags & 0x0002_0000 != 0,
+                    Some("alt") => flags & 0x0008_0000 != 0,
+                    Some("ctrl") => flags & 0x0004_0000 != 0,
+                    _ => false,
+                };
+                if is_down && !pressed.contains(&keycode) {
+                    pressed.push(keycode);
+                    state_changed = true;
+                } else if !is_down {
+                    let n = pressed.len();
+                    pressed.retain(|&x| x != keycode);
+                    if pressed.len() != n {
+                        state_changed = true;
+                    }
                 }
             }
         }
         _ => {}
     }
+
+    // 常规触发匹配(录制模式关闭时; 状态有变化才评估)
+    if state_changed && !CAPTURE_ON.load(Ordering::SeqCst) {
+        evaluate_trigger();
+    }
     std::ptr::null_mut()
+}
+
+/// 触发评估: 当前按下集合 → 语义名集合 → 精确匹配注册目标。
+/// 命中→TARGET_HIT=true+回调(true); 从命中离开→回调(false)。PAUSED 时跳过。
+fn evaluate_trigger() {
+    if is_paused() {
+        return;
+    }
+    let pressed = PRESSED.lock().unwrap().clone();
+    let fn_down = *FN_DOWN.lock().unwrap();
+    let mut parts: Vec<String> = pressed
+        .iter()
+        .filter_map(|&kc| {
+            if kc == KEYCODE_FN {
+                None
+            } else {
+                modifier_name(kc).map(|s| s.to_string()).or_else(|| Some(key_name(kc)))
+            }
+        })
+        .collect();
+    if fn_down {
+        parts.push("fn".into());
+    }
+    parts.sort();
+    parts.dedup();
+
+    let mut hit = HIT_INDEX.lock().unwrap();
+    match hit_index(&parts) {
+        Some(idx) => {
+            if *hit != idx as i32 {
+                *hit = idx as i32;
+                TARGET_HIT.store(true, Ordering::SeqCst);
+                crate::log::elog(&format!("[key-engine] trigger Pressed: {}", parts.join("+")));
+                if let Some(send) = TRIGGER_SEND.lock().unwrap().as_ref() {
+                    send(true);
+                }
+            }
+        }
+        None => {
+            if *hit >= 0 {
+                crate::log::elog("[key-engine] trigger Released");
+                *hit = -1;
+                if let Some(send) = TRIGGER_SEND.lock().unwrap().as_ref() {
+                    send(false);
+                }
+            }
+        }
+    }
+}
+
+/// 注册常规触发目标+回调(lib.rs setup 调用一次; reapply 时更新目标)
+pub fn set_trigger_targets(targets: Vec<String>, send: Box<dyn Fn(bool) + Send>) {
+    *TRIGGER_TARGETS.lock().unwrap() = targets.clone();
+    *TRIGGER_SEND.lock().unwrap() = Some(send);
+    crate::log::elog(&format!("[key-engine] 触发目标 {} 个: {}", targets.len(), targets.join(" | ")));
+}
+
+/// 更新目标(保留回调; reapply_hotkey 用)
+pub fn update_trigger_targets(targets: Vec<String>) {
+    *TRIGGER_TARGETS.lock().unwrap() = targets;
+    crate::log::elog("[key-engine] 触发目标已更新");
 }
 
 /// 启动 tap 线程(应用启动时调用一次, 常驻 RunLoop)
@@ -154,6 +341,7 @@ pub fn spawn_tap() -> Result<(), String> {
         return Ok(());
     }
     std::thread::spawn(|| unsafe {
+        crate::log::elog("[key-engine] tap 线程启动");
         // kCGSessionEventTap=1, kCGHeadInsertEventTap=0, kCGEventTapOptionListenOnly=1
         let tap = CGEventTapCreate(
             1,
@@ -168,8 +356,7 @@ pub fn spawn_tap() -> Result<(), String> {
             return;
         }
         let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
-        let mode = b"com.apple.runloop.defaultMode\0";
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, mode.as_ptr() as *mut _);
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, default_mode_cfstring());
         CGEventTapEnable(tap, true);
         TAP_ACTIVE.store(true, Ordering::SeqCst);
         crate::log::elog("[key-engine] CGEventTap 就绪");
@@ -262,5 +449,35 @@ mod tests {
         assert!(is_paused());
         resume_all();
         assert!(!is_paused());
+    }
+
+    #[test]
+    fn matches_target_exact_semantics() {
+        // Handy matches 语义: 多余修饰=不匹配, 顺序无关, 数量必须相等
+        let target = combo_parts("ctrl+cmd+alt");
+        assert!(matches_target(&combo_parts("alt+ctrl+cmd"), &target));
+        assert!(!matches_target(&combo_parts("ctrl+cmd"), &target)); // 少一个
+        assert!(!matches_target(&combo_parts("ctrl+cmd+alt+shift"), &target)); // 多一个
+        assert!(!matches_target(&combo_parts("ctrl+alt"), &target));
+        // fn 目标
+        let fn_t = combo_parts("fn");
+        assert!(matches_target(&combo_parts("fn"), &fn_t));
+        assert!(!matches_target(&combo_parts("fn+ctrl"), &fn_t));
+    }
+
+    #[test]
+    fn modifier_name_covers_all() {
+        assert_eq!(modifier_name(0x37), Some("cmd"));
+        assert_eq!(modifier_name(0x38), Some("shift"));
+        assert_eq!(modifier_name(0x3A), Some("alt"));
+        assert_eq!(modifier_name(0x3B), Some("ctrl"));
+        assert_eq!(modifier_name(0x3D), Some("alt"));
+        assert_eq!(modifier_name(0x3F), None); // Fn 走 FN_DOWN, 不是修饰映射
+    }
+
+    #[test]
+    fn combo_parts_normalizes_aliases() {
+        assert_eq!(combo_parts("option+meta+f5"), vec!["alt", "cmd", "f5"]);
+        assert_eq!(combo_parts(""), Vec::<String>::new());
     }
 }

@@ -150,21 +150,25 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
 /// 配置变更后重注册快捷键
 #[tauri::command]
 pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
-    // C51e: 纯修饰/Fn 组合同步更新到 flags 轮询线程
+    // C52: 纯修饰/Fn 组合同步更新到统一按键引擎(flags-tap 已废弃)
     {
         let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
         let targets: Vec<String> = cfg
             .all_hotkeys()
             .iter()
             .map(|h| h.shortcut_str())
-            .filter(|s| crate::flags_hotkey::flags_of(s).is_some())
+            .filter(|s| !s.is_empty())
             .collect();
-        crate::flags_hotkey::update_targets(targets);
+        crate::key_engine::update_trigger_targets(targets);
     }
 
     let cfg: Config = settings::get_config(app.clone())?;
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
+    // 主热键若为纯修饰/fn(插件无法解析)则跳过注册——引擎已兜住
+    if crate::flags_hotkey::flags_of(&cfg.hotkey.shortcut_str()).is_some() {
+        return Ok(());
+    }
     let s: Shortcut = cfg.hotkey.shortcut_str().parse().map_err(|e| format!("快捷键解析失败: {e}"))?;
     gs.register(s).map_err(|e| format!("注册失败: {e}"))?;
     Ok(())

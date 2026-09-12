@@ -30,6 +30,9 @@ pub fn log(app: &tauri::AppHandle, msg: &str) {
 pub fn elog(msg: &str) {
     eprintln!("[vm] {msg}");
     use std::io::Write;
+    // C53: 与 log() 共用 LOG_LOCK——否则多线程并发 append 撕行(实测 "[diag] ...[ts] setup done" 互相嵌入,
+    // grep 按"key-engine"检索时整行丢失, 造成"日志没打"的误判)
+    let _g = LOG_LOCK.lock().unwrap();
     let dir = std::path::PathBuf::from(
         std::env::var("HOME").unwrap_or_default(),
     )
