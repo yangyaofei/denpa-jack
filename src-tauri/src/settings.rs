@@ -88,7 +88,10 @@ impl HotkeyConfig {
         if self.alt { parts.push("alt".into()); }
         if self.shift { parts.push("shift".into()); }
         if self.cmd { parts.push("cmd".into()); }
-        parts.push(normalize_key(if self.key.is_empty() { "f5" } else { &self.key }));
+        // C51b 纯修饰组合: key 为空时不回填 F5(否则 flags-tap 无法识别+误注册 F5)
+        if !self.key.trim().is_empty() {
+            parts.push(normalize_key(&self.key));
+        }
         parts.join("+")
     }
 }

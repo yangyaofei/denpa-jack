@@ -32,10 +32,16 @@ pub fn spawn(targets: Vec<String>, send: Box<dyn Fn(bool) + Send>) {
     crate::log::elog(&format!("[flags-tap] 启动, 组合数={}", masks.len()));
     std::thread::spawn(move || {
         let mut active = false;
+        let mut last_logged = 0u64;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(40));
             let flags = current_modifier_flags();
-            let hit = masks.iter().any(|m| *m == flags);
+            if flags != last_logged {
+                crate::log::elog(&format!("[flags-tap] flags={flags:#x}"));
+                last_logged = flags;
+            }
+            // 按位与匹配: 实测 flags 携带杂位(0x29 等, alpha/device 状态), 精确相等永不命中
+            let hit = masks.iter().any(|m| (flags & m) == *m);
             if hit && !active {
                 active = true;
                 crate::log::elog("[flags-tap] Pressed");
@@ -49,19 +55,14 @@ pub fn spawn(targets: Vec<String>, send: Box<dyn Fn(bool) + Send>) {
     });
 }
 
-/// 读当前修饰键 flags(合成一个 flagsChanged 事件取其 flags; 无辅助功能权限也可读)
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    /// 当前硬件修饰键状态(合成事件 flags 恒 0——此前用 CGEvent::new 是错的)
+    fn CGEventSourceFlagsState(state_id: u32) -> u64;
+}
+
+/// 读当前修饰键 flags(CombinedSessionState=2)
 fn current_modifier_flags() -> u64 {
-    use core_graphics::event::CGEvent;
-    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-    let src = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
-    match src {
-        Ok(src) => match CGEvent::new(src) {
-            Ok(e) => {
-                let f = e.get_flags();
-                f.bits()
-            }
-            Err(_) => 0,
-        },
-        Err(_) => 0,
-    }
+    // kCGEventSourceStateCombinedSessionState=0(含所有进程; 2=仅本 Session——外部进程修饰读不到)
+    unsafe { CGEventSourceFlagsState(0) }
 }
