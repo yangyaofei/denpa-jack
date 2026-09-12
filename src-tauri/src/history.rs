@@ -65,6 +65,26 @@ pub fn append(app: &tauri::AppHandle, rec: &HistoryRecord) {
 /// 追加一条记录到指定目录的 history.jsonl(可测核心)
 pub fn append_record_to(dir: &std::path::Path, rec: &HistoryRecord) {
     let _ = fs::create_dir_all(dir);
+    // B45: ts 是前端 x-for 的 :key——同秒两条会 key 冲突导致列表渲染塌缩。
+    // 撞秒时回读最后一行, 同 ts 则 +1s 偏移。
+    let file = dir.join("history.jsonl");
+    if let Ok(raw) = fs::read_to_string(&file) {
+        if let Some(last) = raw.lines().rev().find(|l| !l.trim().is_empty()) {
+            if let Ok(prev) = serde_json::from_str::<HistoryRecord>(last) {
+                if prev.ts == rec.ts {
+                    let mut r2 = rec.clone();
+                    r2.ts = bump_second(&rec.ts);
+                    if let Ok(mut line) = serde_json::to_string(&r2) {
+                        line.push('\n');
+                        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&file) {
+                            let _ = f.write_all(line.as_bytes());
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+    }
     if let Ok(mut line) = serde_json::to_string(rec) {
         line.push('\n');
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("history.jsonl")) {
@@ -256,4 +276,16 @@ mod fs_tests {
         let left = fs::read_dir(&dir).unwrap().count();
         assert_eq!(left, 2, "应只留最新 2 个");
     }
+}
+
+/// "2026-09-12 21:42:09" → "2026-09-12 21:42:10"(仅秒+1, 测试友好)
+pub fn bump_second(ts: &str) -> String {
+    let mut t = ts.to_string();
+    if let Some(sec_pos) = t.rfind(':') {
+        if let Ok(mut n) = t[sec_pos + 1..].parse::<u32>() {
+            n = (n + 1) % 60;
+            t.replace_range(sec_pos + 1.., &format!("{n:02}"));
+        }
+    }
+    t
 }
