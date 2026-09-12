@@ -1,4 +1,10 @@
 import "./style.css";
+import pageHistory from "./pages/history.html?raw";
+import pageGeneral from "./pages/general.html?raw";
+import pageDict from "./pages/dict.html?raw";
+import pageLlm from "./pages/llm.html?raw";
+import pageAbout from "./pages/about.html?raw";
+
 import Alpine from "alpinejs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -223,46 +229,87 @@ function describeHotkey(h: HotkeyConfig): string {
     }
     this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
   },
+  // B48: 照抄 Handy GlobalShortcutInput——keydown 累积所有键(含修饰), keyup 全抬即提交
+  _hkPressed: [] as string[],
+  _hkRecorded: [] as string[],
+  _hkTimer: 0 as any,
   startHotkeyRecord() {
     if (this.hotkeyRecording || !this.cfg) return;
     this.hotkeyRecording = true;
     this.hotkeyHint = "";
-    const reject = (msg: string) => { this.hotkeyHint = msg; };
-    const handler = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.code === "Escape") {
-        this.hotkeyRecording = false;
-        this.hotkeyHint = "";
-        window.removeEventListener("keydown", handler, true);
-        return;
-      }
-      if (e.key === "Fn" || e.code === "Fn") {
-        reject("Fn 键系统层不产生 keydown，无法录制");
-        return;
-      }
-      const key = codeToKey(e.code);
-      if (!key) {
-        reject(`无法识别按键 ${e.code}`);
-        return;
-      }
-      if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !/^[fF]\d+$/.test(e.code)) {
-        reject("必须带修饰键（Ctrl/Opt/Cmd/Shift）");
-        return;
-      }
-      const hk = { key, ctrl: e.ctrlKey, alt: e.altKey, cmd: e.metaKey, shift: e.shiftKey };
-      if (!this.cfg.hotkeys?.length && this.cfg.hotkey) {
-        // 现有主热键转为数组首项, 新录制的追加
-        this.cfg.hotkeys = [this.cfg.hotkey, hk];
-      } else {
-        this.cfg.hotkeys = [...(this.cfg.hotkeys ?? []), hk];
-      }
+    this._hkPressed = [];
+    this._hkRecorded = [];
+    const mods = ["ctrl", "control", "shift", "alt", "option", "meta", "command", "cmd", "super"];
+    const keyName = (e: KeyboardEvent): string => {
+      const c = e.code;
+      if (/^F\d+$/.test(c)) return c.toLowerCase();
+      if (/^Key[A-Z]$/.test(c)) return c.replace("Key", "").toLowerCase();
+      if (/^Digit\d$/.test(c)) return c.replace("Digit", "");
+      const mm: Record<string, string> = {
+        ShiftLeft: "shift", ShiftRight: "shift", ControlLeft: "ctrl", ControlRight: "ctrl",
+        AltLeft: "option", AltRight: "option", MetaLeft: "cmd", MetaRight: "cmd",
+        Tab: "tab", Enter: "enter", Space: "space", Backspace: "backspace", Escape: "esc",
+        ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+        Semicolon: ";", Equal: "=", Comma: ",", Minus: "-", Period: ".", Slash: "/",
+        Backquote: "`", BracketLeft: "[", Backslash: "\\", BracketRight: "]", Quote: "'",
+      };
+      if (mm[c]) return mm[c];
+      if (c.startsWith("Numpad")) return c.toLowerCase();
+      return c.toLowerCase();
+    };
+    const commit = async () => {
+      const keys = [...this._hkRecorded].sort((a, b) => {
+        const am = mods.includes(a), bm = mods.includes(b);
+        return am === bm ? 0 : am ? -1 : 1;
+      });
+      const parts = new Set(keys);
+      const main = keys.find((k) => !mods.includes(k));
+      const key = main ? ({ enter: "Enter", space: "Space", tab: "Tab", backspace: "Backspace", esc: "Escape", up: "ArrowUp", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight" } as any)[main] ?? (/^[a-z]$/.test(main) ? "Key" + main.toUpperCase() : /^\d$/.test(main) ? "Digit" + main : main === "option" ? "" : main) : "";
+      if (!key && !keys.length) return;
+      const hk = { key, ctrl: parts.has("ctrl") || parts.has("control"), alt: parts.has("alt") || parts.has("option"), cmd: parts.has("cmd") || parts.has("command") || parts.has("meta") || parts.has("super"), shift: parts.has("shift") };
+      if (!hk.key && !hk.ctrl && !hk.alt && !hk.cmd && !hk.shift) return;
+      if (this.cfg!.hotkeys?.length) this.cfg!.hotkeys.push(hk);
+      else this.cfg!.hotkeys = [hk];
       this.hotkeyRecording = false;
       this.hotkeyHint = "";
-      window.removeEventListener("keydown", handler, true);
+      window.removeEventListener("keydown", kd, true);
+      window.removeEventListener("keyup", ku, true);
+      if (this._hkTimer) clearTimeout(this._hkTimer);
       this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
     };
-    window.addEventListener("keydown", handler, true);
+    const kd = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      e.preventDefault(); e.stopPropagation();
+      if (e.code === "Escape") {
+        this.hotkeyRecording = false; this.hotkeyHint = "";
+        if (this._hkTimer) clearTimeout(this._hkTimer);
+        window.removeEventListener("keydown", kd, true);
+        window.removeEventListener("keyup", ku, true);
+        return;
+      }
+      const k = keyName(e);
+      if (!this._hkPressed.includes(k)) this._hkPressed.push(k);
+      if (!this._hkRecorded.includes(k)) this._hkRecorded.push(k);
+      this.hotkeyHint = "已按下: " + [...this._hkPressed].join(" + ");
+    };
+    const ku = (e: KeyboardEvent) => {
+      e.preventDefault();
+      const k = keyName(e);
+      this._hkPressed = this._hkPressed.filter((x) => x !== k);
+      if (this._hkPressed.length === 0 && this._hkRecorded.length > 0) {
+        commit();
+      }
+    };
+    window.addEventListener("keydown", kd, true);
+    window.addEventListener("keyup", ku, true);
+    if (this._hkTimer) clearTimeout(this._hkTimer);
+    this._hkTimer = setTimeout(() => {
+      if (this.hotkeyRecording) {
+        this.hotkeyRecording = false; this.hotkeyHint = "";
+        window.removeEventListener("keydown", kd, true);
+        window.removeEventListener("keyup", ku, true);
+      }
+    }, 10000);
   },
 
   // ── 麦克风管理(存储键=硬件 UID, 显示用 name) ──
@@ -670,6 +717,12 @@ function describeHotkey(h: HotkeyConfig): string {
   },
 });
 
+// 页面片段注入(B47 拆分: index 骨架 + src/pages/*.html)
+const pageHtml: Record<string, string> = { history: pageHistory, general: pageGeneral, dict: pageDict, llm: pageLlm, about: pageAbout };
+for (const [name, html] of Object.entries(pageHtml)) {
+  const slot = document.querySelector(`[data-page="${name}"]`);
+  if (slot) { slot.innerHTML = html; slot.removeAttribute("data-page"); }
+}
 Alpine.start();
 
 
