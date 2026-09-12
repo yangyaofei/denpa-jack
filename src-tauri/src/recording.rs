@@ -228,9 +228,7 @@ pub fn recording_abort() -> Result<(), String> {
 }
 
 pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> Result<(), String> {
-    if crate::key_engine::is_paused() {
-        return Err("录制模式中, 快捷键触发已暂停".into());
-    }
+    // C54: 录制期间绑定已真注销(suspend), 触发不可达——此守卫防御性保留
     let mut cfg: Config = settings::get_config(app.clone())?;
     let (profile, key) = resolve_asr(&cfg)?;
     {

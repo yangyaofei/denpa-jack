@@ -1,7 +1,6 @@
 pub mod audio;
 mod audio_feedback;
 mod autotest;
-mod flags_hotkey;
 mod commands;
 mod deliver;
 pub mod dict;
@@ -10,7 +9,6 @@ mod engines;
 mod history;
 pub mod llm;
 mod log;
-mod key_engine;
 mod openai_realtime;
 mod overlay;
 mod paste_tx;
@@ -172,36 +170,9 @@ pub fn run() {
             });
             // C51 多热键: 全部注册, 任一触发
             let app_hk = app.handle().clone();
-            // C52 统一引擎: 纯修饰/fn 组合走 key_engine 触发(精确集合匹配), flags-tap 轮询已废弃
-            {
-                let targets: Vec<String> = cfg
-                    .all_hotkeys()
-                    .iter()
-                    .map(|h| h.shortcut_str())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                let app_tap = app_hk.clone();
-                key_engine::spawn_tap().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                key_engine::set_trigger_targets(targets.clone(), Box::new(move |pressed| {
-                    send_ctrl(pressed);
-                    let _ = &app_tap;
-                }));
-            }
-            // 带字母/F 键的组合仍走 global-shortcut 插件(可靠); 纯修饰/fn 解析失败由引擎兜住
-            for hk in cfg.all_hotkeys() {
-                let sc: Shortcut = match hk.shortcut_str().parse() {
-                    Ok(x) => x,
-                    Err(_) => continue,
-                };
-                let app_each = app_hk.clone();
-                match app.global_shortcut().on_shortcut(sc, move |_app, _sc, event| {
-                    log::log(&app_each, &format!("hotkey event: {:?}", event.state));
-                    send_ctrl(event.state == ShortcutState::Pressed);
-                }) {
-                    Ok(()) => log::log(&app_hk, &format!("快捷键注册成功: {}", hk.shortcut_str())),
-                    Err(e) => log::log(&app_hk, &format!("快捷键注册失败 {}: {e}", hk.shortcut_str())),
-                }
-            }
+            // C54 统一引擎(Handy 同构): handy-keys crate 单通道注册+触发, 无双注册
+            shortcut::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             log::log(app.handle(), "setup done");
 
             autotest::maybe_spawn(app.handle());
@@ -221,7 +192,8 @@ pub fn run() {
             recording::recording_start, recording::recording_stop,
             recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::dev_nav,
             commands::open_config_file, commands::open_data_dir,
-            commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey, commands::begin_key_capture, commands::confirm_key_capture, commands::cancel_key_capture,
+            commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
+            commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,
             commands::check_permissions,
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
             settings::get_config, settings::save_config,

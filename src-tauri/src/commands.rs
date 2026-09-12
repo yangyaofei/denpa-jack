@@ -147,31 +147,31 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
     Ok(())
 }
 
-/// 配置变更后重注册快捷键
+/// C54: 绑定变更后重注册(挂起态除外——录制中由 resume_all 统一恢复)
 #[tauri::command]
 pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
-    // C52: 纯修饰/Fn 组合同步更新到统一按键引擎(flags-tap 已废弃)
-    {
-        let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
-        let targets: Vec<String> = cfg
-            .all_hotkeys()
-            .iter()
-            .map(|h| h.shortcut_str())
-            .filter(|s| !s.is_empty())
-            .collect();
-        crate::key_engine::update_trigger_targets(targets);
+    use tauri::Manager;
+    let state = app
+        .try_state::<crate::shortcut::ShortcutState>()
+        .ok_or("快捷键引擎未初始化")?;
+    state.inner().unregister_all()?;
+    let cfg = settings::get_config(app.clone())?;
+    for hk in cfg.transcribe_bindings() {
+        state.inner().register(&hk)?;
     }
-
-    let cfg: Config = settings::get_config(app.clone())?;
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-    // 主热键若为纯修饰/fn(插件无法解析)则跳过注册——引擎已兜住
-    if crate::flags_hotkey::flags_of(&cfg.hotkey.shortcut_str()).is_some() {
-        return Ok(());
-    }
-    let s: Shortcut = cfg.hotkey.shortcut_str().parse().map_err(|e| format!("快捷键解析失败: {e}"))?;
-    gs.register(s).map_err(|e| format!("注册失败: {e}"))?;
     Ok(())
+}
+
+/// 录制期间挂起全部绑定(真注销)
+#[tauri::command]
+pub fn suspend_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
+    crate::shortcut::suspend_all(&app)
+}
+
+/// 录制结束恢复全部绑定(幂等)
+#[tauri::command]
+pub fn resume_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
+    crate::shortcut::resume_all(&app)
 }
 
 #[tauri::command]
@@ -410,74 +410,44 @@ pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// B50 组合层: begin = pause_all + capture(阻塞至 final, 变化经 Channel 推前台)
+/// C54 前端录制模式(Handy 同构): 前端 window keydown/keyup 收集组合,
+/// 后端只提供 suspend/resume(真注销/重注册)与 confirm 提交。无 capture 线程、无 Channel、无门闩。
 #[tauri::command]
-pub async fn begin_key_capture(on_event: tauri::ipc::Channel<serde_json::Value>) -> Result<serde_json::Value, String> {
-    crate::key_engine::spawn_tap()?;
-    crate::key_engine::pause_all();
-    let ch = on_event.clone();
-    let final_combo = tokio::task::spawn_blocking(move || {
-        crate::key_engine::capture(&|combo: String| {
-            let _ = ch.send(serde_json::json!({"type": "change", "combo": combo}));
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    let _ = on_event.send(serde_json::json!({"type": "final", "combo": final_combo}));
-    Ok(serde_json::json!({"final": final_combo}))
+pub fn add_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
+    let combo = combo.trim().to_ascii_lowercase();
+    if combo.is_empty() {
+        return Err("组合不能为空".into());
+    }
+    // 验证: handy-keys Hotkey 必须可解析(支持纯修饰/fn/普通组合)
+    combo
+        .parse::<handy_keys::Hotkey>()
+        .map_err(|e| format!("组合无法解析({combo}): {e}"))?;
+    let mut cfg = crate::settings::get_config(app.clone())?;
+    let set = cfg
+        .bindings
+        .entry("transcribe".into())
+        .or_insert(crate::settings::BindingSet { current: vec![] });
+    if !set.current.contains(&combo) {
+        set.current.push(combo);
+    }
+    crate::settings::save_config(app.clone(), cfg)?;
+    crate::shortcut::resume_all(&app)?;
+    Ok(())
 }
 
+/// 删除一个绑定组合; 至少保留一个(Handy: every shortcut should have a value)
 #[tauri::command]
-pub fn confirm_key_capture(app: tauri::AppHandle, combo: String) -> Result<(), String> {
-    let mut cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
-    let mut hk = crate::settings::HotkeyConfig::default();
-    for part in combo.split('+') {
-        match part {
-            "ctrl" => hk.ctrl = true,
-            "option" => hk.alt = true,
-            "cmd" => hk.cmd = true,
-            "shift" => hk.shift = true,
-            "fn" => hk.key = "fn".into(),
-            k => hk.key = map_key_back(k),
+pub fn remove_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
+    let mut cfg = crate::settings::get_config(app.clone())?;
+    if let Some(set) = cfg.bindings.get_mut("transcribe") {
+        set.current.retain(|c| c != &combo);
+        if set.current.is_empty() {
+            return Err("至少保留一个快捷键".into());
         }
     }
-    if hk.key.starts_with("key") {
-        return Err(format!("无法识别的按键 {hk:?}"));
-    }
-    if cfg.hotkeys.is_empty() {
-        cfg.hotkeys.push(cfg.hotkey.clone());
-    }
-    cfg.hotkeys.push(hk);
     crate::settings::save_config(app.clone(), cfg)?;
-    crate::key_engine::resume_all();
     reapply_hotkey(app)?;
     Ok(())
-}
-
-#[tauri::command]
-pub fn cancel_key_capture(app: tauri::AppHandle) -> Result<(), String> {
-    crate::key_engine::resume_all();
-    reapply_hotkey(app.clone())?;
-    Ok(())
-}
-
-fn map_key_back(k: &str) -> String {
-    match k {
-        "enter" => "Enter".into(), "space" => "Space".into(), "tab" => "Tab".into(),
-        "backspace" => "Backspace".into(), "esc" => "Escape".into(), "left" => "ArrowLeft".into(),
-        "right" => "ArrowRight".into(), "down" => "ArrowDown".into(), "up" => "ArrowUp".into(),
-        _ => {
-            if k.len() == 1 && k.as_bytes()[0].is_ascii_lowercase() {
-                format!("Key{}", k.to_uppercase())
-            } else if k.len() == 1 && k.as_bytes()[0].is_ascii_digit() {
-                format!("Digit{k}")
-            } else if k.starts_with('f') && k.len() > 1 && k[1..].chars().all(|c| c.is_ascii_digit()) {
-                k.to_uppercase()
-            } else {
-                k.to_string()
-            }
-        }
-    }
 }
 
 #[tauri::command]

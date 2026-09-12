@@ -60,6 +60,29 @@ function codeToKey(code: string): string | null {
   return map[code] ?? null;
 }
 
+/// C54: 组合字符串美化("ctrl+cmd+space" → "⌃⌘ Space")
+function describeCombo(s: string): string {
+  const sym: Record<string, string> = { ctrl: "⌃", option: "⌥", alt: "⌥", shift: "⇧", cmd: "⌘", fn: "Fn" };
+  const keyNames: Record<string, string> = {
+    space: "Space", enter: "Return", backspace: "Delete", tab: "Tab", esc: "Esc",
+    left: "←", right: "→", up: "↑", down: "↓", "`": "`", "-": "-", "=": "=",
+    "[": "[", "]": "]", "\\": "\\", ";": ";", "'": "'", ",": ",", ".": ".", "/": "/",
+  };
+  const parts = s.split("+").map((p) => {
+    const lower = p.toLowerCase();
+    if (sym[lower]) return sym[lower];
+    if (keyNames[lower]) return keyNames[lower];
+    if (/^f\d{1,2}$/.test(lower)) return lower.toUpperCase();
+    return p.length <= 1 ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1);
+  });
+  // 修饰符号直接连排, 与主键之间留空格
+  const modSyms = parts.filter((p) => /^[⌃⌥⇧⌘]$/.test(p) || p === "Fn");
+  const rest = parts.filter((p) => !modSyms.includes(p) || p === "Fn");
+  const main = rest.filter((p) => p !== "Fn");
+  if (!main.length) return modSyms.join(" ");
+  return modSyms.join("") + " " + main.join(" ");
+}
+
 function describeHotkey(h: HotkeyConfig): string {
   const parts: string[] = [];
   if (h.ctrl) parts.push("Ctrl");
@@ -214,55 +237,124 @@ function describeHotkey(h: HotkeyConfig): string {
   },
   weightStars(b: number): string { return this.stars(b); },
   describeHotkey,
-  hotkeyLabel() { return this.cfg?.hotkey ? describeHotkey(this.cfg.hotkey) : ""; },
+  describeCombo,
+  hotkeyLabel() {
+    // C54: 顶部文案取 bindings 列表第一个(迁移后唯一真相)
+    const first = this.cfg?.bindings?.["transcribe"]?.current?.[0];
+    return first ? describeCombo(first) : "";
+  },
 
-  // 快捷键列表: hotkeys 为空时回落[hotkey](Rust all_hotkeys 同语义)
-  hkList(): HotkeyConfig[] {
-    const hs = this.cfg?.hotkeys ?? [];
-    return hs.length ? hs : (this.cfg?.hotkey ? [this.cfg.hotkey] : []);
+  // C54: 绑定列表(bindings.transcribe.current 字符串数组, 唯一真相)
+  hkList(): string[] {
+    return this.cfg?.bindings?.["transcribe"]?.current ?? [];
   },
-  removeHotkey(idx: number) {
-    if (!this.cfg) return;
-    const list = this.hkList();
-    if (list.length <= 1) { this.error = "至少保留一个快捷键"; return; }
-    if (this.cfg.hotkeys.length) {
-      this.cfg.hotkeys.splice(idx, 1);
-    } else {
-      // 删的是回落显示的主热键 → 转为显式 hotkeys 数组(删掉后为空再回落)
-      this.cfg.hotkeys = list.filter((_, i) => i !== idx);
-    }
-    this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
+  async removeHotkey(combo: string) {
+    try {
+      await invoke("remove_binding", { combo });
+      await this.loadCfg();
+    } catch (x: any) { this.error = String(x); }
   },
-  // B48: 照抄 Handy GlobalShortcutInput——keydown 累积所有键(含修饰), keyup 全抬即提交
+  // C54 前端录制(Handy GlobalShortcutInput 同构): suspend 真注销 → window keydown/keyup
+  // 收集组合(修饰排序在前) → 全抬即 add_binding 提交 → resume 恢复。无后端 capture 线程。
   _hkPressed: [] as string[],
   _hkRecorded: [] as string[],
-  _hkTimer: 0 as any,
-  _capTimer: 0 as any,
-  startHotkeyRecord() {
+  _hkCleanup: null as (() => void) | null,
+  async startHotkeyRecord() {
     if (this.hkCapturing || !this.cfg) return;
+    try { await invoke("suspend_all_bindings"); } catch (x: any) { this.error = String(x); return; }
     this.hkCapturing = true;
     this.hkCurrent = "";
     this.hkFinal = "";
     this.hotkeyHint = "";
-    const ch = new Channel<{type: string; combo: string}>();
-    ch.onmessage = (msg) => {
-      if (msg.type === "change") { this.hkCurrent = msg.combo; this.hotkeyHint = "当前: " + msg.combo; }
-      else if (msg.type === "final") { this.hkFinal = msg.combo; this.hotkeyHint = ""; }
+    const MODS = ["control", "ctrl", "shift", "alt", "option", "meta", "command", "cmd"];
+    const normKey = (e: KeyboardEvent): string => {
+      if (e.key === "Control") return "ctrl";
+      if (e.key === "Shift") return "shift";
+      if (e.key === "Alt" || e.key === "Option") return "option";
+      if (e.key === "Meta" || e.key === "Command") return "cmd";
+      if (e.code?.startsWith("Key")) return e.code.slice(3).toLowerCase();
+      if (e.code?.startsWith("Digit")) return e.code.slice(5);
+      if (e.code?.startsWith("Numpad")) return e.code.toLowerCase();
+      const map: Record<string, string> = {
+        " ": "space", Spacebar: "space", Enter: "enter", Tab: "tab", Backspace: "backspace",
+        ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+        Escape: "esc", "`": "`", "-": "-", "=": "=", "[": "[", "]": "]", "\\": "\\", ";": ";",
+        "'": "'", ",": ",", ".": ".", "/": "/",
+      };
+      if (map[e.key] !== undefined) return map[e.key];
+      if (/^F\d{1,2}$/.test(e.key)) return e.key.toLowerCase();
+      return e.key.toLowerCase();
     };
-    invoke("begin_key_capture", { onEvent: ch })
-      .catch((x: any) => { this.error = String(x); this.hkCapturing = false; });
-  },
-  async confirmHotkey() {
-    if (!this.hkFinal) return;
-    try {
-      await invoke("confirm_key_capture", { combo: this.hkFinal });
-      this.hkCapturing = false; this.hkFinal = ""; this.hotkeyHint = "";
-      await this.loadCfg();
-    } catch (x: any) { this.error = String(x); }
+    const kd = (e: KeyboardEvent) => {
+      if (e.repeat) { e.preventDefault(); return; }
+      e.preventDefault();
+      const k = normKey(e);
+      if (!this._hkPressed.includes(k)) {
+        this._hkPressed.push(k);
+        if (!this._hkRecorded.includes(k)) this._hkRecorded.push(k);
+      }
+      this.hkCurrent = this._hkRecorded.join("+");
+    };
+    const finish = async () => {
+      const recorded = [...this._hkRecorded];
+      const pressed = [...this._hkPressed];
+      if (pressed.length === 0 && recorded.length > 0) {
+        // 全部抬起 → 提交(修饰排序在前)
+        const sorted = recorded.sort((a, b) => {
+          const am = MODS.includes(a), bm = MODS.includes(b);
+          if (am && !bm) return -1;
+          if (!am && bm) return 1;
+          return 0;
+        });
+        const combo = sorted.join("+");
+        this.hkFinal = combo;
+        try {
+          await invoke("add_binding", { combo });
+          await invoke("resume_all_bindings");
+          this.hkCapturing = false; this.hkFinal = ""; this.hotkeyHint = "";
+          await this.loadCfg();
+        } catch (x: any) {
+          this.error = String(x);
+          this.hkCapturing = false;
+          invoke("resume_all_bindings").catch(() => {});
+        }
+      }
+    };
+    const ku = (e: KeyboardEvent) => {
+      e.preventDefault();
+      const k = normKey(e);
+      this._hkPressed = this._hkPressed.filter((x) => x !== k);
+      finish();
+    };
+    const cancel = async () => {
+      this._hkPressed = []; this._hkRecorded = [];
+      this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = ""; this.hotkeyHint = "";
+      invoke("resume_all_bindings").catch(() => {});
+    };
+    window.addEventListener("keydown", kd, true);
+    window.addEventListener("keyup", ku, true);
+    this._hkCleanup = () => {
+      window.removeEventListener("keydown", kd, true);
+      window.removeEventListener("keyup", ku, true);
+    };
+    // Esc 取消录制
+    const escWatch = (e: KeyboardEvent) => { if (e.key === "Escape") { this._hkCleanup?.(); this._hkCleanup = null; window.removeEventListener("keydown", escWatch, true); cancel(); } };
+    window.addEventListener("keydown", escWatch, true);
+    const origCleanup = this._hkCleanup;
+    this._hkCleanup = () => { origCleanup(); window.removeEventListener("keydown", escWatch, true); };
   },
   async cancelHotkey() {
-    try { await invoke("cancel_key_capture"); } catch {}
+    this._hkCleanup?.();
+    this._hkCleanup = null;
+    this._hkPressed = []; this._hkRecorded = [];
     this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = ""; this.hotkeyHint = "";
+    invoke("resume_all_bindings").catch(() => {});
+  },
+  async addFnPreset(preset: string) {
+    try {
+      await invoke("add_binding", { combo: preset });
+      await this.loadCfg();
+    } catch (x: any) { this.error = String(x); }
   },
 
   async setMicDevice(uid: string) {

@@ -10,25 +10,26 @@
           </div>
         </div>
         <div class="card">
-            <div class="row-title" style="padding:0 2px">录音快捷键</div>
-            <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点击 + 录制新组合, 点击 × 删除; 任意组合(含 Fn)均可录制</div>
+            <div class="row-title" style="padding:0 2px">录音快捷键(以下全部生效)</div>
+            <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点 + 录制新组合(按键后松开即添加, Esc 取消); 点 × 删除</div>
             <div class="hk-list">
-              <template x-for="(h, idx) in hkList()" :key="idx + h.key">
+              <template x-for="(h, idx) in hkList()" :key="h">
                 <div class="hk-item">
-                  <span class="hk-name" x-text="describeHotkey(h)"></span>
-                  <button class="hk-del" @click="removeHotkey(idx)">×</button>
+                  <span class="hk-name" x-text="describeCombo(h)"></span>
+                  <button class="hk-del" @click="removeHotkey(h)">×</button>
                 </div>
               </template>
             </div>
             <button class="hk-add" @click="startHotkeyRecord()" x-show="!hkCapturing">+ 录制新组合</button>
             <div class="hk-capture" x-show="hkCapturing">
-              <div class="hk-live" x-text="hkFinal ? ('结果: ' + hkFinal) : (hkCurrent ? ('当前: ' + hkCurrent) : '按下组合键…')"></div>
-              <template x-if="hkFinal">
-                <div class="btns end">
-                  <button class="mini" @click="cancelHotkey()">取消</button>
-                  <button class="mini primary" @click="confirmHotkey()">确认添加</button>
-                </div>
-              </template>
+              <div class="hk-live" x-text="hkCurrent ? ('当前: ' + describeCombo(hkCurrent)) : '按下组合键后松开即添加(Esc 取消)…'"></div>
+            </div>
+            <div class="row-hint" style="padding:6px 2px 0">Fn 组合无法录制(系统不向前台透出), 需要时点这里添加:</div>
+            <div style="display:flex; gap:6px; margin-top:4px">
+              <button class="mini" @click="addFnPreset('fn')">+ fn</button>
+              <button class="mini" @click="addFnPreset('fn+ctrl')">+ fn+ctrl</button>
+              <button class="mini" @click="addFnPreset('fn+cmd')">+ fn+cmd</button>
+              <button class="mini" @click="addFnPreset('fn+space')">+ fn+space</button>
             </div>
           </div>
         <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>

@@ -81,6 +81,12 @@ impl Default for HotkeyConfig {
         Self { key: "f5".into(), ctrl: false, alt: false, cmd: false, shift: false }
     }
 }
+/// C54 绑定集: 一个动作(如 transcribe)的全部生效键组合
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct BindingSet {
+    pub current: Vec<String>,
+}
+
 impl HotkeyConfig {
     pub fn shortcut_str(&self) -> String {
         let mut parts = vec![];
@@ -182,9 +188,13 @@ pub struct Config {
     pub mic_priority: Vec<String>, // 优先级(设备名序列, 按序取第一个在线)
     #[serde(default)]
     pub hotkey: HotkeyConfig,
-    /// C51 多热键: 任一触发即录音(迁移: 空=仅 hotkey 一组)
+    /// 旧多热键字段(已废弃, 迁移并入 bindings 后不再读)
     #[serde(default)]
     pub hotkeys: Vec<HotkeyConfig>,
+    /// C54 唯一真相: 动作→键组合列表("transcribe"=录音)。
+    /// 旧 hotkey/hotkeys 在 get_config 迁移时并入, 之后此字段为准。
+    #[serde(default)]
+    pub bindings: std::collections::HashMap<String, BindingSet>,
     #[serde(default)]
     pub audio_feedback: bool,
     #[serde(default = "default_true")]
@@ -229,8 +239,8 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
         return Ok(default_config());
     }
     let raw = fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    match serde_json::from_str::<Config>(&raw) {
-        Ok(c) => Ok(c),
+    let mut cfg = match serde_json::from_str::<Config>(&raw) {
+        Ok(c) => c,
         Err(e) => {
             // 按字段救活(Handy salvage): 一个坏字段不能毁掉整个配置
             let val: serde_json::Value = match serde_json::from_str(&raw) {
@@ -262,8 +272,32 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
                     def = revived;
                 }
             }
-            Ok(def)
+            def
         }
+    };
+    // C54 迁移: hotkey/hotkeys 并入 bindings("transcribe")——一次迁移, bindings 为唯一真相
+    let needs_migrate = cfg.bindings.is_empty() && (!cfg.hotkeys.is_empty() || cfg.hotkey.shortcut_str() != "F5");
+    if needs_migrate {
+        let mut set: Vec<String> = vec![cfg.hotkey.shortcut_str()];
+        for h in &cfg.hotkeys {
+            let s = h.shortcut_str();
+            if !s.is_empty() && !set.contains(&s) {
+                set.push(s);
+            }
+        }
+        set.retain(|s| !s.is_empty());
+        cfg.bindings.insert("transcribe".into(), BindingSet { current: set });
+    }
+    Ok(cfg)
+}
+
+impl Config {
+    /// transcribe 动作的全部生效键组合(字符串, handy-keys Hotkey::from_str 可解析)
+    pub fn transcribe_bindings(&self) -> Vec<String> {
+        self.bindings
+            .get("transcribe")
+            .map(|b| b.current.clone())
+            .unwrap_or_default()
     }
 }
 
