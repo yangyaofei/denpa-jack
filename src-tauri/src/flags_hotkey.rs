@@ -5,7 +5,10 @@
 const CTRL: u64 = 0x0004_0000;
 const ALT: u64 = 0x0008_0000;
 const CMD: u64 = 0x0010_0000;
-/// Fn/Globe 键 flags(NX_FUNCTIONKEYMASK): 闪电说/Handy 同款可捕获——单 Fn 即 flags 恰为该值
+const SHIFT: u64 = 0x0002_0000;
+/// Fn 的 flags 位(0x800000)是设备相关位, 会被无关动作点亮(实测误触发)——禁止用于匹配。
+/// 保留常量仅供 flags_to_parts 展示用; 触发判定走 key_engine 的 keycode=63 通道。
+#[allow(dead_code)]
 const FN: u64 = 0x0080_0000;
 
 pub fn flags_of(s: &str) -> Option<u64> {
@@ -15,8 +18,11 @@ pub fn flags_of(s: &str) -> Option<u64> {
             "ctrl" | "control" => f |= CTRL,
             "alt" | "option" => f |= ALT,
             "cmd" | "super" | "meta" => f |= CMD,
-            "shift" => f |= 0x0002_0000,
-            "fn" | "function" | "globe" => f |= FN,
+            "shift" => f |= SHIFT,
+            // B51: fn 不再走 flags 位匹配——0x800000 是设备相关位, 会被无关动作点亮
+            // (实测 0x800100: 0x100 CapsLock 设备位常亮 + 0x800000 误亮) → 误触发。
+            // Fn 的唯一可靠信号 = keycode 63(flagsChanged), 由 key_engine 的 tap 捕获。
+            "fn" | "function" | "globe" => return None,
             _ => return None,
         }
     }
@@ -145,13 +151,16 @@ mod b49_tests {
     #[test]
     fn flags_to_parts_covers_all() {
         assert_eq!(flags_to_parts(CTRL), vec!["ctrl"]);
-        assert_eq!(flags_to_parts(FN), vec!["fn"]);
         assert_eq!(flags_to_parts(CTRL | ALT | CMD), vec!["ctrl", "option", "cmd"]);
-        assert_eq!(flags_to_parts(FN | 0x0002_0000), vec!["shift", "fn"]);
     }
     #[test]
-    fn flags_of_fn_roundtrip() {
-        assert_eq!(flags_of("fn"), Some(FN));
+    fn flags_of_fn_is_none() {
+        // B51: fn 走 keycode=63 通道(key_engine), flags 位匹配已废除(误触发根因)
+        assert_eq!(flags_of("fn"), None);
         assert_eq!(flags_of("ctrl+cmd"), Some(CTRL | CMD));
+    }
+    #[test]
+    fn shift_flag_value() {
+        assert_eq!(flags_of("shift"), Some(SHIFT));
     }
 }
