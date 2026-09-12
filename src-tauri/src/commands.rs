@@ -150,6 +150,18 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
 /// 配置变更后重注册快捷键
 #[tauri::command]
 pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
+    // C51e: 纯修饰/Fn 组合同步更新到 flags 轮询线程
+    {
+        let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+        let targets: Vec<String> = cfg
+            .all_hotkeys()
+            .iter()
+            .map(|h| h.shortcut_str())
+            .filter(|s| crate::flags_hotkey::flags_of(s).is_some())
+            .collect();
+        crate::flags_hotkey::update_targets(targets);
+    }
+
     let cfg: Config = settings::get_config(app.clone())?;
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();

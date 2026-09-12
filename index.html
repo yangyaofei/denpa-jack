@@ -114,7 +114,7 @@
           <div class="row">
             <div>
               <div class="row-title">额外快捷键(任一触发)</div>
-              <div class="row-hint">每行一组, 如 ctrl+alt+k; 纯修饰组合如 ctrl+cmd+alt(无需字母键); Fn 单键为 macOS 系统保留, 无法全局捕获</div>
+              <div class="row-hint">每行一组: 修饰+键如 ctrl+alt+k; 纯修饰如 ctrl+cmd+alt; Fn 请直接手填 fn 或 fn+ctrl(录制按钮捕获不到 Fn); 任一组合触发录音</div>
             </div>
             <textarea class="inp" rows="2" style="width:220px" x-model="extraHotkeys" @change="saveExtraHotkeys()" placeholder="ctrl+cmd+alt&#10;ctrl+alt+k"></textarea>
           </div>

@@ -24,16 +24,42 @@ pub fn flags_of(s: &str) -> Option<u64> {
 }
 
 /// 启动轮询线程(仅修饰 flags)。按下=当前 flags 恰为某目标 → Pressed; 离开 → Released。
+use std::sync::mpsc::{self, Sender, TryRecvError};
+
+pub static TARGETS_TX: std::sync::Mutex<Option<Sender<Vec<String>>>> = std::sync::Mutex::new(None);
+
+/// 更新纯修饰组合集(保存配置后调用; 无纯修饰条目则清空暂停)
+pub fn update_targets(targets: Vec<String>) {
+    let _ = TARGETS_TX
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|tx| tx.send(targets));
+}
+
 pub fn spawn(targets: Vec<String>, send: Box<dyn Fn(bool) + Send>) {
-    let masks: Vec<u64> = targets.iter().filter_map(|s| flags_of(s)).collect();
-    if masks.is_empty() {
-        return;
-    }
+    let (tx, rx) = mpsc::channel::<Vec<String>>();
+    *TARGETS_TX.lock().unwrap() = Some(tx);
+    let mut masks: Vec<u64> = targets.iter().filter_map(|s| flags_of(s)).collect();
     crate::log::elog(&format!("[flags-tap] 启动, 组合数={}", masks.len()));
     std::thread::spawn(move || {
         let mut active = false;
         let mut last_logged = 0u64;
         loop {
+            // 40ms 轮询 + 动态接收新 targets(配置变更即生效)
+            match rx.try_recv() {
+                Ok(new) => {
+                    masks = new.iter().filter_map(|s| flags_of(s)).collect();
+                    active = false;
+                    crate::log::elog(&format!("[flags-tap] targets 更新, 组合数={}", masks.len()));
+                }
+                Err(TryRecvError::Disconnected) => {}
+                Err(TryRecvError::Empty) => {}
+            }
+            if masks.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
             std::thread::sleep(std::time::Duration::from_millis(40));
             let flags = current_modifier_flags();
             if flags != last_logged {

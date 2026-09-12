@@ -410,8 +410,9 @@ mod tests {
     fn shortcut_str_order_and_modifiers() {
         let hk = HotkeyConfig { key: "f5".into(), ctrl: true, alt: true, ..Default::default() };
         assert_eq!(hk.shortcut_str(), "ctrl+alt+F5");
+        // C51b: 空 key=纯修饰组合(无键), 不回填 F5
         let hk2 = HotkeyConfig { key: "".into(), ..Default::default() };
-        assert_eq!(hk2.shortcut_str(), "F5");
+        assert_eq!(hk2.shortcut_str(), "");
     }
     #[test]
     fn c17_deserialize_partial_config_no_wipe() {
