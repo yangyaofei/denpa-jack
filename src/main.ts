@@ -7,7 +7,7 @@ import pageLlm from "./pages/llm.html?raw";
 import pageAbout from "./pages/about.html?raw";
 
 import Alpine from "alpinejs";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 
@@ -101,8 +101,10 @@ function describeHotkey(h: HotkeyConfig): string {
   keysText: "",
     hotwordsPreview: [] as string[],
   dictSearch: "",
-  hotkeyRecording: false,
   hotkeyHint: "",
+  hkCapturing: false,
+  hkCurrent: "",
+  hkFinal: "",
     llmModels: [] as string[],
     selftesting: false,
     selftestResult: "",
@@ -213,17 +215,6 @@ function describeHotkey(h: HotkeyConfig): string {
   weightStars(b: number): string { return this.stars(b); },
   describeHotkey,
   hotkeyLabel() { return this.cfg?.hotkey ? describeHotkey(this.cfg.hotkey) : ""; },
-  _commitHotkey(hk: any) {
-    if (!this.cfg) return;
-    if (this.cfg.hotkeys?.length) this.cfg.hotkeys.push(hk);
-    else this.cfg.hotkeys = [hk];
-    this.hotkeyRecording = false;
-    this.hotkeyHint = "";
-    if (this._hkTimer) clearTimeout(this._hkTimer);
-    clearInterval(this._capTimer);
-    invoke("stop_key_capture").catch(() => {});
-    this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
-  },
 
   // 快捷键列表: hotkeys 为空时回落[hotkey](Rust all_hotkeys 同语义)
   hkList(): HotkeyConfig[] {
@@ -248,107 +239,32 @@ function describeHotkey(h: HotkeyConfig): string {
   _hkTimer: 0 as any,
   _capTimer: 0 as any,
   startHotkeyRecord() {
-    if (this.hotkeyRecording || !this.cfg) return;
-    this.hotkeyRecording = true;
+    if (this.hkCapturing || !this.cfg) return;
+    this.hkCapturing = true;
+    this.hkCurrent = "";
+    this.hkFinal = "";
     this.hotkeyHint = "";
-    this._hkPressed = [];
-    this._hkRecorded = [];
-    // B49: 引擎同步进入录制模式(捕获 Fn/纯修饰——WebView keydown 收不到的)
-    invoke("start_key_capture").catch(() => {});
-    this._capTimer = setInterval(async () => {
-      if (!this.hotkeyRecording) { clearInterval(this._capTimer); return; }
-      try {
-        const captured = await invoke<string | null>("poll_key_capture");
-        if (captured) {
-          // 引擎捕获到(Fn 或纯修饰)——写入配置
-          const hk = { key: "", ctrl: false, alt: false, cmd: false, shift: false };
-          for (const part of captured.split("+")) {
-            if (part === "ctrl") hk.ctrl = true;
-            else if (part === "option") hk.alt = true;
-            else if (part === "cmd") hk.cmd = true;
-            else if (part === "shift") hk.shift = true;
-            else hk.key = part; // fn
-          }
-          this._commitHotkey(hk);
-          clearInterval(this._capTimer);
-        }
-      } catch {}
-    }, 250);
-    const mods = ["ctrl", "control", "shift", "alt", "option", "meta", "command", "cmd", "super"];
-    const keyName = (e: KeyboardEvent): string => {
-      const c = e.code;
-      if (/^F\d+$/.test(c)) return c.toLowerCase();
-      if (/^Key[A-Z]$/.test(c)) return c.replace("Key", "").toLowerCase();
-      if (/^Digit\d$/.test(c)) return c.replace("Digit", "");
-      const mm: Record<string, string> = {
-        ShiftLeft: "shift", ShiftRight: "shift", ControlLeft: "ctrl", ControlRight: "ctrl",
-        AltLeft: "option", AltRight: "option", MetaLeft: "cmd", MetaRight: "cmd",
-        Tab: "tab", Enter: "enter", Space: "space", Backspace: "backspace", Escape: "esc",
-        ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
-        Semicolon: ";", Equal: "=", Comma: ",", Minus: "-", Period: ".", Slash: "/",
-        Backquote: "`", BracketLeft: "[", Backslash: "\\", BracketRight: "]", Quote: "'",
-      };
-      if (mm[c]) return mm[c];
-      if (c.startsWith("Numpad")) return c.toLowerCase();
-      return c.toLowerCase();
+    const ch = new Channel<{type: string; combo: string}>();
+    ch.onmessage = (msg) => {
+      if (msg.type === "change") { this.hkCurrent = msg.combo; this.hotkeyHint = "当前: " + msg.combo; }
+      else if (msg.type === "final") { this.hkFinal = msg.combo; this.hotkeyHint = ""; }
     };
-    const commit = async () => {
-      const keys = [...this._hkRecorded].sort((a, b) => {
-        const am = mods.includes(a), bm = mods.includes(b);
-        return am === bm ? 0 : am ? -1 : 1;
-      });
-      const parts = new Set(keys);
-      const main = keys.find((k) => !mods.includes(k));
-      const key = main ? ({ enter: "Enter", space: "Space", tab: "Tab", backspace: "Backspace", esc: "Escape", up: "ArrowUp", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight" } as any)[main] ?? (/^[a-z]$/.test(main) ? "Key" + main.toUpperCase() : /^\d$/.test(main) ? "Digit" + main : main === "option" ? "" : main) : "";
-      if (!key && !keys.length) return;
-      const hk = { key, ctrl: parts.has("ctrl") || parts.has("control"), alt: parts.has("alt") || parts.has("option"), cmd: parts.has("cmd") || parts.has("command") || parts.has("meta") || parts.has("super"), shift: parts.has("shift") };
-      this._commitHotkey(hk);
-      window.removeEventListener("keydown", kd, true);
-      window.removeEventListener("keyup", ku, true);
-      if (this._hkTimer) clearTimeout(this._hkTimer);
-    };
-    const kd = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      e.preventDefault(); e.stopPropagation();
-      if (e.code === "Escape") {
-        this.hotkeyRecording = false; this.hotkeyHint = "";
-        if (this._hkTimer) clearTimeout(this._hkTimer);
-        clearInterval(this._capTimer);
-        invoke("stop_key_capture").catch(() => {});
-        window.removeEventListener("keydown", kd, true);
-        window.removeEventListener("keyup", ku, true);
-        return;
-      }
-      const k = keyName(e);
-      if (!this._hkPressed.includes(k)) this._hkPressed.push(k);
-      if (!this._hkRecorded.includes(k)) this._hkRecorded.push(k);
-      this.hotkeyHint = "已按下: " + [...this._hkPressed].join(" + ");
-    };
-    const ku = (e: KeyboardEvent) => {
-      e.preventDefault();
-      const k = keyName(e);
-      this._hkPressed = this._hkPressed.filter((x) => x !== k);
-      if (this._hkPressed.length === 0 && this._hkRecorded.length > 0) {
-        commit();
-      }
-    };
-    window.addEventListener("keydown", kd, true);
-    window.addEventListener("keyup", ku, true);
-    if (this._hkTimer) clearTimeout(this._hkTimer);
-    this._hkTimer = setTimeout(() => {
-      if (this.hotkeyRecording) {
-        this.hotkeyRecording = false; this.hotkeyHint = "";
-        window.removeEventListener("keydown", kd, true);
-        window.removeEventListener("keyup", ku, true);
-      }
-    }, 10000);
+    invoke("begin_key_capture", { onEvent: ch })
+      .catch((x: any) => { this.error = String(x); this.hkCapturing = false; });
+  },
+  async confirmHotkey() {
+    if (!this.hkFinal) return;
+    try {
+      await invoke("confirm_key_capture", { combo: this.hkFinal });
+      this.hkCapturing = false; this.hkFinal = ""; this.hotkeyHint = "";
+      await this.loadCfg();
+    } catch (x: any) { this.error = String(x); }
+  },
+  async cancelHotkey() {
+    try { await invoke("cancel_key_capture"); } catch {}
+    this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = ""; this.hotkeyHint = "";
   },
 
-  // ── 麦克风管理(存储键=硬件 UID, 显示用 name) ──
-  micName(uid?: string): string {
-    if (!uid) return "自动(优先级第一个在线 / 系统默认)";
-    return this.mics.find((m) => m.uid === uid)?.name ?? `${uid} (不在线)`;
-  },
   async setMicDevice(uid: string) {
     if (!this.cfg) return;
     this.cfg.mic_device_uid = uid;

@@ -262,3 +262,5 @@ details.think pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0
 .hk-del:hover { background: rgba(255,69,58,0.15); color: #ff453a; }
 .hk-add { width: 100%; padding: 7px; border: 1px dashed rgba(120,120,128,0.4); background: transparent; border-radius: 6px; color: var(--accent, #0a84ff); font-size: 13px; cursor: pointer; }
 .hk-add:hover { background: rgba(10,132,255,0.08); }
+.hk-capture { border: 1px solid rgba(10,132,255,0.4); border-radius: 6px; padding: 10px 12px; background: rgba(10,132,255,0.04); }
+.hk-live { font-family: ui-monospace, monospace; font-size: 13px; margin-bottom: 6px; }

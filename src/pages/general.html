@@ -11,7 +11,7 @@
         </div>
         <div class="card">
             <div class="row-title" style="padding:0 2px">录音快捷键</div>
-            <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点击 + 录制新组合, 点击 × 删除; Fn 键无法录制(系统限制), 其余任意组合均可</div>
+            <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点击 + 录制新组合, 点击 × 删除; 任意组合(含 Fn)均可录制</div>
             <div class="hk-list">
               <template x-for="(h, idx) in hkList()" :key="idx + h.key">
                 <div class="hk-item">
@@ -20,8 +20,16 @@
                 </div>
               </template>
             </div>
-            <button class="hk-add" @click="startHotkeyRecord()" x-text="hotkeyRecording ? '按下新组合键… (Esc 取消)' : '+ 录制新组合'"></button>
-            <div class="row-hint" x-show="hotkeyHint" x-text="hotkeyHint" style="color:#ff9f0a; padding:4px 2px 0"></div>
+            <button class="hk-add" @click="startHotkeyRecord()" x-show="!hkCapturing">+ 录制新组合</button>
+            <div class="hk-capture" x-show="hkCapturing">
+              <div class="hk-live" x-text="hkFinal ? ('结果: ' + hkFinal) : (hkCurrent ? ('当前: ' + hkCurrent) : '按下组合键…')"></div>
+              <template x-if="hkFinal">
+                <div class="btns end">
+                  <button class="mini" @click="cancelHotkey()">取消</button>
+                  <button class="mini primary" @click="confirmHotkey()">确认添加</button>
+                </div>
+              </template>
+            </div>
           </div>
         <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
         <div class="card">

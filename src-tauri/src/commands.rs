@@ -406,20 +406,74 @@ pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// B50 组合层: begin = pause_all + capture(阻塞至 final, 变化经 Channel 推前台)
 #[tauri::command]
-pub fn start_key_capture() {
-    crate::flags_hotkey::start_recording_mode();
+pub async fn begin_key_capture(on_event: tauri::ipc::Channel<serde_json::Value>) -> Result<serde_json::Value, String> {
+    crate::key_engine::spawn_tap()?;
+    crate::key_engine::pause_all();
+    let ch = on_event.clone();
+    let final_combo = tokio::task::spawn_blocking(move || {
+        crate::key_engine::capture(&|combo: String| {
+            let _ = ch.send(serde_json::json!({"type": "change", "combo": combo}));
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let _ = on_event.send(serde_json::json!({"type": "final", "combo": final_combo}));
+    Ok(serde_json::json!({"final": final_combo}))
 }
 
-/// 引擎捕获结果(Fn/纯修饰组合): Some("fn")/Some("ctrl+cmd")/None(取走即清)
 #[tauri::command]
-pub fn stop_key_capture() {
-    crate::flags_hotkey::stop_recording_mode();
+pub fn confirm_key_capture(app: tauri::AppHandle, combo: String) -> Result<(), String> {
+    let mut cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let mut hk = crate::settings::HotkeyConfig::default();
+    for part in combo.split('+') {
+        match part {
+            "ctrl" => hk.ctrl = true,
+            "option" => hk.alt = true,
+            "cmd" => hk.cmd = true,
+            "shift" => hk.shift = true,
+            "fn" => hk.key = "fn".into(),
+            k => hk.key = map_key_back(k),
+        }
+    }
+    if hk.key.starts_with("key") {
+        return Err(format!("无法识别的按键 {hk:?}"));
+    }
+    if cfg.hotkeys.is_empty() {
+        cfg.hotkeys.push(cfg.hotkey.clone());
+    }
+    cfg.hotkeys.push(hk);
+    crate::settings::save_config(app.clone(), cfg)?;
+    crate::key_engine::resume_all();
+    reapply_hotkey(app)?;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn poll_key_capture() -> Option<String> {
-    crate::flags_hotkey::CAPTURED.lock().unwrap().take()
+pub fn cancel_key_capture(app: tauri::AppHandle) -> Result<(), String> {
+    crate::key_engine::resume_all();
+    reapply_hotkey(app.clone())?;
+    Ok(())
+}
+
+fn map_key_back(k: &str) -> String {
+    match k {
+        "enter" => "Enter".into(), "space" => "Space".into(), "tab" => "Tab".into(),
+        "backspace" => "Backspace".into(), "esc" => "Escape".into(), "left" => "ArrowLeft".into(),
+        "right" => "ArrowRight".into(), "down" => "ArrowDown".into(), "up" => "ArrowUp".into(),
+        _ => {
+            if k.len() == 1 && k.as_bytes()[0].is_ascii_lowercase() {
+                format!("Key{}", k.to_uppercase())
+            } else if k.len() == 1 && k.as_bytes()[0].is_ascii_digit() {
+                format!("Digit{k}")
+            } else if k.starts_with('f') && k.len() > 1 && k[1..].chars().all(|c| c.is_ascii_digit()) {
+                k.to_uppercase()
+            } else {
+                k.to_string()
+            }
+        }
+    }
 }
 
 #[tauri::command]
