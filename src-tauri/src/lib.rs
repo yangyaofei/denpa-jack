@@ -24,7 +24,7 @@ mod zhipu_file;
 
 
 use tauri::Manager;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+// global-shortcut 插件仅剩 Esc 动态注册使用(见 shortcut.rs), 触发已全走 handy-keys 引擎
 
 pub struct AppState {
     pub session: Option<crate::recording::RecordingSession>,
@@ -133,15 +133,8 @@ pub fn run() {
             .inner_size(480.0, 200.0)
             .build()?;
             overlay::position_hud_at_cursor(&app.handle().clone());
-            // 主快捷键
-            let cfg = settings::get_config(app.handle().clone()).unwrap_or_default();
-            let s: Shortcut = match cfg.hotkey.shortcut_str().parse() {
-                Ok(x) => x,
-                Err(_) => "f5".parse().expect("f5 解析失败"),
-            };
-            log::log(app.handle(), &format!("setup: hotkey={}", cfg.hotkey.shortcut_str()));
-            // C13(修正版): 全局快捷键回调在主线程执行, 回调内禁止任何需主线程同步的操作
-            // → 只发信号到控制线程, 由它执行 start/stop/abort
+            // C55: 快捷键注册全部由 shortcut::init_shortcuts 统一完成(bindings 单一真相)
+            // C13(修正版): 引擎回调只发信号到控制线程, 由它执行 start/stop/abort
             // 协调器线程(Handy 状态机) + 效果执行线程
             let (ctx, crx) = std::sync::mpsc::channel::<transcription_coordinator::CoordCmd>();
             let (fx_tx, fx_rx) = std::sync::mpsc::channel::<transcription_coordinator::Effect>();
@@ -194,6 +187,7 @@ pub fn run() {
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
             commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,
+            commands::capture_begin, commands::capture_poll, commands::capture_end,
             commands::check_permissions,
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
             settings::get_config, settings::save_config,

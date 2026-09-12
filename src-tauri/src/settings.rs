@@ -186,10 +186,11 @@ pub struct Config {
     pub mic_device_uid: String, // 指定输入设备(设备名, 空=自动)
     #[serde(default)]
     pub mic_priority: Vec<String>, // 优先级(设备名序列, 按序取第一个在线)
-    #[serde(default)]
+    /// 旧字段(只读迁移: get_config 时并入 bindings, 保存时不再写出)
+    #[serde(default, skip_serializing)]
     pub hotkey: HotkeyConfig,
-    /// 旧多热键字段(已废弃, 迁移并入 bindings 后不再读)
-    #[serde(default)]
+    /// 旧多热键字段(只读迁移)
+    #[serde(default, skip_serializing)]
     pub hotkeys: Vec<HotkeyConfig>,
     /// C54 唯一真相: 动作→键组合列表("transcribe"=录音)。
     /// 旧 hotkey/hotkeys 在 get_config 迁移时并入, 之后此字段为准。
@@ -281,12 +282,21 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
         let mut set: Vec<String> = vec![cfg.hotkey.shortcut_str()];
         for h in &cfg.hotkeys {
             let s = h.shortcut_str();
-            if !s.is_empty() && !set.contains(&s) {
+            if !s.is_empty() {
                 set.push(s);
             }
         }
-        set.retain(|s| !s.is_empty());
+        let set: Vec<String> = {
+            let mut normed: Vec<String> = set.iter().map(|s| normalize_combo(s)).filter(|s| !s.is_empty()).collect();
+            normed.sort();
+            normed.dedup();
+            normed
+        };
         cfg.bindings.insert("transcribe".into(), BindingSet { current: set });
+        // 迁移即落盘(旧字段 skip_serializing 不再写出, 重复组合已归一去重)
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = fs::write(&p, json);
+        }
     }
     Ok(cfg)
 }
@@ -294,11 +304,44 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
 impl Config {
     /// transcribe 动作的全部生效键组合(字符串, handy-keys Hotkey::from_str 可解析)
     pub fn transcribe_bindings(&self) -> Vec<String> {
-        self.bindings
+        let mut out: Vec<String> = self
+            .bindings
             .get("transcribe")
             .map(|b| b.current.clone())
             .unwrap_or_default()
+            .iter()
+            .map(|s| normalize_combo(s))
+            .filter(|s| !s.is_empty())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
+}
+
+/// C55 组合归一化: 小写 + 修饰键固定序(ctrl/option/shift/cmd/fn) + 主键最后 + 去重
+/// ("Cmd+Option+Ctrl" 与 "ctrl+option+cmd" 归一为同一串, 防止重复注册)
+pub fn normalize_combo(s: &str) -> String {
+    const MOD_ORDER: [&str; 5] = ["ctrl", "option", "shift", "cmd", "fn"];
+    let mut mods = vec![];
+    let mut keys = vec![];
+    for p in s.split('+') {
+        let p = p.trim().to_ascii_lowercase();
+        if p.is_empty() {
+            continue;
+        }
+        let p = if p == "alt" { "option".to_string() } else { p };
+        if MOD_ORDER.contains(&p.as_str()) {
+            if !mods.contains(&p) {
+                mods.push(p);
+            }
+        } else if !keys.contains(&p) {
+            keys.push(p);
+        }
+    }
+    mods.sort_by_key(|m| MOD_ORDER.iter().position(|x| x == m).unwrap());
+    mods.extend(keys);
+    mods.join("+")
 }
 
 #[tauri::command]
@@ -307,9 +350,16 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
     if config.keep_in_clipboard {
         config.restore_clipboard = false;
     }
+    // C55: 绑定列表归一去重(防顺序变体重复注册)
+    if let Some(set) = config.bindings.get_mut("transcribe") {
+        let mut normed: Vec<String> = set.current.iter().map(|s| normalize_combo(s)).filter(|s| !s.is_empty()).collect();
+        normed.sort();
+        normed.dedup();
+        set.current = normed;
+    }
 
     CONFIG_VER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    config.hotkey.key = normalize_key(&config.hotkey.key);
+    config.hotkey.key = normalize_key(&config.hotkey.key); // 兼容读(旧字段仅迁移用)
     let p = config_path(&app);
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
@@ -430,6 +480,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_combo_orders_and_dedups() {
+        assert_eq!(normalize_combo("Cmd+Option+Ctrl"), "ctrl+option+cmd");
+        assert_eq!(normalize_combo("ctrl+option+cmd"), "ctrl+option+cmd");
+        assert_eq!(normalize_combo("ALT+Space"), "option+space");
+        assert_eq!(normalize_combo("fn+ctrl"), "ctrl+fn");
+        assert_eq!(normalize_combo("ctrl+ctrl+a"), "ctrl+a");
+        assert_eq!(normalize_combo("F5"), "f5");
+        assert_eq!(normalize_combo("Ctrl+Cmd+Space"), "ctrl+cmd+space");
+    }
+
+    #[test]
     fn normalize_key_basics() {
         assert_eq!(normalize_key("f5"), "F5");
         assert_eq!(normalize_key(""), "F5");
@@ -515,19 +576,5 @@ mod gap_tests {
         let c: Config = serde_json::from_str(r#"{"keys": ["k1"], "hotkey_key_code": 96}"#).unwrap();
         assert_eq!(c.keys, vec!["k1".to_string()]);
         assert!(c.llm_profiles.is_empty());
-    }
-}
-
-
-impl Config {
-    /// C51 全部生效热键(hotkeys 为空回落 [hotkey]; 去重)
-    pub fn all_hotkeys(&self) -> Vec<HotkeyConfig> {
-        let mut out = self.hotkeys.clone();
-        if out.is_empty() {
-            out.push(self.hotkey.clone());
-        }
-        out.sort_by(|a, b| a.shortcut_str().cmp(&b.shortcut_str()));
-        out.dedup_by(|a, b| a.shortcut_str() == b.shortcut_str());
-        out
     }
 }

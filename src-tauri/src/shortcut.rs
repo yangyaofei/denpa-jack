@@ -224,6 +224,144 @@ pub fn init_shortcuts(
     Ok(())
 }
 
+// ── C55 后端组合录制(用户定则): 点一下→后端 capture→轮询读更新→全抬 300ms 定稿 ──
+// 引擎= handy-keys KeyboardListener(全键可见, 含 Fn/纯修饰/左右修饰);
+// 通道=轮询(capture_poll); 清理= capture_end 无条件 resume(幂等)——无门闩无永挂。
+
+#[derive(Clone, Default, serde::Serialize)]
+pub struct CaptureSnapshot {
+    pub active: bool,
+    /// 当前按住的组合(如 "ctrl+cmd+space")
+    pub current: String,
+    /// 定稿组合(全部抬起后出现一次, 前端展示后走 capture_end 提交/取消)
+    pub final_combo: Option<String>,
+    pub error: Option<String>,
+}
+
+struct CaptureState {
+    snapshot: CaptureSnapshot,
+    stop: Option<std::sync::mpsc::Sender<()>>,
+}
+
+static CAPTURE: Mutex<Option<CaptureState>> = Mutex::new(None);
+
+/// 开始录制: suspend 全部绑定 + KeyboardListener 收键(独立线程, 10ms 事件循环)
+pub fn capture_begin(app: &tauri::AppHandle) -> Result<(), String> {
+    let mut g = CAPTURE.lock().unwrap();
+    if let Some(st) = g.as_ref() {
+        if st.snapshot.active {
+            return Ok(()); // 已在录制(幂等)
+        }
+    }
+    let listener = handy_keys::KeyboardListener::new().map_err(|e| format!("监听器创建失败(需辅助功能): {e}"))?;
+    suspend_all(app)?;
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    *g = Some(CaptureState {
+        snapshot: CaptureSnapshot { active: true, ..Default::default() },
+        stop: Some(stop_tx),
+    });
+    drop(g);
+
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let mut all_up_since: Option<std::time::Instant> = None;
+        let mut last_current = String::new();
+        loop {
+            // 停止信号(capture_end)
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+            // 收事件: key_down 更新当前组合+清零窗口; key_up 且无剩余按下 → 起 300ms 窗口
+            while let Some(ev) = listener.try_recv() {
+                if ev.is_key_down {
+                    let combo = ev
+                        .as_hotkey()
+                        .map(|h| h.to_handy_string())
+                        .unwrap_or_default();
+                    if !combo.is_empty() {
+                        last_current = combo.to_ascii_lowercase();
+                    }
+                    all_up_since = None;
+                } else if ev.modifiers.is_empty() && ev.key.is_none() {
+                    all_up_since = Some(std::time::Instant::now());
+                }
+            }
+            let now = std::time::Instant::now();
+            let mut g = CAPTURE.lock().unwrap();
+            if let Some(st) = g.as_mut() {
+                // 全部抬起持续 300ms → 定稿(线程退出, 快照留 final 供前端读)
+                if !last_current.is_empty() {
+                    if let Some(since) = all_up_since {
+                        if now.duration_since(since).as_millis() >= 300 {
+                            st.snapshot.current = String::new();
+                            st.snapshot.final_combo = Some(last_current.clone());
+                            break;
+                        }
+                    }
+                }
+                st.snapshot.current = last_current.clone();
+                // 超时兜底: 120s 未定稿自动取消
+                if started.elapsed().as_secs() > 120 {
+                    st.snapshot.active = false;
+                    st.snapshot.final_combo = None;
+                    st.snapshot.error = Some("录制超时已取消".into());
+                    break;
+                }
+            }
+            drop(g);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        crate::log::elog("[shortcut] capture 线程退出");
+    });
+    crate::log::elog("[shortcut] capture 开始");
+    Ok(())
+}
+
+/// 轮询读快照(前端 200ms 拉一次)
+pub fn capture_poll() -> CaptureSnapshot {
+    CAPTURE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|st| st.snapshot.clone())
+        .unwrap_or_default()
+}
+
+/// 结束录制: 无条件 resume; confirm=true 时把 combo 写入 bindings
+pub fn capture_end(app: &tauri::AppHandle, confirm: bool, combo: Option<String>) -> Result<(), String> {
+    {
+        let mut g = CAPTURE.lock().unwrap();
+        if let Some(st) = g.as_mut() {
+            st.snapshot.active = false;
+            if let Some(tx) = st.stop.take() {
+                let _ = tx.send(());
+            }
+        }
+        *g = None;
+    }
+    if confirm {
+        if let Some(combo) = combo {
+            let combo = crate::settings::normalize_combo(&combo);
+            if combo.is_empty() {
+                return Err("组合为空".into());
+            }
+            combo
+                .parse::<Hotkey>()
+                .map_err(|e| format!("组合无法解析({combo}): {e}"))?;
+            let mut cfg = crate::settings::get_config(app.clone())?;
+            let set = cfg
+                .bindings
+                .entry("transcribe".into())
+                .or_insert(crate::settings::BindingSet { current: vec![] });
+            if !set.current.contains(&combo) {
+                set.current.push(combo);
+            }
+            crate::settings::save_config(app.clone(), cfg)?;
+        }
+    }
+    resume_all(app)
+}
+
 /// 录制期间挂起全部绑定(真注销, 非标志门闩——不存在忘复位=全挂)
 pub fn suspend_all(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app

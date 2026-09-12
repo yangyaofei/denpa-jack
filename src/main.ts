@@ -23,20 +23,19 @@ export interface DictEntry {
   term: string; variants: string[]; guard_words: string[]; boost: number;
 }
 export interface RegexRule { pattern: string; replacement: string; }
-export interface HotkeyConfig {
-  key: string; ctrl: boolean; alt: boolean; cmd: boolean; shift: boolean;
-}
+/// C55: 绑定集——一动作多键, 唯一真相(旧 hotkey/hotkeys 已废弃)
+export interface BindingSet { current: string[]; }
 export interface Config {
   keys: string[]; llm_profiles: LlmProfile[]; asr_profiles: AsrProfile[];
   dict: DictEntry[]; normalizations: RegexRule[];
   active_llm_id: string; active_asr_id: string;
+  bindings: Record<string, BindingSet>;
   hotkey_key_code: number; use_llm_correction: boolean; clipboard_only: boolean;
   shortcut_activation: string; hold_threshold_ms: number; audio_feedback: boolean; restore_clipboard: boolean;
   filler_word_removal: boolean; append_trailing_space: boolean; auto_submit: boolean;
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
   mic_device_uid: string; mic_priority: string[];
-  hotkey: HotkeyConfig;
 }
 export interface HistoryRecord {
   ts: string; engine: string; raw: string; final_text: string;
@@ -83,22 +82,6 @@ function describeCombo(s: string): string {
   return modSyms.join("") + " " + main.join(" ");
 }
 
-function describeHotkey(h: HotkeyConfig): string {
-  const parts: string[] = [];
-  if (h.ctrl) parts.push("Ctrl");
-  if (h.alt) parts.push("Opt");
-  if (h.shift) parts.push("Shift");
-  if (h.cmd) parts.push("Cmd");
-  const keyNames: Record<string, string> = {
-    Space: "Space", Enter: "Return", Backspace: "Delete", Tab: "Tab",
-    ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
-    Comma: ",", Period: ".", Slash: "/", Semicolon: ";", Quote: "'",
-    Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]",
-  };
-  const key = h.key.charAt(0).toUpperCase() + h.key.slice(1);
-  parts.push(keyNames[key] ?? keyNames[h.key] ?? key.replace(/^Key/, ""));
-  return parts.join(" + ");
-}
 
 // app() 全局 Alpine 组件
 (window as any).app = () => ({
@@ -205,10 +188,6 @@ function describeHotkey(h: HotkeyConfig): string {
     try {
       this.cfg = await invoke("get_config");
       this.keysText = this.cfg.keys.join("\n");
-      // C51f: shortcut_str 是 Rust 方法不在 JSON——前端重建行文本
-      this.extraHotkeys = (this.cfg.hotkeys || [])
-        .map((h: any) => [h.ctrl && "ctrl", h.alt && "alt", h.shift && "shift", h.cmd && "cmd", h.key].filter(Boolean).join("+"))
-        .join("\n");
       if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
   },
@@ -236,7 +215,6 @@ function describeHotkey(h: HotkeyConfig): string {
     return "★★★".slice(0, Math.max(0, boost)) + "☆☆☆".slice(0, Math.max(0, 3 - boost));
   },
   weightStars(b: number): string { return this.stars(b); },
-  describeHotkey,
   describeCombo,
   hotkeyLabel() {
     // C54: 顶部文案取 bindings 列表第一个(迁移后唯一真相)
@@ -254,101 +232,53 @@ function describeHotkey(h: HotkeyConfig): string {
       await this.loadCfg();
     } catch (x: any) { this.error = String(x); }
   },
-  // C54 前端录制(Handy GlobalShortcutInput 同构): suspend 真注销 → window keydown/keyup
-  // 收集组合(修饰排序在前) → 全抬即 add_binding 提交 → resume 恢复。无后端 capture 线程。
-  _hkPressed: [] as string[],
-  _hkRecorded: [] as string[],
-  _hkCleanup: null as (() => void) | null,
+  // C55 后端录制(用户定则): begin → 200ms 轮询 current/final → 展示结果 → 添加/取消
+  // 引擎收全键(含 Fn/纯修饰/左右修饰); Esc 取消; 无阻塞无挂死(end 无条件 resume)
+  _capTimer: 0 as any,
   async startHotkeyRecord() {
-    if (this.hkCapturing || !this.cfg) return;
-    try { await invoke("suspend_all_bindings"); } catch (x: any) { this.error = String(x); return; }
+    if (this.hkCapturing) return;
+    try { await invoke("capture_begin"); } catch (x: any) { this.error = String(x); return; }
     this.hkCapturing = true;
     this.hkCurrent = "";
     this.hkFinal = "";
     this.hotkeyHint = "";
-    const MODS = ["control", "ctrl", "shift", "alt", "option", "meta", "command", "cmd"];
-    const normKey = (e: KeyboardEvent): string => {
-      if (e.key === "Control") return "ctrl";
-      if (e.key === "Shift") return "shift";
-      if (e.key === "Alt" || e.key === "Option") return "option";
-      if (e.key === "Meta" || e.key === "Command") return "cmd";
-      if (e.code?.startsWith("Key")) return e.code.slice(3).toLowerCase();
-      if (e.code?.startsWith("Digit")) return e.code.slice(5);
-      if (e.code?.startsWith("Numpad")) return e.code.toLowerCase();
-      const map: Record<string, string> = {
-        " ": "space", Spacebar: "space", Enter: "enter", Tab: "tab", Backspace: "backspace",
-        ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
-        Escape: "esc", "`": "`", "-": "-", "=": "=", "[": "[", "]": "]", "\\": "\\", ";": ";",
-        "'": "'", ",": ",", ".": ".", "/": "/",
-      };
-      if (map[e.key] !== undefined) return map[e.key];
-      if (/^F\d{1,2}$/.test(e.key)) return e.key.toLowerCase();
-      return e.key.toLowerCase();
-    };
-    const kd = (e: KeyboardEvent) => {
-      if (e.repeat) { e.preventDefault(); return; }
-      e.preventDefault();
-      const k = normKey(e);
-      if (!this._hkPressed.includes(k)) {
-        this._hkPressed.push(k);
-        if (!this._hkRecorded.includes(k)) this._hkRecorded.push(k);
-      }
-      this.hkCurrent = this._hkRecorded.join("+");
-    };
-    const finish = async () => {
-      const recorded = [...this._hkRecorded];
-      const pressed = [...this._hkPressed];
-      if (pressed.length === 0 && recorded.length > 0) {
-        // 全部抬起 → 提交(修饰排序在前)
-        const sorted = recorded.sort((a, b) => {
-          const am = MODS.includes(a), bm = MODS.includes(b);
-          if (am && !bm) return -1;
-          if (!am && bm) return 1;
-          return 0;
-        });
-        const combo = sorted.join("+");
-        this.hkFinal = combo;
-        try {
-          await invoke("add_binding", { combo });
-          await invoke("resume_all_bindings");
-          this.hkCapturing = false; this.hkFinal = ""; this.hotkeyHint = "";
-          await this.loadCfg();
-        } catch (x: any) {
-          this.error = String(x);
-          this.hkCapturing = false;
-          invoke("resume_all_bindings").catch(() => {});
-        }
+    const escWatch = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        window.removeEventListener("keydown", escWatch, true);
+        this.cancelHotkey();
       }
     };
-    const ku = (e: KeyboardEvent) => {
-      e.preventDefault();
-      const k = normKey(e);
-      this._hkPressed = this._hkPressed.filter((x) => x !== k);
-      finish();
-    };
-    const cancel = async () => {
-      this._hkPressed = []; this._hkRecorded = [];
-      this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = ""; this.hotkeyHint = "";
-      invoke("resume_all_bindings").catch(() => {});
-    };
-    window.addEventListener("keydown", kd, true);
-    window.addEventListener("keyup", ku, true);
-    this._hkCleanup = () => {
-      window.removeEventListener("keydown", kd, true);
-      window.removeEventListener("keyup", ku, true);
-    };
-    // Esc 取消录制
-    const escWatch = (e: KeyboardEvent) => { if (e.key === "Escape") { this._hkCleanup?.(); this._hkCleanup = null; window.removeEventListener("keydown", escWatch, true); cancel(); } };
     window.addEventListener("keydown", escWatch, true);
-    const origCleanup = this._hkCleanup;
-    this._hkCleanup = () => { origCleanup(); window.removeEventListener("keydown", escWatch, true); };
+    this._capTimer = setInterval(async () => {
+      try {
+        const s = await invoke<any>("capture_poll");
+        if (s.current) this.hkCurrent = s.current;
+        if (s.final_combo) {
+          this.hkFinal = s.final_combo;
+          clearInterval(this._capTimer);
+          window.removeEventListener("keydown", escWatch, true);
+        } else if (s.error) {
+          this.error = s.error;
+          clearInterval(this._capTimer);
+          window.removeEventListener("keydown", escWatch, true);
+          this.hkCapturing = false; this.hkCurrent = "";
+        }
+      } catch { clearInterval(this._capTimer); this.hkCapturing = false; }
+    }, 200);
+  },
+  async confirmHotkey() {
+    if (!this.hkFinal) return;
+    try {
+      await invoke("capture_end", { confirm: true, combo: this.hkFinal });
+      this.hkCapturing = false; this.hkFinal = ""; this.hkCurrent = ""; this.hotkeyHint = "";
+      await this.loadCfg();
+    } catch (x: any) { this.error = String(x); this.hkCapturing = false; }
   },
   async cancelHotkey() {
-    this._hkCleanup?.();
-    this._hkCleanup = null;
-    this._hkPressed = []; this._hkRecorded = [];
+    clearInterval(this._capTimer);
+    try { await invoke("capture_end", { confirm: false, combo: null }); } catch {}
     this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = ""; this.hotkeyHint = "";
-    invoke("resume_all_bindings").catch(() => {});
   },
   async addFnPreset(preset: string) {
     try {

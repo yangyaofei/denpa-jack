@@ -23,7 +23,7 @@ pub fn spawn_tray(app: &tauri::AppHandle) -> Result<(), String> {
         mtm,
         tx.clone(),
         busy,
-        &cfg.hotkey.shortcut_str(),
+        &cfg.transcribe_bindings().first().cloned().unwrap_or_default(),
         cfg.use_llm_correction,
         cfg.clipboard_only,
     )?;

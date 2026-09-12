@@ -410,11 +410,27 @@ pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// C55 后端录制(用户定则): begin→poll→end(提交/取消), 轮询通道
+#[tauri::command]
+pub fn capture_begin(app: tauri::AppHandle) -> Result<(), String> {
+    crate::shortcut::capture_begin(&app)
+}
+
+#[tauri::command]
+pub fn capture_poll() -> crate::shortcut::CaptureSnapshot {
+    crate::shortcut::capture_poll()
+}
+
+#[tauri::command]
+pub fn capture_end(app: tauri::AppHandle, confirm: bool, combo: Option<String>) -> Result<(), String> {
+    crate::shortcut::capture_end(&app, confirm, combo)
+}
+
 /// C54 前端录制模式(Handy 同构): 前端 window keydown/keyup 收集组合,
 /// 后端只提供 suspend/resume(真注销/重注册)与 confirm 提交。无 capture 线程、无 Channel、无门闩。
 #[tauri::command]
 pub fn add_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
-    let combo = combo.trim().to_ascii_lowercase();
+    let combo = crate::settings::normalize_combo(&combo);
     if combo.is_empty() {
         return Err("组合不能为空".into());
     }

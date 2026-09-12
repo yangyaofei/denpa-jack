@@ -22,9 +22,15 @@
             </div>
             <button class="hk-add" @click="startHotkeyRecord()" x-show="!hkCapturing">+ 录制新组合</button>
             <div class="hk-capture" x-show="hkCapturing">
-              <div class="hk-live" x-text="hkCurrent ? ('当前: ' + describeCombo(hkCurrent)) : '按下组合键后松开即添加(Esc 取消)…'"></div>
+              <div class="hk-live" x-text="hkFinal ? ('录到: ' + describeCombo(hkFinal)) : (hkCurrent ? ('当前: ' + describeCombo(hkCurrent)) : '按下组合键, 全部松开后确认(Esc 取消)…')"></div>
+              <template x-if="hkFinal">
+                <div class="btns end">
+                  <button class="mini" @click="cancelHotkey()">取消</button>
+                  <button class="mini primary" @click="confirmHotkey()">添加</button>
+                </div>
+              </template>
             </div>
-            <div class="row-hint" style="padding:6px 2px 0">Fn 组合无法录制(系统不向前台透出), 需要时点这里添加:</div>
+            <div class="row-hint" style="padding:6px 2px 0">快捷添加常用 Fn 组合(也可直接录制):</div>
             <div style="display:flex; gap:6px; margin-top:4px">
               <button class="mini" @click="addFnPreset('fn')">+ fn</button>
               <button class="mini" @click="addFnPreset('fn+ctrl')">+ fn+ctrl</button>
