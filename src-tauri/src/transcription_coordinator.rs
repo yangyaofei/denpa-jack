@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
 pub enum CoordCmd {
-    Input { pressed: bool },
+    Input { pressed: bool, activation: String },
     Cancel,
     /// Start 效果的真实结果(失败时协调器复位, 乐观转移对账)
     StartResult { started: bool },
@@ -29,19 +29,35 @@ pub fn spawn(
         let mut recording = false;
         while let Ok(cmd) = rx.recv() {
             let effect = match cmd {
-                CoordCmd::Input { pressed } => {
-                    if pressed {
-                        if recording {
-                            None
+                CoordCmd::Input { pressed, activation } => {
+                    if activation == "toggle" {
+                        // 短按切换: Pressed=开/停翻转; Released 不消费(纯修饰组合天然抗 stuck)
+                        if pressed {
+                            if recording {
+                                recording = false;
+                                Some(Effect::Stop)
+                            } else {
+                                recording = true;
+                                Some(Effect::Start)
+                            }
                         } else {
-                            recording = true;
-                            Some(Effect::Start)
+                            None
                         }
-                    } else if recording {
-                        recording = false;
-                        Some(Effect::Stop)
                     } else {
-                        None
+                        // 按住说话(默认): 按下=开始, 松开=结束
+                        if pressed {
+                            if recording {
+                                None
+                            } else {
+                                recording = true;
+                                Some(Effect::Start)
+                            }
+                        } else if recording {
+                            recording = false;
+                            Some(Effect::Stop)
+                        } else {
+                            None
+                        }
                     }
                 }
                 CoordCmd::Cancel => {
@@ -93,12 +109,48 @@ mod tests {
 
     #[test]
     fn idle_press_starts() {
-        assert_eq!(drive(vec![CoordCmd::Input { pressed: true }]), vec![Effect::Start]);
+        assert_eq!(drive(vec![CoordCmd::Input { pressed: true, activation: "hold".into() }]), vec![Effect::Start]);
+    }
+
+    #[test]
+    fn toggle_press_starts_release_ignored() {
+        // 短按切换: 按下开始, 松开不结束
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "toggle".into() },
+                CoordCmd::Input { pressed: false, activation: "toggle".into() },
+            ]),
+            vec![Effect::Start]
+        );
+    }
+    #[test]
+    fn toggle_double_press_full_cycle() {
+        // 短按开始 → 再短按结束转写 → 可重新开始
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "toggle".into() },
+                CoordCmd::Input { pressed: false, activation: "toggle".into() },
+                CoordCmd::Input { pressed: true, activation: "toggle".into() },
+                CoordCmd::Input { pressed: false, activation: "toggle".into() },
+                CoordCmd::Input { pressed: true, activation: "toggle".into() },
+            ]),
+            vec![Effect::Start, Effect::Stop, Effect::Start]
+        );
+    }
+    #[test]
+    fn toggle_cancel_aborts() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "toggle".into() },
+                CoordCmd::Cancel,
+            ]),
+            vec![Effect::Start, Effect::Abort]
+        );
     }
     #[test]
     fn recording_release_stops() {
         assert_eq!(
-            drive(vec![CoordCmd::Input { pressed: true }, CoordCmd::Input { pressed: false }]),
+            drive(vec![CoordCmd::Input { pressed: true, activation: "hold".into() }, CoordCmd::Input { pressed: false, activation: "hold".into() }]),
             vec![Effect::Start, Effect::Stop]
         );
     }
@@ -107,24 +159,24 @@ mod tests {
         // 按住期间 auto-repeat/重复按不产生新 Start
         assert_eq!(
             drive(vec![
-                CoordCmd::Input { pressed: true },
-                CoordCmd::Input { pressed: true },
-                CoordCmd::Input { pressed: true },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
             ]),
             vec![Effect::Start]
         );
     }
     #[test]
     fn release_without_recording_noop() {
-        assert_eq!(drive(vec![CoordCmd::Input { pressed: false }]), vec![]);
+        assert_eq!(drive(vec![CoordCmd::Input { pressed: false, activation: "hold".into() }]), vec![]);
     }
     #[test]
     fn double_stop_single() {
         assert_eq!(
             drive(vec![
-                CoordCmd::Input { pressed: true },
-                CoordCmd::Input { pressed: false },
-                CoordCmd::Input { pressed: false },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
             ]),
             vec![Effect::Start, Effect::Stop]
         );
@@ -132,7 +184,7 @@ mod tests {
     #[test]
     fn cancel_aborts_recording() {
         assert_eq!(
-            drive(vec![CoordCmd::Input { pressed: true }, CoordCmd::Cancel]),
+            drive(vec![CoordCmd::Input { pressed: true, activation: "hold".into() }, CoordCmd::Cancel]),
             vec![Effect::Start, Effect::Abort]
         );
     }
@@ -144,10 +196,10 @@ mod tests {
     fn full_cycle_restart() {
         assert_eq!(
             drive(vec![
-                CoordCmd::Input { pressed: true },
-                CoordCmd::Input { pressed: false },
-                CoordCmd::Input { pressed: true },
-                CoordCmd::Input { pressed: false },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
             ]),
             vec![Effect::Start, Effect::Stop, Effect::Start, Effect::Stop]
         );

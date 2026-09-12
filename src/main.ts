@@ -31,7 +31,7 @@ export interface Config {
   active_llm_id: string; active_asr_id: string;
   bindings: Record<string, BindingSet>;
   hotkey_key_code: number; use_llm_correction: boolean; clipboard_only: boolean;
-  shortcut_activation: string; hold_threshold_ms: number; audio_feedback: boolean; restore_clipboard: boolean;
+  activation: string; audio_feedback: boolean; restore_clipboard: boolean;
   filler_word_removal: boolean; append_trailing_space: boolean; auto_submit: boolean;
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
@@ -287,6 +287,11 @@ function describeCombo(s: string): string {
     } catch (x: any) { this.error = String(x); }
   },
 
+  async setActivation(ev: Event) {
+    if (!this.cfg) return;
+    this.cfg.activation = (ev.target as HTMLSelectElement).value;
+    await this.saveCfg();
+  },
   async setMicDevice(uid: string) {
     if (!this.cfg) return;
     this.cfg.mic_device_uid = uid;
@@ -604,7 +609,7 @@ function describeCombo(s: string): string {
         { term: "腾讯云", variants: ["腾讯营"], guard_words: [], boost: 2 },
       ], normalizations: [], active_llm_id: "l1", active_asr_id: "a1",
       hotkey_key_code: 96, use_llm_correction: false, clipboard_only: false,
-      shortcut_activation: "hold_or_toggle", hold_threshold_ms: 300, audio_feedback: true, restore_clipboard: true,
+      activation: "hold", audio_feedback: true, restore_clipboard: true,
       filler_word_removal: false, append_trailing_space: false, auto_submit: false,
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,

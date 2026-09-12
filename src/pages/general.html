@@ -10,7 +10,19 @@
           </div>
         </div>
         <div class="card">
-            <div class="row-title" style="padding:0 2px">录音快捷键(以下全部生效)</div>
+          <div class="row">
+            <div>
+              <div class="row-title">触发模式</div>
+              <div class="row-hint" x-text="cfg?.activation === 'toggle' ? '短按一下开始录音, 再短按一下结束并转写' : '按住说话, 松开结束转写(默认)'"></div>
+            </div>
+            <select class="picker" :value="cfg?.activation || 'hold'" @change="setActivation($event)">
+              <option value="hold">按住说话</option>
+              <option value="toggle">短按切换</option>
+            </select>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row-title" style="padding:0 2px">录音快捷键(以下全部生效)</div>
             <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点 + 录制新组合(按键后松开即添加, Esc 取消); 点 × 删除</div>
             <div class="hk-list">
               <template x-for="(h, idx) in hkList()" :key="h">

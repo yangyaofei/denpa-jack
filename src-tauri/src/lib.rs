@@ -40,10 +40,13 @@ impl Default for AppState {
 }
 
 pub(crate) static TRAY_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>> = std::sync::Mutex::new(None);
+/// 触发模式全局缓存(save_config 同步更新; 引擎回调无 app handle 也能读; 空=hold)
+pub(crate) static ACTIVATION: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// 统一入口: 全部录音触发(快捷键/托盘/前端)都发协调器信号——单一真源
 pub fn send_ctrl(pressed: bool) {
+    let activation = crate::ACTIVATION.lock().unwrap().clone();
     let _ = CTRL_TX.lock().unwrap().as_ref()
-        .map(|tx| tx.send(transcription_coordinator::CoordCmd::Input { pressed }));
+        .map(|tx| tx.send(transcription_coordinator::CoordCmd::Input { pressed, activation }));
 }
 
 pub fn send_cancel() {
@@ -166,6 +169,11 @@ pub fn run() {
             // C54 统一引擎(Handy 同构): handy-keys crate 单通道注册+触发, 无双注册
             shortcut::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            // 触发模式缓存初始化(hold/toggle)
+            {
+                let cfg0 = settings::get_config(app.handle().clone()).unwrap_or_default();
+                *crate::ACTIVATION.lock().unwrap() = cfg0.activation;
+            }
             log::log(app.handle(), "setup done");
 
             autotest::maybe_spawn(app.handle());

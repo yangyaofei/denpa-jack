@@ -196,6 +196,9 @@ pub struct Config {
     /// 旧 hotkey/hotkeys 在 get_config 迁移时并入, 之后此字段为准。
     #[serde(default)]
     pub bindings: std::collections::HashMap<String, BindingSet>,
+    /// 触发模式: "hold"=按住说话(默认) / "toggle"=短按开始再短按结束
+    #[serde(default = "default_shortcut_activation")]
+    pub activation: String,
     #[serde(default)]
     pub audio_feedback: bool,
     #[serde(default = "default_true")]
@@ -357,6 +360,8 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
         normed.dedup();
         set.current = normed;
     }
+    // 触发模式缓存同步(引擎回调读全局, 无 app handle)
+    *crate::ACTIVATION.lock().unwrap() = config.activation.clone();
 
     CONFIG_VER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     config.hotkey.key = normalize_key(&config.hotkey.key); // 兼容读(旧字段仅迁移用)
@@ -456,7 +461,7 @@ pub const DEFAULT_LLM_PROMPT: &str = r#"
 "#;
 
 fn default_shortcut_activation() -> String {
-    "hold_or_toggle".into()
+    "hold".into()
 }
 
 fn default_hold_threshold_ms() -> u64 {
