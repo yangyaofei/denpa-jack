@@ -1,0 +1,84 @@
+      <section x-show="section === 'asr'" class="page">
+        <h1>语音识别</h1>
+        <div class="card">
+          <div class="row-title">Key 池</div>
+          <div class="row-hint">每行一个; 档案 Key 留空时按序取第一个</div>
+          <textarea class="inp" rows="3" x-model="keysText" @change="saveKeys()" placeholder="sk-..."></textarea>
+        </div>
+        <template x-for="p in cfg?.asr_profiles ?? []" :key="p.id">
+          <div class="card" :class="{active: cfg?.active_asr_id === p.id}" style="margin-bottom: 8px">
+            <div class="row">
+              <div>
+                <div class="row-title">
+                  <span x-text="p.name"></span>
+                  <span class="tag" x-text="p.provider"></span>
+                  <span class="tag" x-show="cfg?.active_asr_id === p.id">使用中</span>
+                </div>
+                <div class="row-hint" x-text="'Key: ' + (p.api_key ? p.api_key.slice(0, 8) + '…' : '用 Key 池') + (p.hotwords_enabled ? ' · 热词开' : '')"></div>
+              </div>
+              <div style="display: flex; gap: 6px">
+                <button class="mini" @click="useAsr(p)" x-show="cfg?.active_asr_id !== p.id">使用</button>
+                <button class="mini" @click="editAsr(p)">编辑</button>
+                <button class="mini danger" @click="delAsr(p)">删除</button>
+              </div>
+            </div>
+          </div>
+        </template>
+        <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
+        <div class="card">
+          <div class="row-title">热词直传预览</div>
+          <div class="row-hint">来自词典(按权重前 100 token 预算), 改词典即时生效</div>
+          <div style="margin-top: 6px">
+            <template x-for="w in hotwordsPreview" :key="w"><span class="chip accent" x-text="w"></span></template>
+            <span class="dim" x-show="!hotwordsPreview.length">无热词(词典为空或权重为 0)</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row-title">当前输入设备(实际使用)</div>
+          <div class="row-hint" x-text="activeMic ? activeMic[1] : '开始一次录音后显示'"></div>
+        </div>
+        <div class="card">
+          <div class="row-title">麦克风优先级(按序取第一个在线的设备)</div>
+          <div class="mini-table">
+            <template x-for="(u, i) in cfg?.mic_priority ?? []" :key="u">
+              <div class="mini-row" :class="{sel: prioSel === i}" @click="prioSel = i"
+                   x-text="`${i + 1}. ${micName(u)}${mics.some(m => m.uid === u) ? '' : ' (已断开)'}`"></div>
+            </template>
+            <div class="row-hint" x-show="!cfg?.mic_priority?.length">空 — 把指定设备加入优先级</div>
+          </div>
+          <div class="btns" style="margin-top: 8px">
+            <select class="inp" x-model="micToAdd">
+              <option value="">选择设备…</option>
+              <template x-for="m in mics" :key="m.uid"><option :value="m.uid" x-text="m.name"></option></template>
+            </select>
+            <button class="mini" @click="addToPriority()" :disabled="!micToAdd">加入</button>
+            <button class="mini" @click="movePriority(prioSel, -1)">上移</button>
+            <button class="mini" @click="movePriority(prioSel, 1)">下移</button>
+            <button class="mini" @click="removePriority(prioSel)">移除</button>
+          </div>
+        </div>
+
+        <!-- ASR 编辑 sheet -->
+        <template x-if="asrEdit"><div class="overlay" @click.self="asrEdit = null">
+          <div class="sheet">
+            <h2 x-text="asrIsNew ? '添加引擎' : '编辑引擎'"></h2>
+            <label>名称<input class="inp" x-model="asrEdit.name" /></label>
+            <label>引擎
+              <select class="inp" x-model="asrEdit.provider">
+                <option value="volcengine">火山引擎 (豆包流式)</option>
+              </select>
+            </label>
+            <label>API Key<span class="row-hint">(留空用 Key 池)</span>
+              <input class="inp" type="password" x-model="asrEdit.api_key" />
+            </label>
+            <div class="row">
+              <span>词典热词直传</span>
+              <input type="checkbox" class="switch" x-model="asrEdit.hotwords_enabled" />
+            </div>
+            <div class="btns end">
+              <button class="mini" @click="asrEdit = null">取消</button>
+              <button class="mini primary" @click="saveAsr()">保存</button>
+            </div>
+          </div>
+        </div></template>
+      </section>

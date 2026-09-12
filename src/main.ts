@@ -1,4 +1,5 @@
 import "./style.css";
+import pageAsr from "./pages/asr.html?raw";
 import pageHistory from "./pages/history.html?raw";
 import pageGeneral from "./pages/general.html?raw";
 import pageDict from "./pages/dict.html?raw";
@@ -749,7 +750,7 @@ function describeHotkey(h: HotkeyConfig): string {
 });
 
 // 页面片段注入(B47 拆分: index 骨架 + src/pages/*.html)
-const pageHtml: Record<string, string> = { history: pageHistory, general: pageGeneral, dict: pageDict, llm: pageLlm, about: pageAbout };
+const pageHtml: Record<string, string> = { asr: pageAsr, history: pageHistory, general: pageGeneral, dict: pageDict, llm: pageLlm, about: pageAbout };
 for (const [name, html] of Object.entries(pageHtml)) {
   const slot = document.querySelector(`[data-page="${name}"]`);
   if (slot) { slot.innerHTML = html; slot.removeAttribute("data-page"); }
