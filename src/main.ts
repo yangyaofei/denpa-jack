@@ -95,6 +95,7 @@ function describeHotkey(h: HotkeyConfig): string {
   hotwordsPreview: [] as string[],
   dictSearch: "",
   hotkeyRecording: false,
+  hotkeyHint: "",
     llmModels: [] as string[],
     selftesting: false,
     selftestResult: "",
@@ -225,21 +226,34 @@ function describeHotkey(h: HotkeyConfig): string {
   startHotkeyRecord() {
     if (this.hotkeyRecording || !this.cfg) return;
     this.hotkeyRecording = true;
+    this.hotkeyHint = "按下新组合键（修饰键+字母/数字/F键）；Esc 取消；Fn 无法录制请手填";
+    // C52b: 所有拒绝路径给出可见提示(之前静默 return=用户视角"动不了")
+    const reject = (msg: string) => { this.hotkeyHint = msg; };
     const handler = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
       if (e.code === "Escape") {
         this.hotkeyRecording = false;
+        this.hotkeyHint = "";
         window.removeEventListener("keydown", handler, true);
         return;
       }
+      if (e.key === "Fn" || e.code === "Fn") {
+        reject("Fn 键系统层不产生 keydown，无法录制——请在下方额外快捷键手填 fn");
+        return;
+      }
       const key = codeToKey(e.code);
-      if (!key) return; // 必须是可映射键
+      if (!key) {
+        reject(`无法识别按键 ${e.code}——请用字母/数字/F 键+修饰键`);
+        return;
+      }
       if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !/^[fF]\d+$/.test(e.code)) {
-        return; // 功能键以外必须带修饰键
+        reject("必须带修饰键（Ctrl/Opt/Cmd/Shift），纯字母会被全局占用");
+        return;
       }
       this.cfg!.hotkey = { key, ctrl: e.ctrlKey, alt: e.altKey, cmd: e.metaKey, shift: e.shiftKey };
       this.hotkeyRecording = false;
+      this.hotkeyHint = "";
       window.removeEventListener("keydown", handler, true);
       this.saveCfg().then(() => invoke("reapply_hotkey").catch((x) => (this.error = String(x))));
     };

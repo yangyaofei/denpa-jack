@@ -110,6 +110,7 @@
               <div class="row-hint">点击录制新组合键; 必须带修饰键(Ctrl/Opt/Cmd/Shift)或功能键; Esc 取消</div>
             </div>
             <button class="rec-key" @click="startHotkeyRecord()" x-text="hotkeyRecording ? '按下新键…' : (cfg?.hotkey ? describeHotkey(cfg.hotkey) : 'F5')"></button>
+            <div class="row-hint" x-show="hotkeyHint" x-text="hotkeyHint" style="color:#ff9f0a"></div>
           </div>
           <div class="row">
             <div>
