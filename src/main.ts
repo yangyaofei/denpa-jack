@@ -172,7 +172,10 @@ function describeHotkey(h: HotkeyConfig): string {
     try {
       this.cfg = await invoke("get_config");
       this.keysText = this.cfg.keys.join("\n");
-      this.extraHotkeys = this.cfg.hotkeys.map((h: any) => h.key ? h.shortcut_str ?? "" : h.shortcut_str ?? "").join("\n");
+      // C51f: shortcut_str 是 Rust 方法不在 JSON——前端重建行文本
+      this.extraHotkeys = (this.cfg.hotkeys || [])
+        .map((h: any) => [h.ctrl && "ctrl", h.alt && "alt", h.shift && "shift", h.cmd && "cmd", h.key].filter(Boolean).join("+"))
+        .join("\n");
       if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
   },
