@@ -212,6 +212,18 @@ function describeHotkey(h: HotkeyConfig): string {
   weightStars(b: number): string { return this.stars(b); },
   describeHotkey,
   hotkeyLabel() { return this.cfg?.hotkey ? describeHotkey(this.cfg.hotkey) : ""; },
+  _commitHotkey(hk: any) {
+    if (!this.cfg) return;
+    if (this.cfg.hotkeys?.length) this.cfg.hotkeys.push(hk);
+    else this.cfg.hotkeys = [hk];
+    this.hotkeyRecording = false;
+    this.hotkeyHint = "";
+    if (this._hkTimer) clearTimeout(this._hkTimer);
+    clearInterval(this._capTimer);
+    invoke("stop_key_capture").catch(() => {});
+    this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
+  },
+
   // 快捷键列表: hotkeys 为空时回落[hotkey](Rust all_hotkeys 同语义)
   hkList(): HotkeyConfig[] {
     const hs = this.cfg?.hotkeys ?? [];
@@ -233,12 +245,34 @@ function describeHotkey(h: HotkeyConfig): string {
   _hkPressed: [] as string[],
   _hkRecorded: [] as string[],
   _hkTimer: 0 as any,
+  _capTimer: 0 as any,
   startHotkeyRecord() {
     if (this.hotkeyRecording || !this.cfg) return;
     this.hotkeyRecording = true;
     this.hotkeyHint = "";
     this._hkPressed = [];
     this._hkRecorded = [];
+    // B49: 引擎同步进入录制模式(捕获 Fn/纯修饰——WebView keydown 收不到的)
+    invoke("start_key_capture").catch(() => {});
+    this._capTimer = setInterval(async () => {
+      if (!this.hotkeyRecording) { clearInterval(this._capTimer); return; }
+      try {
+        const captured = await invoke<string | null>("poll_key_capture");
+        if (captured) {
+          // 引擎捕获到(Fn 或纯修饰)——写入配置
+          const hk = { key: "", ctrl: false, alt: false, cmd: false, shift: false };
+          for (const part of captured.split("+")) {
+            if (part === "ctrl") hk.ctrl = true;
+            else if (part === "option") hk.alt = true;
+            else if (part === "cmd") hk.cmd = true;
+            else if (part === "shift") hk.shift = true;
+            else hk.key = part; // fn
+          }
+          this._commitHotkey(hk);
+          clearInterval(this._capTimer);
+        }
+      } catch {}
+    }, 250);
     const mods = ["ctrl", "control", "shift", "alt", "option", "meta", "command", "cmd", "super"];
     const keyName = (e: KeyboardEvent): string => {
       const c = e.code;
@@ -267,15 +301,10 @@ function describeHotkey(h: HotkeyConfig): string {
       const key = main ? ({ enter: "Enter", space: "Space", tab: "Tab", backspace: "Backspace", esc: "Escape", up: "ArrowUp", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight" } as any)[main] ?? (/^[a-z]$/.test(main) ? "Key" + main.toUpperCase() : /^\d$/.test(main) ? "Digit" + main : main === "option" ? "" : main) : "";
       if (!key && !keys.length) return;
       const hk = { key, ctrl: parts.has("ctrl") || parts.has("control"), alt: parts.has("alt") || parts.has("option"), cmd: parts.has("cmd") || parts.has("command") || parts.has("meta") || parts.has("super"), shift: parts.has("shift") };
-      if (!hk.key && !hk.ctrl && !hk.alt && !hk.cmd && !hk.shift) return;
-      if (this.cfg!.hotkeys?.length) this.cfg!.hotkeys.push(hk);
-      else this.cfg!.hotkeys = [hk];
-      this.hotkeyRecording = false;
-      this.hotkeyHint = "";
+      this._commitHotkey(hk);
       window.removeEventListener("keydown", kd, true);
       window.removeEventListener("keyup", ku, true);
       if (this._hkTimer) clearTimeout(this._hkTimer);
-      this.saveCfg().then(() => invoke("reapply_hotkey").catch((x: any) => (this.error = String(x))));
     };
     const kd = (e: KeyboardEvent) => {
       if (e.repeat) return;
@@ -283,6 +312,8 @@ function describeHotkey(h: HotkeyConfig): string {
       if (e.code === "Escape") {
         this.hotkeyRecording = false; this.hotkeyHint = "";
         if (this._hkTimer) clearTimeout(this._hkTimer);
+        clearInterval(this._capTimer);
+        invoke("stop_key_capture").catch(() => {});
         window.removeEventListener("keydown", kd, true);
         window.removeEventListener("keyup", ku, true);
         return;

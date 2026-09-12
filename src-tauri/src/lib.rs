@@ -216,7 +216,7 @@ pub fn run() {
             recording::recording_start, recording::recording_stop,
             recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::dev_nav,
             commands::open_config_file, commands::open_data_dir,
-            commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
+            commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey, commands::start_key_capture, commands::poll_key_capture, commands::stop_key_capture,
             commands::check_permissions,
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
             settings::get_config, settings::save_config,

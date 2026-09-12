@@ -37,6 +37,31 @@ pub fn update_targets(targets: Vec<String>) {
         .map(|tx| tx.send(targets));
 }
 
+// ── B49 录制模式(闪电说同款): 引擎捕获下一个修饰组合(含 Fn) ──
+static RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 引擎捕获结果(存这里, 前端 poll_key_capture 取走)
+pub static CAPTURED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 进入录制模式: 轮询线程捕获下一个稳定修饰组合(含 Fn)
+pub fn start_recording_mode() {
+    *CAPTURED.lock().unwrap() = None;
+    RECORDING.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn stop_recording_mode() {
+    RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn flags_to_parts(f: u64) -> Vec<&'static str> {
+    let mut v = vec![];
+    if f & CTRL != 0 { v.push("ctrl"); }
+    if f & ALT != 0 { v.push("option"); }
+    if f & CMD != 0 { v.push("cmd"); }
+    if f & 0x0002_0000 != 0 { v.push("shift"); }
+    if f & FN != 0 { v.push("fn"); }
+    v
+}
+
 pub fn spawn(targets: Vec<String>, send: Box<dyn Fn(bool) + Send>) {
     let (tx, rx) = mpsc::channel::<Vec<String>>();
     *TARGETS_TX.lock().unwrap() = Some(tx);
@@ -62,6 +87,27 @@ pub fn spawn(targets: Vec<String>, send: Box<dyn Fn(bool) + Send>) {
             }
             std::thread::sleep(std::time::Duration::from_millis(40));
             let flags = current_modifier_flags();
+            // 录制模式: 捕获稳定组合(连续 3 帧同值非零=120ms, 过滤按键瞬间的中间态)
+            if RECORDING.load(std::sync::atomic::Ordering::SeqCst) {
+                static mut LAST_STABLE: u64 = 0;
+                static mut STABLE_COUNT: u32 = 0;
+                static mut PREV: u64 = 0;
+                unsafe {
+                    if flags == PREV {
+                        STABLE_COUNT += 1;
+                    } else {
+                        PREV = flags;
+                        STABLE_COUNT = 1;
+                    }
+                    if STABLE_COUNT >= 3 && flags != 0 {
+                        let parts = flags_to_parts(flags).join("+");
+                        crate::log::elog(&format!("[flags-tap] 录制捕获: {parts}"));
+                        *CAPTURED.lock().unwrap() = Some(parts);
+                        RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                continue;
+            }
             if flags != last_logged {
                 crate::log::elog(&format!("[flags-tap] flags={flags:#x}"));
                 last_logged = flags;
@@ -91,4 +137,21 @@ extern "C" {
 fn current_modifier_flags() -> u64 {
     // kCGEventSourceStateCombinedSessionState=0(含所有进程; 2=仅本 Session——外部进程修饰读不到)
     unsafe { CGEventSourceFlagsState(0) }
+}
+
+#[cfg(test)]
+mod b49_tests {
+    use super::*;
+    #[test]
+    fn flags_to_parts_covers_all() {
+        assert_eq!(flags_to_parts(CTRL), vec!["ctrl"]);
+        assert_eq!(flags_to_parts(FN), vec!["fn"]);
+        assert_eq!(flags_to_parts(CTRL | ALT | CMD), vec!["ctrl", "option", "cmd"]);
+        assert_eq!(flags_to_parts(FN | 0x0002_0000), vec!["shift", "fn"]);
+    }
+    #[test]
+    fn flags_of_fn_roundtrip() {
+        assert_eq!(flags_of("fn"), Some(FN));
+        assert_eq!(flags_of("ctrl+cmd"), Some(CTRL | CMD));
+    }
 }

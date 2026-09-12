@@ -407,6 +407,22 @@ pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn start_key_capture() {
+    crate::flags_hotkey::start_recording_mode();
+}
+
+/// 引擎捕获结果(Fn/纯修饰组合): Some("fn")/Some("ctrl+cmd")/None(取走即清)
+#[tauri::command]
+pub fn stop_key_capture() {
+    crate::flags_hotkey::stop_recording_mode();
+}
+
+#[tauri::command]
+pub fn poll_key_capture() -> Option<String> {
+    crate::flags_hotkey::CAPTURED.lock().unwrap().take()
+}
+
+#[tauri::command]
 pub fn hud_poll() -> crate::HudSnapshot {
     let mut g = crate::HUD.lock().unwrap();
     let snap = g.clone();
