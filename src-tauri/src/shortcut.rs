@@ -69,6 +69,9 @@ pub struct ShortcutState {
 
 impl ShortcutState {
     /// 启动 Manager 线程(独占 HotkeyManager; crate 自带事件线程, 我们只做命令+分发)
+    /// C57: 用 new()(观察者)而非 new_with_blocking()(拦截者)——blocking 会吞命中热键的
+    /// 事件, 实测(kbd_probe 对照)在特定时序下导致系统键盘状态跟踪被带乱 → 抬起广播
+    /// 偶发缺失 → 纯修饰组合卡"按住"。我们不需要拦截(热键放行无害), 观察者事件流完整。
     pub fn new(send_ctrl: Box<dyn Fn(bool) + Send>) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ManagerCommand>();
         let handle = std::thread::spawn(move || Self::manager_thread(cmd_rx, send_ctrl));
@@ -80,7 +83,7 @@ impl ShortcutState {
 
     fn manager_thread(cmd_rx: Receiver<ManagerCommand>, send_ctrl: Box<dyn Fn(bool) + Send>) {
         crate::log::elog("[shortcut] manager 线程启动");
-        let manager = match HotkeyManager::new_with_blocking() {
+        let manager = match HotkeyManager::new() {
             Ok(m) => m,
             Err(e) => {
                 crate::log::elog(&format!("[shortcut] HotkeyManager 创建失败(需辅助功能): {e}"));
