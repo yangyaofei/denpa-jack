@@ -49,3 +49,6 @@ handy-keys = "0.3.4"
 
 [dev-dependencies]
 tempfile = "3"
+
+[patch.crates-io]
+handy-keys = { path = "../tmp/handy-keys-fork" }
