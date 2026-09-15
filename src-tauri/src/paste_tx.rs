@@ -1,5 +1,5 @@
 // 回执式可靠粘贴(移植自 Handy paste_tx, 619 行全套机制)
-// 核心: 剪贴板发布"懒承诺"(declareTypes:owner:), 目标 app 读取时回调供数据=回执;
+// 核心: 剪贴板发布延迟供数据(lazy promise, declareTypes:owner:), 目标 app 读取时回调供数据=回执;
 //       末次回执后 200ms 安静期才恢复原剪贴板; changeCount/ownership 守卫绝不覆盖用户新复制;
 //       concealment markers 让剪贴板管理器跳过; 新事务先结算旧事务(flush_pending)。
 // 线程模型(Handy 原样): 发布/chord 注入在主线程(promise 回调走主 runloop), 等待在 worker, settle hop 回主线程。
@@ -22,8 +22,6 @@ const QUIET_PERIOD: Duration = Duration::from_millis(200);
 const RESTORE_TIMEOUT: Duration = Duration::from_secs(8);
 /// chord 注入失败: 无合法回执可能, 快速恢复
 const FAILED_INJECTION_TIMEOUT: Duration = Duration::from_millis(500);
-/// 修饰键按住时长(#165: 过快释放会丢 chord)
-const CHORD_HOLD_MS: u64 = 100;
 
 /// 第三方剪贴板管理器(Maccy/Paste)跳过本次内容的约定类型
 const CONCEALMENT_TYPES: [&str; 3] = [
@@ -224,7 +222,7 @@ fn flush_pending(app_handle: &AppHandle) {
     };
     if let Some(previous) = previous {
         // 审计#3(对齐 Handy macos.rs:186): 调用方(reliable_paste)已在主线程,
-        // 同步结算旧事务再快照——异步派发会让快照读到上一条的懒承诺
+        // 同步结算旧事务再快照——异步派发会让快照读到上一条的延迟供数据
         settle(&previous, app_handle);
     }
 }
@@ -304,7 +302,7 @@ pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Resul
     if change_count <= 0 {
         return Err("declareTypes:owner: failed".to_string());
     }
-    crate::log::elog("[paste-tx] 已发布懒承诺(changeCount {change_count})");
+    crate::log::elog("[paste-tx] 已发布延迟供数据(lazy promise)(changeCount {change_count})");
 
     if let Ok(mut st) = state.lock() {
         st.injected_at = Some(Instant::now());

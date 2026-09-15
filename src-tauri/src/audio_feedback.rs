@@ -7,7 +7,6 @@ use objc2_app_kit::{NSSound, NSSoundName};
 pub enum Cue {
     Start,
     End,
-    Error,
 }
 
 impl Cue {
@@ -15,18 +14,17 @@ impl Cue {
         match self {
             Cue::Start => "Tink",
             Cue::End => "Pop",
-            Cue::Error => "Basso",
         }
     }
 }
 
 /// 播放提示音(静默失败: 提示音是增强, 不阻塞主流程)
 pub fn play(cue: Cue) {
-    if let Some(mtm) = MainThreadMarker::new() {
+    if MainThreadMarker::new().is_some() {
         let name = NSSoundName::from_str(cue.sound_name());
-        if let Some(snd) = unsafe { NSSound::soundNamed(&name) } {
+        if let Some(snd) = NSSound::soundNamed(&name) {
             snd.setVolume(0.35);
-            unsafe { snd.play() };
+            snd.play();
         }
     }
 }

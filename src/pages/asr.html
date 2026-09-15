@@ -3,7 +3,7 @@
         <div class="card">
           <div class="row-title">Key 池</div>
           <div class="row-hint">每行一个; 档案 Key 留空时按序取第一个</div>
-          <textarea class="inp" rows="3" x-model="keysText" @change="saveKeys()" placeholder="sk-..."></textarea>
+          <textarea class="inp" rows="3" x-model="keysText" @change="saveCfg()" placeholder="sk-..."></textarea>
         </div>
         <template x-for="p in cfg?.asr_profiles ?? []" :key="p.id">
           <div class="card" :class="{active: cfg?.active_asr_id === p.id}" style="margin-bottom: 8px">
@@ -27,7 +27,7 @@
         <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
         <div class="card">
           <div class="row-title">热词直传预览</div>
-          <div class="row-hint">来自词典(按权重前 100 token 预算), 改词典即时生效</div>
+          <div class="row-hint">来自词典(按权重排序取前 100 token), 改词典即时生效</div>
           <div style="margin-top: 6px">
             <template x-for="w in hotwordsPreview" :key="w"><span class="chip accent" x-text="w"></span></template>
             <span class="dim" x-show="!hotwordsPreview.length">无热词(词典为空或权重为 0)</span>

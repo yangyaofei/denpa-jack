@@ -3,7 +3,7 @@
         <div class="btns" style="margin-bottom: 10px">
           <input class="inp" type="text" placeholder="快速添加词条(回车入库)…" x-model="quickTerm" @keydown.enter="addQuickTerm()" style="flex:1" />
         </div>
-        <p class="hint">变体=常见误识别写法; 护栏=出现则不纠; 权重影响热词直传优先级(拼音模糊仅 3 字以上词条)</p>
+        <p class="hint">变体=常见误识别写法; 护栏=出现该词则不纠错; 权重影响热词直传优先级(拼音模糊仅 3 字以上词条)</p>
         <input class="inp" style="margin-top: 10px" placeholder="搜索词条或变体…" x-model="dictSearch" />
         <table class="tbl" x-show="cfg?.dict?.length">
           <thead><tr><th>词条</th><th>变体</th><th>护栏</th><th>权重</th><th></th></tr></thead>
@@ -33,7 +33,7 @@
             <label>词条<input class="inp" x-model="dictEdit.term" placeholder="正确写法, 如: 谢克数学" /></label>
             <label>变体<span class="row-hint">(逗号分隔)</span>
               <input class="inp" x-model="dictEdit.variants" placeholder="些克数学, 歇课数学" /></label>
-            <label>护栏词<span class="row-hint">(出现则不纠, 逗号分隔)</span>
+            <label>护栏词<span class="row-hint">(出现该词则不纠错, 逗号分隔)</span>
               <input class="inp" x-model="dictEdit.guard_words" /></label>
             <label>权重 (热词直传优先级)
               <input class="inp num" type="number" min="0" max="5" x-model.number="dictEdit.boost" /></label>

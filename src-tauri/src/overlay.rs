@@ -34,7 +34,7 @@ struct NsPoint {
 impl NsPoint {
     /// 唯一构造源 1: 光标
     unsafe fn from_cursor() -> Self {
-        let l = unsafe { NSEvent::mouseLocation() };
+        let l = NSEvent::mouseLocation();
         Self { x: l.x, y: l.y }
     }
     /// 唯一构造源 2: 屏内偏移(屏 frame 也只在模块内读取)
@@ -49,7 +49,7 @@ impl NsPoint {
 
 /// 全仓库唯一的窗口坐标写入点: 一切 setFrameOrigin 只准从这里走
 unsafe fn place(nsw: &NSWindow, p: NsPoint) {
-    unsafe { nsw.setFrameOrigin(objc2_foundation::NSPoint::new(p.x, p.y)) };
+    nsw.setFrameOrigin(objc2_foundation::NSPoint::new(p.x, p.y));
 }
 
 /// 必须主线程: NSWindow 操作约束(与 tray/paste_tx 同一模型)
@@ -73,12 +73,12 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
 
     // 光标位置 + 光标所在屏(全 NS 坐标, y 向上)
     let loc = NsPoint::from_cursor();
-    let screens = unsafe { NSScreen::screens(mtm) };
+    let screens = NSScreen::screens(mtm);
     let target = screens
         .iter()
-        .map(|s| unsafe { s.frame() })
+        .map(|s| s.frame())
         .find(|f| loc.within(*f))
-        .or_else(|| unsafe { NSScreen::mainScreen(mtm) }.map(|s| unsafe { s.frame() }));
+        .or_else(|| NSScreen::mainScreen(mtm).map(|s| s.frame()));
     let Some(f) = target else {
         log::log(app, "hud 定位失败: 无可用显示器");
         return;
@@ -129,7 +129,7 @@ pub fn show_hud(app: &tauri::AppHandle) {
             // 否则用户随后 CmdV 会贴进浮窗
             if w.is_focused().unwrap_or(false) {
                 if let Some(mtm) = objc2::MainThreadMarker::new() {
-                    unsafe { objc2_app_kit::NSApplication::sharedApplication(mtm).deactivate() };
+                    objc2_app_kit::NSApplication::sharedApplication(mtm).deactivate();
                     log::log(app, "hud 抢了焦点, 已交还");
                 }
             }

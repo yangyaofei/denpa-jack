@@ -320,11 +320,12 @@
 - 事件（Rust → 前端）：`asr-partial` / `asr-result` / `asr-error` / `asr-final` / `asr-level` / `hud-state`（recording|transcribing）/ `hud-busy` / `hud-msg` / `recording-error` / `permission-ax` / `config-changed`。
 - AppState：`session`（当前 RecordingSession）/ `last_audio`（最近已保存录音，hud 重试用）/ `engine_mirror`（当前引擎命令通道镜像）。
 - 启动序列（lib.rs run）：panic hook 落盘 → 插件注册（single_instance/opener/clipboard/global_shortcut/autostart）→ Accessory 策略 → 托盘 → AX 权限后台检测 → hud 窗创建定位 → 主快捷键注册（解析失败回落 f5）→ 协调器线程 + 效果线程 → autotest 挂载。
-- 日志（log.rs）：app.log（app_data_dir）+ stderr 双写；`elog` 无 app 句柄时按 HOME 直接拼接路径；panic hook 落盘；release 构建转写内容不落日志。
+- 日志（log.rs）：app.log（`settings::data_dir`，即默认目录或配置的 `data_dir`）+ stderr 双写；`elog` 无 app 句柄时用 `settings::data_dir_no_app()`（取同一份缓存，未预热则按 HOME 推导默认目录）；panic hook 落盘；release 构建转写内容不落日志。
 
 ## 4. 数据与配置
 
 - **config.json**：`~/Library/Application Support/io.github.yangyaofei.denpajack/config.json`（app_config_dir，identifier 决定；bundle id 常量见 `settings::APP_ID`）。
+  - `data_dir: string`：数据根目录（history / recordings / llm_logs / app.log 都在其下）。空 = 默认目录；支持绝对路径、`~/…`、相对默认目录的相对路径。config.json 本身固定在默认目录当锚点。取路径统一走 `settings::data_dir(app)`（缓存 + `save_config` 失效）。
   - `keys: string[]`：API Key 池（档案间共享；档案 Key 留空时按序取第一个）。
   - `llm_profiles`：id / name / provider(deepseek|zhipu) / base_url(空=默认) / model / api_key / prompt(空=内置) / thinking(bool) / effort(low|high|max，默认 low)。
   - `asr_profiles`：id / name / provider(volcengine|zhipu|openai) / api_key / hotwords_enabled。

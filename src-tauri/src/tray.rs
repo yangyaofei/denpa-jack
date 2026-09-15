@@ -11,7 +11,7 @@ use objc2_app_kit::{
     NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem,
     NSStatusBar, NSStatusItem,
 };
-use objc2_foundation::{NSData, ns_string, NSString};
+use objc2_foundation::{NSData, NSString};
 use std::sync::mpsc::Sender;
 
 type TrayTx = Sender<String>;
@@ -31,6 +31,8 @@ define_class!(
 
 pub struct MacTray {
     item: Retained<NSStatusItem>,
+    /// 持有 TrayHandler 防止其被释放: 菜单项的 target 是弱引用, 释放后菜单动作失效
+    #[allow(dead_code)]
     handler: Retained<TrayHandler>,
 }
 

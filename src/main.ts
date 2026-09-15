@@ -11,10 +11,10 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 
-// ── 与 Rust config.rs 对应的类型 ──
+// ── 与 Rust settings.rs 对应的类型(字段以该文件为唯一事实来源) ──
 export interface LlmProfile {
-  id: string; name: string; provider: string; model: string;
-  api_key: string; prompt: string; thinking: boolean;
+  id: string; name: string; provider: string; base_url: string; model: string;
+  api_key: string; prompt: string; thinking: boolean; effort: string;
 }
 export interface AsrProfile {
   id: string; name: string; provider: string; api_key: string; hotwords_enabled: boolean;
@@ -23,19 +23,25 @@ export interface DictEntry {
   term: string; variants: string[]; guard_words: string[]; boost: number;
 }
 export interface RegexRule { pattern: string; replacement: string; }
-/// C55: 绑定集——一动作多键, 唯一真相(旧 hotkey/hotkeys 已废弃)
+export interface HotkeyConfig {
+  key: string; ctrl: boolean; alt: boolean; cmd: boolean; shift: boolean;
+}
+/// C55: 绑定集——一个动作可绑多个键, 单一真源(旧 hotkey/hotkeys 已停止写出)
 export interface BindingSet { current: string[]; }
 export interface Config {
   keys: string[]; llm_profiles: LlmProfile[]; asr_profiles: AsrProfile[];
   dict: DictEntry[]; normalizations: RegexRule[];
   active_llm_id: string; active_asr_id: string;
   bindings: Record<string, BindingSet>;
-  hotkey_key_code: number; use_llm_correction: boolean; clipboard_only: boolean;
+  use_llm_correction: boolean; clipboard_only: boolean;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
-  filler_word_removal: boolean; append_trailing_space: boolean; auto_submit: boolean;
+  keep_in_clipboard: boolean; auto_submit: boolean;
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
-  mic_device_uid: string; mic_priority: string[];
+  extra_tail_ms: number; mic_device_uid: string; mic_priority: string[];
+  data_dir: string;
+  /// 旧字段: 仅兼容旧配置文件读取, 后端 skip_serializing 不再返回
+  hotkey?: HotkeyConfig; hotkeys?: HotkeyConfig[];
 }
 export interface HistoryRecord {
   ts: string; engine: string; raw: string; final_text: string;
@@ -135,6 +141,9 @@ function describeCombo(s: string): string {
   ],
 
   async init() {
+    const _w = window as any;
+    if (_w.__denpaInited) return; // 幂等: 只初始化一次(同窗口重复实例不再重复起轮询)
+    _w.__denpaInited = true;
     const h = location.hash.slice(1);
     if (["general","asr","dict","llm","history","about"].includes(h)) this.section = h;
     window.addEventListener("hashchange", () => {
@@ -142,7 +151,7 @@ function describeCombo(s: string): string {
       if (["general","asr","dict","llm","history","about"].includes(sec)) this.section = sec;
     });
     const hasTauri = !!(window as any).__TAURI_INTERNALS__;
-    if (!hasTauri) return this.initMock();;;;;;;
+    if (!hasTauri) return this.initMock();
     listen("config-changed", async () => {
       const keepSection = this.section;
       await this.loadCfg();
@@ -154,7 +163,6 @@ function describeCombo(s: string): string {
     // 录音开始后刷新"当前输入设备"(运行时事实);
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
     await this.checkPerms();
-    listen<any[]>("permissions", (e) => { this.perms = e.payload || []; });
     this.uiSelftest();
   
     // C46 主窗轮询(组件作用域 this 可用): 800ms 拉版本, 变化才刷新
@@ -221,12 +229,12 @@ function describeCombo(s: string): string {
   weightStars(b: number): string { return this.stars(b); },
   describeCombo,
   hotkeyLabel() {
-    // C54: 顶部文案取 bindings 列表第一个(迁移后唯一真相)
+    // C54: 顶部文案取 bindings 列表第一个(迁移后单一真源)
     const first = this.cfg?.bindings?.["transcribe"]?.current?.[0];
     return first ? describeCombo(first) : "";
   },
 
-  // C54: 绑定列表(bindings.transcribe.current 字符串数组, 唯一真相)
+  // C54: 绑定列表(bindings.transcribe.current 字符串数组, 单一真源)
   hkList(): string[] {
     return this.cfg?.bindings?.["transcribe"]?.current ?? [];
   },
@@ -237,7 +245,7 @@ function describeCombo(s: string): string {
     } catch (x: any) { this.error = String(x); }
   },
   // C55 后端录制(用户定则): begin → 200ms 轮询 current/final → 展示结果 → 添加/取消
-  // 引擎收全键(含 Fn/纯修饰/左右修饰); Esc 取消; 无阻塞无挂死(end 无条件 resume)
+  // 引擎收全键(含 Fn/纯修饰/左右修饰); Esc 取消; 不会阻塞或卡住(end 无条件 resume)
   _capTimer: 0 as any,
   async startHotkeyRecord() {
     if (this.hkCapturing) return;
@@ -589,7 +597,7 @@ function describeCombo(s: string): string {
   },
 
   // headless 自测 mock: 无 Tauri 环境时提供示例数据
-  // 启动自检: 逐个调用只读命令, 断链/异常经 ui_log 落盘(app.log 可查)——交付前必看
+  // 启动自检: 逐个调用只读命令, 命令失败/异常经 ui_log 落盘(app.log 可查)——交付前必看
   async uiSelftest() {
     const checks: [string, () => Promise<unknown>][] = [
       ["ping", () => invoke("ping")],
@@ -653,13 +661,14 @@ function describeCombo(s: string): string {
         { term: "谢克数学", variants: ["些克数学", "歇课数学"], guard_words: [], boost: 3 },
         { term: "腾讯云", variants: ["腾讯营"], guard_words: [], boost: 2 },
       ], normalizations: [], active_llm_id: "l1", active_asr_id: "a1",
-      hotkey_key_code: 96, use_llm_correction: false, clipboard_only: false,
+      use_llm_correction: false, clipboard_only: false,
       activation: "hold", audio_feedback: true, restore_clipboard: true,
-      filler_word_removal: false, append_trailing_space: false, auto_submit: false,
+      keep_in_clipboard: false, auto_submit: false,
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
-      mic_device_uid: "", mic_priority: ["Wireless Mic Rx (DJI)"],
-      hotkey: { key: "f5", ctrl: false, alt: false, cmd: false, shift: false },
+      extra_tail_ms: 0, mic_device_uid: "", mic_priority: ["Wireless Mic Rx (DJI)"],
+      data_dir: "",
+      bindings: { transcribe: { current: ["f5"] } },
     };
     this.autostartOn = false;
     this.keysText = "sk-demo";
@@ -670,12 +679,6 @@ function describeCombo(s: string): string {
   },
 
   // 主界面切换器
-  toggleRec() { return this.toggleRecording(); },
-  async saveKeys() {
-    if (!this.cfg) return;
-    this.cfg.keys = this.keysText.split(/[,\n]/).map((x: string) => x.trim()).filter(Boolean);
-    await this.saveCfg();
-  },
   async openSettings() {
     this.section = "general";
   },
@@ -709,7 +712,7 @@ function describeCombo(s: string): string {
   activeMicName(): string {
     return this.activeMic?.name ?? "自动(默认麦克风)";
   },
-  // 详情面板: 把该条文本放进词典快加框(切到设置→词典页)
+  // 详情面板: 把该条文本放进词典快速添加框(切到词典页)
   addTermFromHist(h: any) {
     this.quickTerm = (h.final_text || h.raw || "").slice(0, 40);
     this.section = "dict";
@@ -743,6 +746,12 @@ for (const [name, html] of Object.entries(pageHtml)) {
   const slot = document.querySelector(`[data-page="${name}"]`);
   if (slot) { slot.innerHTML = html; slot.removeAttribute("data-page"); }
 }
-Alpine.start();
+// 实测(2026-09-15): 同一个窗口里 app() 被求值两次 → 两个组件实例, 轮询与 [ui] 日志成对出现。
+// 第二次实例的来源没有定位到, 这里加两道幂等守卫: 每个窗口只启动一次 Alpine, 且只初始化一次。
+const _win = window as any;
+if (!_win.__denpaAlpineStarted) {
+  _win.__denpaAlpineStarted = true;
+  Alpine.start();
+}
 
 

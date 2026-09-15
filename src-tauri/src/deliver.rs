@@ -1,4 +1,4 @@
-// 交付层: AX 直写光标(前后对比防静默失败) + FocusLock 防串应用 + 权限检测
+// 交付层: AX 直写光标(前后对比防静默失败) + FocusLock 防止文本贴到其它应用 + 权限检测
 // 移植自 Swift OutputAndHistory.swift
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::dictionary::CFDictionary;

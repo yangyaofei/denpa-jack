@@ -45,7 +45,6 @@ pub async fn run_openai_session(
     }
 
     let mut transcript = String::new(); // 累积(VAD 分段各自 completed)
-    let mut done = false;
     let mut last_partial = String::new();
 
     loop {
@@ -56,9 +55,6 @@ pub async fn run_openai_session(
                     break;
                 }
                 Some(Cmd::Feed(pcm16)) => {
-                    if done {
-                        continue;
-                    }
                     // 16k → 24k 上采样(线性插值, i16le)
                     let up = upsample_16k_to_24k(&pcm16);
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&up);
@@ -66,10 +62,6 @@ pub async fn run_openai_session(
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string().into())).await;
                 }
                 Some(Cmd::Finish) => {
-                    if done {
-                        continue;
-                    }
-                    done = true;
                     crate::log::elog("[openai-rt] finish: 按键定则——立即结算");
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(
                         json!({"type": "input_audio_buffer.commit"}).to_string().into())).await;
@@ -99,7 +91,7 @@ pub async fn run_openai_session(
                     } else {
                         last_partial
                     };
-                    settle(&emit, &t);
+                    crate::engines::settle(&emit, &t);
                     let _ = sink.close().await;
                     break;
                 }
@@ -107,12 +99,9 @@ pub async fn run_openai_session(
             msg = stream.next() => {
                 let Some(Ok(m)) = msg else {
                     // 契约对齐 doubao: 断连必须恰好一次 Result|Error。
-                    // Finish 分支自己收尾后 break(done=true), 此处到达即未 Finish 的中途断连
-                    if !done {
-                        done = true;
-                        crate::log::elog("[openai-rt] 中途断连(未 Finish): 报错");
-                        emit(AsrEvent::Error("连接中断, 请重试".into()));
-                    }
+                    // Finish 分支自己收尾后 break, 此处到达即未 Finish 的中途断连
+                    crate::log::elog("[openai-rt] 中途断连(未 Finish): 报错");
+                    emit(AsrEvent::Error("连接中断, 请重试".into()));
                     break;
                 };
                 let tokio_tungstenite::tungstenite::Message::Text(t) = m else { continue };
@@ -136,24 +125,13 @@ pub async fn run_openai_session(
                     "error" => {
                         let m = v["error"]["message"].as_str().unwrap_or("未知错误");
                         crate::log::elog(&format!("[openai-rt] error: {m}"));
-                        if !done {
-                            done = true;
-                            emit(AsrEvent::Error(m.to_string()));
-                        }
+                        emit(AsrEvent::Error(m.to_string()));
                         break;
                     }
                     _ => {}
                 }
             }
         }
-    }
-}
-
-fn settle(emit: &impl Fn(AsrEvent), text: &str) {
-    if text.trim().is_empty() {
-        emit(AsrEvent::Error("没听清(转写为空)".into()));
-    } else {
-        emit(AsrEvent::Result(text.to_string()));
     }
 }
 

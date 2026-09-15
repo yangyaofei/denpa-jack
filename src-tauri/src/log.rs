@@ -2,12 +2,11 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::Mutex;
-use tauri::Manager;
 
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn app_log_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    let dir = app.path().app_data_dir().ok()?;
+    let dir = crate::settings::data_dir(app);
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -30,12 +29,11 @@ pub fn log(app: &tauri::AppHandle, msg: &str) {
 pub fn elog(msg: &str) {
     eprintln!("[vm] {msg}");
     use std::io::Write;
-    // C53: 与 log() 共用 LOG_LOCK——否则多线程并发 append 撕行(实测 "[diag] ...[ts] setup done" 互相嵌入,
+    // C53: 与 log() 共用 LOG_LOCK——否则多线程并发 append 会让日志行交错(实测 "[diag] ...[ts] setup done" 两行互相嵌入,
     // grep 按"key-engine"检索时整行丢失, 造成"日志没打"的误判)
     let _g = LOG_LOCK.lock().unwrap();
-    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join("Library/Application Support")
-        .join(crate::settings::APP_ID);
+    // 无 app 句柄: 走 settings 的同一份数据目录缓存(启动时已预热), 保证 data_dir 改了 diag 日志也跟着走
+    let dir = crate::settings::data_dir_no_app();
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)

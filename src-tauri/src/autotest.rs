@@ -1,6 +1,7 @@
 // 自测通道(无头, 对齐 Handy debug 思路): 显式环境变量激活
-//   VOICEMAC_AUTOTEST_FILE=<wav>  文件回放全链路(clip_only 强制, 不碰用户焦点)
+//   VOICEMAC_AUTOTEST_FILE=<wav>  文件回放全链路(走真实交付路径, 自建会话不碰真实麦克风)
 //   VOICEMAC_AUTOTEST=e2e         真实麦克风录音 2.5s 全链路
+//   VOICEMAC_AUTOTEST=ui          数据链验证(页面调用函数 vs 磁盘真值)
 use tauri::{AppHandle, Manager};
 
 use crate::doubao;
@@ -24,7 +25,7 @@ pub fn maybe_spawn(app: &AppHandle) {
     }
 }
 
-/// 文件回放: 强制 clipboard_only → 录音会话 → 按真实节奏喂 wav PCM → Finish → 等交付
+/// 文件回放: 录音会话 → 按真实节奏喂 wav PCM → Finish → 等交付
 fn run_file(app: tauri::AppHandle, wavpath: String) {
     std::thread::sleep(std::time::Duration::from_millis(1200));
     log::log(&app, "AUTOTEST-FILE: begin(文件回放=唯一输入源; 自建会话不碰真实麦克风)");
@@ -75,15 +76,6 @@ fn send_key(pressed: bool) {
     crate::send_ctrl(pressed);
 }
 
-/// 交付后验证: 读剪贴板与期望文本对比, 结果落盘
-fn verify_clipboard(app: &tauri::AppHandle, expect: &str) {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    let got = app.clipboard().read_text().ok().unwrap_or_default();
-    let pass = !expect.is_empty() && (got.trim() == expect.trim() || !got.trim().is_empty());
-    log::log(app, &format!("VERIFY: 期望[{}] 实得[{}] => {}", expect, got, if pass { "PASS" } else { "FAIL" }));
-}
-
 /// 录音 e2e: 真实麦克风 2.5s → 转写 → 交付 → 退出
 fn run_e2e(app: tauri::AppHandle) {
     std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -93,21 +85,21 @@ fn run_e2e(app: tauri::AppHandle) {
     std::thread::sleep(std::time::Duration::from_millis(600));
     {
         let app2 = app.clone();
-        let ok = app.run_on_main_thread(move || unsafe {
+        let ok = app.run_on_main_thread(move || {
             use objc2_app_kit::{NSEvent, NSScreen, NSWindow};
             use objc2_foundation::MainThreadMarker;
             let Some(mtm) = MainThreadMarker::new() else { return };
             let Some(w) = app2.get_webview_window("hud") else { return };
             let Ok(p) = w.ns_window() else { return };
             let nsw: &NSWindow = unsafe { &*(p.cast::<NSWindow>()) };
-            let frame = unsafe { nsw.frame() };
-            let loc = unsafe { NSEvent::mouseLocation() };
-            let screens = unsafe { NSScreen::screens(mtm) };
+            let frame = nsw.frame();
+            let loc = NSEvent::mouseLocation();
+            let screens = NSScreen::screens(mtm);
             let cursor_screen = screens.iter().any(|sc| {
-                let f = unsafe { sc.frame() };
+                let f = sc.frame();
                 loc.x >= f.origin.x && loc.x < f.origin.x + f.size.width
                     && loc.y >= f.origin.y && loc.y < f.origin.y + f.size.height
-            }).then(|| screens.iter().map(|sc| unsafe { sc.frame() }).collect::<Vec<_>>());
+            }).then(|| screens.iter().map(|sc| sc.frame()).collect::<Vec<_>>());
             let Some(all) = cursor_screen else { return };
             let hit = all.iter().any(|f| {
                 frame.origin.x >= f.origin.x - 2.0
@@ -141,7 +133,7 @@ fn run_e2e(app: tauri::AppHandle) {
 /// 与磁盘真值(history.jsonl 行数/config.json dict 数)断言比对
 fn run_ui_chain(app: tauri::AppHandle) {
     std::thread::sleep(std::time::Duration::from_millis(1200));
-    let dir = app.path().app_data_dir().unwrap();
+    let dir = crate::settings::data_dir(&app);
     // 1) 历史链: 函数返回 vs jsonl 行数
     let jsonl = dir.join("history.jsonl");
     let disk_lines = std::fs::read_to_string(&jsonl)

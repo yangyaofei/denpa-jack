@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryRecord {
@@ -23,13 +22,13 @@ pub struct HistoryRecord {
 }
 
 pub fn history_path(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app.path().app_data_dir().expect("app_data_dir 不可用");
+    let dir = crate::settings::data_dir(app);
     fs::create_dir_all(&dir).ok();
     dir.join("history.jsonl")
 }
 
 pub fn recordings_dir(app: &tauri::AppHandle) -> PathBuf {
-    let dir = app.path().app_data_dir().expect("app_data_dir 不可用");
+    let dir = crate::settings::data_dir(app);
     let r = dir.join("recordings");
     fs::create_dir_all(&r).ok();
     r
@@ -110,7 +109,8 @@ pub fn recent(app: &tauri::AppHandle, limit: usize) -> Vec<HistoryRecord> {
     out
 }
 
-/// 保留最近 N 个 wav(按文件名排序=时间序)——可测核心
+/// 保留最近 N 个 wav(按文件名排序=时间序)——可测核心(仅测试使用)
+#[cfg(test)]
 pub fn prune_wavs_in(dir: &std::path::Path, keep: usize) {
     let mut wavs: Vec<std::path::PathBuf> = fs::read_dir(dir)
         .map(|rd| {
@@ -130,7 +130,7 @@ pub fn prune_wavs_in(dir: &std::path::Path, keep: usize) {
 
 /// 保留最近 N 个录音, 删多余
 fn history_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    crate::settings::data_dir(app)
 }
 
 pub fn prune_recordings(app: &tauri::AppHandle, keep: usize) {

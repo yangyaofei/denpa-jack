@@ -220,16 +220,83 @@ pub struct Config {
     pub overlay_position: String,
     #[serde(default = "default_history_limit")]
     pub history_limit: u64,
+    /// 数据目录：history / recordings / llm_logs / app.log 的根目录。
+    /// 空 = 默认目录（`~/Library/Application Support/io.github.yangyaofei.denpajack`）。
+    /// 支持绝对路径、以 `~/` 开头、或相对默认目录的相对路径。
+    #[serde(default)]
+    pub data_dir: String,
 
 }
 
-pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
+/// 默认数据目录（也是 config.json 的固定位置，作为一切路径的锚点）
+pub fn base_dir(app: &tauri::AppHandle) -> PathBuf {
     let dir = app
         .path()
         .app_config_dir()
         .expect("app_config_dir 不可用");
     fs::create_dir_all(&dir).ok();
-    dir.join("config.json")
+    dir
+}
+
+/// 解析数据目录：配置为空用默认目录；`~/x` 展开为家目录；相对路径相对默认目录
+pub fn resolve_data_dir(base: &std::path::Path, configured: &str) -> PathBuf {
+    let t = configured.trim();
+    if t.is_empty() {
+        return base.to_path_buf();
+    }
+    let expanded = match t.strip_prefix("~/") {
+        Some(rest) => match std::env::var("HOME") {
+            Ok(h) => format!("{h}/{rest}"),
+            Err(_) => t.to_string(),
+        },
+        None => t.to_string(),
+    };
+    let p = PathBuf::from(expanded);
+    if p.is_absolute() {
+        p
+    } else {
+        base.join(p)
+    }
+}
+
+static DATA_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// 配置变更后必须清缓存（否则数据仍写到旧目录）
+pub fn invalidate_data_dir_cache() {
+    *DATA_ROOT.lock().unwrap() = None;
+}
+
+/// 数据根目录（带缓存；save_config 时失效）。history/recordings/llm_logs/app.log 都从这里派生。
+pub fn data_dir(app: &tauri::AppHandle) -> PathBuf {
+    if let Some(p) = DATA_ROOT.lock().unwrap().clone() {
+        return p;
+    }
+    let base = base_dir(app);
+    let configured = get_config(app.clone())
+        .map(|c| c.data_dir)
+        .unwrap_or_default();
+    let p = resolve_data_dir(&base, &configured);
+    fs::create_dir_all(&p).ok();
+    *DATA_ROOT.lock().unwrap() = Some(p.clone());
+    p
+}
+
+/// 没有 app handle 的地方（如 LLM 落盘）取同一份目录：缓存已由启动流程预热；
+/// 未预热时按家目录推导默认目录。
+pub fn data_dir_no_app() -> PathBuf {
+    if let Some(p) = DATA_ROOT.lock().unwrap().clone() {
+        return p;
+    }
+    let base = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join("Library/Application Support").join(APP_ID))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    fs::create_dir_all(&base).ok();
+    *DATA_ROOT.lock().unwrap() = Some(base.clone());
+    base
+}
+
+pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
+    base_dir(app).join("config.json")
 }
 
 
@@ -251,7 +318,7 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
     let mut cfg = match serde_json::from_str::<Config>(&raw) {
         Ok(c) => c,
         Err(e) => {
-            // 按字段救活(Handy salvage): 一个坏字段不能毁掉整个配置
+            // 按字段恢复(Handy salvage): 一个坏字段不能毁掉整个配置
             let val: serde_json::Value = match serde_json::from_str(&raw) {
                 Ok(v) => v,
                 Err(_) => return Err(format!("config 解析失败: {e}")),
@@ -373,6 +440,8 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
     // 配置变更可能改麦克风选择(优先级/指定设备): 必须清解析缓存, 否则仍用旧设备
     // (此前 MIC_CACHE 只在 open 失败时失效 → 改优先级后实际仍录旧麦, 用户报“设了 USB 优先却还用内置麦”)
     crate::recording::invalidate_mic_cache();
+    // 配置变更可能改数据目录: 同样必须清缓存, 否则新数据仍写到旧目录
+    invalidate_data_dir_cache();
     let p = config_path(&app);
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
@@ -472,10 +541,6 @@ fn default_shortcut_activation() -> String {
     "hold".into()
 }
 
-fn default_hold_threshold_ms() -> u64 {
-    300
-}
-
 fn default_true() -> bool {
     true
 }
@@ -549,6 +614,42 @@ mod tests {
 #[cfg(test)]
 mod gap_tests {
     use super::*;
+
+    #[test]
+    fn resolve_data_dir_empty_uses_base() {
+        let base = std::path::Path::new("/tmp/base");
+        assert_eq!(resolve_data_dir(base, ""), base.to_path_buf());
+        assert_eq!(resolve_data_dir(base, "   "), base.to_path_buf());
+    }
+
+    #[test]
+    fn resolve_data_dir_absolute_and_relative() {
+        let base = std::path::Path::new("/tmp/base");
+        assert_eq!(
+            resolve_data_dir(base, "/Volumes/Ext/denpa"),
+            std::path::PathBuf::from("/Volumes/Ext/denpa")
+        );
+        assert_eq!(
+            resolve_data_dir(base, "data2"),
+            std::path::PathBuf::from("/tmp/base/data2")
+        );
+    }
+
+    #[test]
+    fn resolve_data_dir_expands_home() {
+        let base = std::path::Path::new("/tmp/base");
+        let home = std::env::var("HOME").expect("HOME 应存在");
+        assert_eq!(
+            resolve_data_dir(base, "~/DenpaData"),
+            std::path::PathBuf::from(format!("{home}/DenpaData"))
+        );
+    }
+
+    #[test]
+    fn config_without_data_dir_defaults_to_empty() {
+        let cfg: Config = serde_json::from_str("{}").expect("空对象应可解析");
+        assert_eq!(cfg.data_dir, "");
+    }
 
     #[test]
     fn normalize_key_whitespace_and_case() {

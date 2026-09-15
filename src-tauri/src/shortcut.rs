@@ -52,10 +52,6 @@ enum ManagerCommand {
         hotkey_str: String,
         response: Sender<Result<(), String>>,
     },
-    Unregister {
-        hotkey_str: String,
-        response: Sender<Result<(), String>>,
-    },
     UnregisterAll {
         response: Sender<Result<(), String>>,
     },
@@ -70,8 +66,8 @@ pub struct ShortcutState {
 impl ShortcutState {
     /// 启动 Manager 线程(独占 HotkeyManager; crate 自带事件线程, 我们只做命令+分发)
     /// C57: 用 new()(观察者)而非 new_with_blocking()(拦截者)——blocking 会吞命中热键的
-    /// 事件, 实测(kbd_probe 对照)在特定时序下导致系统键盘状态跟踪被带乱 → 抬起广播
-    /// 偶发缺失 → 纯修饰组合卡"按住"。我们不需要拦截(热键放行无害), 观察者事件流完整。
+    /// 事件, 实测(kbd_probe 对照)在特定时序下导致系统键盘状态跟踪错乱 → 抬起事件偶发缺失
+    /// → 纯修饰组合表现为持续按住。我们不需要拦截(热键放行无害), 观察者事件流完整。
     pub fn new(send_ctrl: Box<dyn Fn(bool) + Send>) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ManagerCommand>();
         let handle = std::thread::spawn(move || Self::manager_thread(cmd_rx, send_ctrl));
@@ -117,21 +113,6 @@ impl ShortcutState {
                     };
                     let _ = response.send(r);
                 }
-                Ok(ManagerCommand::Unregister { hotkey_str, response }) => {
-                    let r = id_to_str
-                        .iter()
-                        .find(|(_, s)| *s == &hotkey_str)
-                        .map(|(id, _)| *id)
-                        .ok_or_else(|| format!("未注册: {hotkey_str}"))
-                        .and_then(|id| {
-                            manager.unregister(id).map_err(|e| format!("注销失败: {e}"))
-                        });
-                    if r.is_ok() {
-                        id_to_str.retain(|_, s| s != &hotkey_str);
-                        crate::log::elog(&format!("[shortcut] 注销: {hotkey_str}"));
-                    }
-                    let _ = response.send(r);
-                }
                 Ok(ManagerCommand::UnregisterAll { response }) => {
                     // crate 无 unregister_all——按映射逐个注销
                     let mut r = Ok(());
@@ -159,10 +140,6 @@ impl ShortcutState {
                 hotkey_str,
                 response: tx,
             },
-            ManagerCommand::Unregister { hotkey_str, .. } => ManagerCommand::Unregister {
-                hotkey_str,
-                response: tx,
-            },
             ManagerCommand::UnregisterAll { .. } => ManagerCommand::UnregisterAll { response: tx },
             ManagerCommand::Shutdown => ManagerCommand::Shutdown,
         };
@@ -178,13 +155,6 @@ impl ShortcutState {
         self.send_cmd(ManagerCommand::Register {
             hotkey_str: hotkey_str.to_string(),
             response: mpsc::channel().0, // 占位, send_cmd 内部重包
-        })
-    }
-
-    pub fn unregister(&self, hotkey_str: &str) -> Result<(), String> {
-        self.send_cmd(ManagerCommand::Unregister {
-            hotkey_str: hotkey_str.to_string(),
-            response: mpsc::channel().0,
         })
     }
 

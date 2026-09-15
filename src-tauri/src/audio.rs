@@ -22,7 +22,7 @@ pub struct Recording {
     shared: Arc<Mutex<Shared>>,
     level: Arc<std::sync::atomic::AtomicU32>, // RMS 0-1000 定点(浮窗音量条)
     /// 会话取消令牌: 录音会话的闭包载体——B5 定时器等附属物持有它,
-    /// 会话结束(停止/中止)置位, 附属物自知作废, 无全局状态
+    /// 会话结束(停止/中止)置位, 附属物随之失效, 无全局状态
     pub cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -265,7 +265,7 @@ mod gap_tests {
         let (pcm, _) = resample_to_16k(&mono, 16000.0, 0.0);
         for i in 0..pcm.len() / 2 {
             let v = i16::from_le_bytes([pcm[i * 2], pcm[i * 2 + 1]]);
-            assert!(v <= 32767);
+            assert_eq!(v.abs(), i16::MAX, "超幅样本应被钳到满幅");
         }
     }
 

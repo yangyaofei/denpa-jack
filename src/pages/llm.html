@@ -1,7 +1,7 @@
       <section x-show="section === 'llm'" class="page">
         <h1>大模型</h1>
 
-        <p class="hint">润色档案; 系统提示词留空使用内置润色 prompt</p>
+        <p class="hint">润色档案; 系统提示词留空时使用内置提示词</p>
         <template x-for="p in cfg?.llm_profiles ?? []" :key="p.id">
           <div class="card profile" :class="{active: p.id === cfg?.active_llm_id}">
             <div class="row">

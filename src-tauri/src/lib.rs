@@ -90,7 +90,7 @@ pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value
 pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 
 pub fn run() {
-    // panic 落盘(打包版 stderr 不可见, 线程静默死亡=日志戛然而止的元凶)
+    // panic 落盘(打包版 stderr 不可见; 线程静默退出会让日志中断, 无法事后定位)
     std::panic::set_hook(Box::new(|info| {
         crate::log::elog(&format!("[panic] {info}"));
     }));
@@ -112,6 +112,8 @@ pub fn run() {
         .setup(|app| {
             log::log(app.handle(), "setup begin");
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // 菜单栏常驻, 不占 Dock
+            // 预热数据目录缓存（history/recordings/llm_logs/app.log 都从它派生）
+            log::log(app.handle(), &format!("数据目录: {}", crate::settings::data_dir(app.handle()).display()));
             if let Err(e) = mic_watch::start() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
             }
@@ -195,7 +197,6 @@ pub fn run() {
                 }
             });
             // C51 多热键: 全部注册, 任一触发
-            let app_hk = app.handle().clone();
             // C54 统一引擎(Handy 同构): handy-keys crate 单通道注册+触发, 无双注册
             shortcut::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;

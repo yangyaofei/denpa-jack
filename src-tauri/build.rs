@@ -4,7 +4,6 @@ fn main() {
     println!("cargo:rerun-if-changed=src/");
     // 写坐标(改变窗口位置)只准 overlay.rs; 读坐标允许验证者(autotest 断言)
     let overlay_only = ["setFrameOrigin", "CGDisplayBounds", "CGGetDisplaysWithPoint", "cursor_position"];
-    let overlay_or_autotest = ["mouseLocation"];
     let entries = std::fs::read_dir("src").expect("read src");
     for e in entries.flatten() {
         let path = e.path();

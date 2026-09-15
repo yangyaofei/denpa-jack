@@ -1,4 +1,4 @@
-// 词典纠错 headless 测试: cargo run --bin dict_test
+// 词典纠错 headless 测试: cargo run --example dict_test
 use denpa_jack_lib::dict::TextCorrector;
 use denpa_jack_lib::settings::DictEntry;
 

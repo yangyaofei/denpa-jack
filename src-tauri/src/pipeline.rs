@@ -15,9 +15,6 @@ pub struct SessionHandoff {
     pub gen: u64,
 }
 
-/// 供 hud 重试(retry_last): 最近一次已保存录音的路径
-pub static LAST_AUDIO: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
 /// 转写中取消: abort 时写入被放弃的会话代, 交付前校验(Handy cancel_generation 等价)
 pub static CANCELLED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static SESSION_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -211,7 +208,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         "[deliver] ax_trusted={ax_ok} focus_bundle={:?} focus_ok={focus_ok}",
         focus.bundle
     ));
-    // 焦点是本 app(设置窗等) → 只复制, 自贴无意义
+    // 焦点是本 app(设置窗等) → 只复制, 粘贴到自身无意义
     if focus.bundle.as_deref() == Some(crate::settings::APP_ID) {
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
         return Ok("copied-self".into());
@@ -232,11 +229,11 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("写剪贴板失败: {e}"))?;
         return Ok("copied".into());
     }
-    // 3) 焦点已变 → 不粘贴防串应用(B10)
+    // 3) 焦点已变 → 不粘贴, 防止把文本贴到其它应用(B10)
     if !focus.still_valid() {
         return Ok("focus-changed-copied-only".into());
     }
-    // 4) 回执式可靠粘贴(Handy paste_tx 全套): 懒承诺+读取回执+安静期恢复+changeCount 守卫
+    // 4) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
     let text2 = text.to_string();
     let r = app.run_on_main_thread(move || {
         let _ = crate::paste_tx::reliable_paste(&text2, &app2_h, &cfg_h);
@@ -261,7 +258,7 @@ pub fn now_local_pub() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    // 本地时间近似(UTC+8 仅示意; 记录用毫秒更稳, 这里格式化 UTC)
+    // UTC+8 近似格式化(自实现, 不依赖时区库)
     let days = secs / 86400;
     let rem = secs % 86400;
     let (h, m, s) = (rem / 3600 + 8, (rem % 3600) / 60, rem % 60); // UTC+8
@@ -281,12 +278,4 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-fn cfg_auto_submit(app: &tauri::AppHandle) -> bool {
-    crate::settings::get_config(app.clone()).map(|c| c.auto_submit).unwrap_or(false)
-}
-
-fn press_enter() {
-    let _ = crate::deliver::cg_cmd_key(0x24); // kVK_Return
 }

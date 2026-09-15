@@ -52,7 +52,11 @@ CI 需要的仓库凭据（Secrets）与发版流程见 `docs/CI-CD.md`。
 4. **配置新增字段必须 `#[serde(default)]`**：否则旧配置读入即清空用户数据。
 5. **前端与后端同步 = 事件 + 轮询兜底**：不要新增"只发事件"的同步路径（`docs/SYNC.md`）。
 6. **权限只有两项**：麦克风 + 辅助功能；**不需要"输入监控"**（键盘层是 handy-keys，权限门槛=辅助功能）。
-7. **数据目录随 bundle id**：`io.github.yangyaofei.denpajack`（改 id 会重置权限，`src-tauri/src/settings.rs` 的 `APP_ID` 是单一来源）。
+7. **数据目录随 bundle id**：默认 `~/Library/Application Support/io.github.yangyaofei.denpajack`
+   （改 id 会重置权限，`src-tauri/src/settings.rs` 的 `APP_ID` 是单一来源）；
+   数据根目录可用配置 `data_dir` 改（history / recordings / llm_logs / app.log 都跟着走，
+   `config.json` 固定在默认位置当锚点）。取路径一律走 `settings::data_dir(app)`（带缓存，
+   `save_config` 时失效），不要自己拼 `app_data_dir()`。
 8. **不要用脚本批量替换源码**：逐处 `edit`，改完看编译输出与日志；`tmp/` 下的本地脚本不参与构建。
 9. **提交信息写清"问题 / 发现过程 / 方案 / 实现 / 总结"**：本项目问题多来自真机行为，只写 "fix bug" 会丢失上下文。
 

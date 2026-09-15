@@ -23,7 +23,11 @@ pub type HandoffBox = Arc<Mutex<Option<crate::pipeline::SessionHandoff>>>;
 /// 引擎收尾等待窗口(松开后等服务端最终结果的兜底上限)——全引擎统一
 pub const FINALIZE_TIMEOUT_SECS: u64 = 30;
 
-/// 结算契约(恰好一次): 空文本=没听清错误, 非空=Result——三引擎共用, 只写一次
+/// 豆包收尾等待窗口: Finish 后此秒数内无最终帧则用已收文本结算
+pub const DOUBAO_FINALIZE_TIMEOUT_SECS: u64 = 3;
+
+/// 结算契约(恰好一次): 空文本=没听清错误, 非空=Result。
+/// OpenAI Realtime 收尾调用此处; doubao 因需记录文本长度日志保留本地实现(见 doubao::settle)。
 pub fn settle(emit: &impl Fn(doubao::AsrEvent), text: &str) {
     if text.trim().is_empty() {
         emit(doubao::AsrEvent::Error("没听清(转写为空)".into()));
@@ -54,8 +58,8 @@ pub fn spawn_session(
             let (tag, payload) = match ev {
                 doubao::AsrEvent::Partial(t) => ("asr-partial", t),
                 doubao::AsrEvent::Result(t) => {
-                    // C36: 交付管线是同步阻塞活(AX/CGEvent/文件IO), 专用线程跑;
-                    // FinishGuard 等价: panic 也兜底 asr-final, HUD 不卡死(Handy actions.rs:36-48)
+                    // C36: 交付管线是同步阻塞工作(AX/CGEvent/文件IO), 放到专用线程执行;
+                    // FinishGuard 等价: panic 时也兜底发 asr-final, HUD 不会一直停在等待态(Handy actions.rs:36-48)
                     let ho = handoff.lock().unwrap().take();
                     let app2 = app.clone();
                     let t2 = t.clone();

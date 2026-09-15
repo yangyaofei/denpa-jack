@@ -24,16 +24,15 @@
             </div>
           </template>
         </div>
+
         <div class="card">
           <div class="row">
             <div>
               <div class="row-title" x-text="`按住 ${hotkeyLabel()} 说话`"></div>
               <div class="row-hint">全局快捷键: 按住录音, 松开转写并粘贴</div>
             </div>
-            <button class="rec-btn" @click="toggleRec()" x-text="recording ? '■ 停止' : '试音'"></button>
+            <button class="rec-btn" @click="toggleRecording()" x-text="recording ? '■ 停止' : '试音'"></button>
           </div>
-        </div>
-        <div class="card">
           <div class="row">
             <div>
               <div class="row-title">触发模式</div>
@@ -45,90 +44,114 @@
             </select>
           </div>
         </div>
+
         <div class="card">
           <div class="row-title" style="padding:0 2px">录音快捷键(以下全部生效)</div>
-            <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点 + 录制新组合(按键后松开即添加, Esc 取消); 点 × 删除</div>
-            <div class="hk-list">
-              <template x-for="(h, idx) in hkList()" :key="h">
-                <div class="hk-item">
-                  <span class="hk-name" x-text="describeCombo(h)"></span>
-                  <button class="hk-del" @click="removeHotkey(h)">×</button>
-                </div>
-              </template>
-            </div>
-            <button class="hk-add" @click="startHotkeyRecord()" x-show="!hkCapturing">+ 录制新组合</button>
-            <div class="hk-capture" x-show="hkCapturing">
-              <div class="hk-live" x-text="hkFinal ? ('录到: ' + describeCombo(hkFinal)) : (hkCurrent ? ('当前: ' + describeCombo(hkCurrent)) : '按下组合键, 全部松开后确认(Esc 取消)…')"></div>
-              <template x-if="hkFinal">
-                <div class="btns end">
-                  <button class="mini" @click="cancelHotkey()">取消</button>
-                  <button class="mini primary" @click="confirmHotkey()">添加</button>
-                </div>
-              </template>
-            </div>
-            <div class="row-hint" style="padding:6px 2px 0">快捷添加常用 Fn 组合(也可直接录制):</div>
-            <div style="display:flex; gap:6px; margin-top:4px">
-              <button class="mini" @click="addFnPreset('fn')">+ fn</button>
-              <button class="mini" @click="addFnPreset('fn+ctrl')">+ fn+ctrl</button>
-              <button class="mini" @click="addFnPreset('fn+cmd')">+ fn+cmd</button>
-              <button class="mini" @click="addFnPreset('fn+space')">+ fn+space</button>
-            </div>
-          </div>
-        <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
-        <div class="card">
-          <div class="row-title">热词直传预览</div>
-          <div class="row-hint">来自词典(按权重前 100 token 预算), 改词典即时生效</div>
-          <div style="margin-top: 6px">
-            <template x-for="w in hotwordsPreview" :key="w"><span class="chip accent" x-text="w"></span></template>
-            <span class="dim" x-show="!hotwordsPreview.length">无热词(词典为空或权重为 0)</span>
-          </div>
-        </div>
-        <div class="card">
-          <div class="row-title">当前输入设备(实际使用)</div>
-          <div class="row-hint" x-text="activeMic ? activeMic[1] : '开始一次录音后显示'"></div>
-        </div>
-        <div class="card">
-          <div class="row-title">麦克风优先级(按序取第一个在线的设备)</div>
-          <div class="mini-table">
-            <template x-for="(u, i) in cfg?.mic_priority ?? []" :key="u">
-              <div class="mini-row" :class="{sel: prioSel === i}" @click="prioSel = i"
-                   x-text="`${i + 1}. ${micName(u)}${mics.some(m => m.uid === u) ? '' : ' (已断开)'}`"></div>
+          <div class="row-hint" style="padding:0 2px 6px">按住任一组合即录音; 点 + 录制新组合(按键后松开即添加, Esc 取消); 点 × 删除</div>
+          <div class="hk-list">
+            <template x-for="(h, idx) in hkList()" :key="h">
+              <div class="hk-item">
+                <span class="hk-name" x-text="describeCombo(h)"></span>
+                <button class="hk-del" @click="removeHotkey(h)">×</button>
+              </div>
             </template>
-            <div class="row-hint" x-show="!cfg?.mic_priority?.length">空 — 把指定设备加入优先级</div>
           </div>
-          <div class="btns" style="margin-top: 8px">
-            <select class="inp" x-model="micToAdd">
-              <option value="">选择设备…</option>
-              <template x-for="m in mics" :key="m.uid"><option :value="m.uid" x-text="m.name"></option></template>
-            </select>
-            <button class="mini" @click="addToPriority()" :disabled="!micToAdd">加入</button>
-            <button class="mini" @click="movePriority(prioSel, -1)">上移</button>
-            <button class="mini" @click="movePriority(prioSel, 1)">下移</button>
-            <button class="mini" @click="removePriority(prioSel)">移除</button>
+          <button class="hk-add" @click="startHotkeyRecord()" x-show="!hkCapturing">+ 录制新组合</button>
+          <div class="hk-capture" x-show="hkCapturing">
+            <div class="hk-live" x-text="hkFinal ? ('录到: ' + describeCombo(hkFinal)) : (hkCurrent ? ('当前: ' + describeCombo(hkCurrent)) : '按下组合键, 全部松开后确认(Esc 取消)…')"></div>
+            <template x-if="hkFinal">
+              <div class="btns end">
+                <button class="mini" @click="cancelHotkey()">取消</button>
+                <button class="mini primary" @click="confirmHotkey()">添加</button>
+              </div>
+            </template>
+          </div>
+          <div class="row-hint" style="padding:6px 2px 0">快捷添加常用 Fn 组合(也可直接录制):</div>
+          <div style="display:flex; gap:6px; margin-top:4px">
+            <button class="mini" @click="addFnPreset('fn')">+ fn</button>
+            <button class="mini" @click="addFnPreset('fn+ctrl')">+ fn+ctrl</button>
+            <button class="mini" @click="addFnPreset('fn+cmd')">+ fn+cmd</button>
+            <button class="mini" @click="addFnPreset('fn+space')">+ fn+space</button>
           </div>
         </div>
 
-        <!-- ASR 编辑 sheet -->
-        <template x-if="asrEdit"><div class="overlay" @click.self="asrEdit = null">
-          <div class="sheet">
-            <h2 x-text="asrIsNew ? '添加引擎' : '编辑引擎'"></h2>
-            <label>名称<input class="inp" x-model="asrEdit.name" /></label>
-            <label>引擎
-              <select class="inp" x-model="asrEdit.provider">
-                <option value="volcengine">火山引擎 (豆包流式)</option>
-              </select>
-            </label>
-            <label>API Key<span class="row-hint">(留空用 Key 池)</span>
-              <input class="inp" type="password" x-model="asrEdit.api_key" />
-            </label>
-            <div class="row">
-              <span>词典热词直传</span>
-              <input type="checkbox" class="switch" x-model="asrEdit.hotwords_enabled" />
+        <div class="card">
+          <div class="row-title" style="padding:0 2px">保存与交付</div>
+          <div class="row">
+            <div>
+              <div class="row-title">仅复制不粘贴</div>
+              <div class="row-hint">识别结果只放进剪贴板, 不自动粘贴到当前输入框</div>
             </div>
-            <div class="btns end">
-              <button class="mini" @click="asrEdit = null">取消</button>
-              <button class="mini primary" @click="saveAsr()">保存</button>
+            <input type="checkbox" class="switch" x-model="cfg.clipboard_only" @change="saveCfg()" />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">保留转写文本在剪贴板</div>
+              <div class="row-hint">粘贴后仍把转写文本留在剪贴板(开启后不再恢复粘贴前的剪贴板内容)</div>
+            </div>
+            <input type="checkbox" class="switch" x-model="cfg.keep_in_clipboard" @change="saveCfg()" />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">提示音</div>
+              <div class="row-hint">开始录音 / 结束 / 出错 时各响一声</div>
+            </div>
+            <input type="checkbox" class="switch" x-model="cfg.audio_feedback" @change="saveCfg()" />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">保留最近录音</div>
+              <div class="row-hint">本地保留的录音文件个数(用于失败重试与重转; 超出即删最旧)</div>
+            </div>
+            <input class="inp num" type="number" min="0" max="500" x-model.number="cfg.keep_audio_count" @change="saveCfg()" />
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">历史上限</div>
+              <div class="row-hint">历史记录最多保留的条数(超出即删最旧)</div>
+            </div>
+            <input class="inp num" type="number" min="0" max="5000" x-model.number="cfg.history_limit" @change="saveCfg()" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row-title" style="padding:0 2px">界面与启动</div>
+          <div class="row">
+            <div>
+              <div class="row-title">浮窗位置</div>
+              <div class="row-hint">录音时状态浮窗出现的位置(跟随鼠标所在屏幕)</div>
+            </div>
+            <select class="picker" :value="cfg?.overlay_position || 'bottom'" @change="cfg.overlay_position = $event.target.value; saveCfg()">
+              <option value="bottom">屏幕底部</option>
+              <option value="center">屏幕中央</option>
+              <option value="top">屏幕顶部</option>
+            </select>
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">开机自启动</div>
+              <div class="row-hint">登录后自动运行(菜单栏常驻)</div>
+            </div>
+            <input type="checkbox" class="switch" :checked="autostartOn" @change="toggleAutostart()" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row-title" style="padding:0 2px">数据</div>
+          <div class="row">
+            <div>
+              <div class="row-title">数据目录</div>
+              <div class="row-hint">历史记录 / 录音 / LLM 日志 / 运行日志都在这里。留空 = 默认目录
+                (<code>~/Library/Application Support/io.github.yangyaofei.denpajack</code>)；
+                改动后新产生的数据写入新目录，已有数据不会自动搬移</div>
             </div>
           </div>
-        </div></template>
+          <div class="btns" style="margin-top:6px">
+            <input class="inp" style="flex:1" x-model="cfg.data_dir" placeholder="留空 = 默认目录; 可填 ~/DenpaData 或绝对路径" @change="saveCfg()" />
+            <button class="mini" @click="openDataDir()">打开数据目录</button>
+          </div>
+          <div class="btns" style="margin-top:6px">
+            <button class="mini" @click="openConfigFile()">打开配置文件 (config.json)</button>
+          </div>
+        </div>
       </section>

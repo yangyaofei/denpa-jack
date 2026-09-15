@@ -102,6 +102,10 @@ See [docs/TESTING.md](docs/TESTING.md) and [docs/TEST-MATRIX.md](docs/TEST-MATRI
 
 `~/Library/Application Support/io.github.yangyaofei.denpajack/`
 
+The directory is configurable: set `data_dir` in the config file (or use the 数据目录 field on the
+General page) to an absolute path, a `~/…` path, or a path relative to the default. Everything below
+moves with it except `config.json`, which stays in the default location and acts as the anchor.
+
 | File | Contents |
 |---|---|
 | `config.json` | all settings (profiles, dictionary, hotkeys, switches) |

@@ -1,7 +1,6 @@
 // 端到端冒烟: 真实麦克风 2s → 豆包流式 → 词典 → 剪贴板交付
 // 复刻 app 的 recording_start→stop 路径, 验证不再崩: cargo run --example smoke_e2e
 use std::sync::mpsc;
-use std::sync::Arc;
 use denpa_jack_lib::audio;
 use denpa_jack_lib::doubao::{self, AsrEvent, Cmd};
 use denpa_jack_lib::dict::TextCorrector;
@@ -13,7 +12,7 @@ async fn main() {
     assert!(!api_key.is_empty(), "VOLCENGINE_API_KEY 未设置");
 
     // 1) 麦克风采集(与 app 同路径)
-    let (atx, arx) = mpsc::channel::<Vec<u8>>();
+    let (atx, _arx) = mpsc::channel::<Vec<u8>>();
     let rec = audio::start_input(None, atx).expect("start_input 失败");
     println!("[1] 麦克风采集启动 OK, 录 2 秒…");
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -24,7 +23,7 @@ async fn main() {
     assert!(total >= 9600, "音频不足");
 
     // 2) 豆包会话(tokio 上下文内 spawn — 复刻 tauri::async_runtime)
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd>(64);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Cmd>(64);
     let (etx, mut erx) = tokio::sync::mpsc::unbounded_channel::<AsrEvent>();
     let key = api_key.clone();
     tauri::async_runtime::spawn(async move {

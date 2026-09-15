@@ -1,6 +1,6 @@
 // 录音会话(闭包架构): 会话=一次按住→松开的完整生命周期。
 // 全部会话状态(采集/命令通道/起点/焦点快照/交接箱)收进 RecordingSession,
-// 会话结束=结构体 drop=取消令牌置位=附属物(定时器/音量循环/桥线程)自知作废。
+// 会话结束=结构体 drop=取消令牌置位=附属物(定时器/音量循环/桥线程)随之失效。
 // 无会话级全局 static; stop/abort 共用同一清理路径, 不存在"错误分支跳过清理"。
 use tauri::{Emitter, Manager};
 use std::sync::mpsc;
@@ -34,10 +34,9 @@ pub struct RecordingSession {
 
 impl RecordingSession {
     /// 结束采集, 取出会话全部交接物: 数据 + 引擎命令通道 + 交接箱。
-    /// rec 在此 drop → cancel 置位 → 定时器/音量循环/桥线程自知作废
+    /// rec 在此 drop → cancel 置位 → 定时器/音量循环/桥线程随之失效
     fn finish(
         self,
-        app: &tauri::AppHandle,
         engine: &str,
     ) -> (
         pipeline::SessionHandoff,
@@ -167,7 +166,7 @@ pub fn resolve_asr(cfg: &Config) -> Result<(settings::AsrProfile, String), Strin
     Ok((profile, key))
 }
 
-/// 录音中实时音量 → hud 浮窗; 持会话取消令牌, 会话结束自知退出
+/// 录音中实时音量 → hud 浮窗; 持会话取消令牌, 会话结束后自动退出
 fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::AtomicBool>, level: Arc<std::sync::atomic::AtomicU32>) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -182,7 +181,7 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
     });
 }
 
-/// B5 超长截断: 持会话取消令牌——会话结束(停止/中止)即作废, 不存在睡醒后操作死会话
+/// B5 超长截断: 持会话取消令牌——会话结束(停止/中止)即失效, 定时器醒来后不会操作已结束的会话
 fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atomic::AtomicBool>) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(secs.max(10) as u64));
@@ -190,7 +189,7 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
             return; // 会话已结束, 本定时器作废
         }
         let st = app.state::<std::sync::Mutex<AppState>>();
-        let mut s = st.lock().unwrap();
+        let s = st.lock().unwrap();
         if s.session.is_some() {
             log::log(&app, "B5: 录音超长, 自动截断");
             drop(s);
@@ -357,16 +356,16 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         return Err("未在录音中".into());
     };
     let engine = profile_name_of(&app);
-    // 尾音缓冲(Handy extra_recording_buffer_ms 等价): cancel-aware 分片睡, 期间采集继续
+    // 尾音缓冲(Handy extra_recording_buffer_ms 等价): 可感知取消的分片睡眠, 期间采集继续
     let tail = settings::get_config(app.clone()).map(|c| c.extra_tail_ms).unwrap_or(0).min(2000);
     if tail > 0 {
         for _ in 0..(tail / 20) {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    let (ho, cmd_tx, handoff) = sess.finish(&app, &engine);
+    let (ho, cmd_tx, handoff) = sess.finish(&engine);
     // B3 判据改为实际音频字节数(9600B=0.3s@16k)——duration_ms 含引擎/采集启动开销,
-    // 200ms 音频会因 duration 300ms 被放行成"就是"级别的垃圾交付
+    // 200ms 的音频会因 duration 达到 300ms 被误判为有效语音而交付
     if ho.pcm.len() < 9600 {
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
         let _ = cmd_tx.try_send(doubao::Cmd::Abort);
@@ -424,17 +423,6 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     hide_hud(app);
     log::log(app, "录音取消(esc)");
     Ok(())
-}
-
-fn min_duration_ms(app: &tauri::AppHandle) -> u64 {
-    settings::get_config(app.clone())
-        .map(|c| (c.min_recording_seconds.max(0.05) * 1000.0) as u64)
-        .unwrap_or(300)
-}
-
-/// 测试通道: 直接对当前引擎发命令(autotest 喂音用; 正常路径 cmd_tx 随会话走)
-pub fn send_cmd_pub(app: &tauri::AppHandle, cmd: doubao::Cmd) {
-    crate::engines::send_current(app, cmd);
 }
 
 /// 取 wav 的 data chunk(自测回放用)

@@ -94,6 +94,9 @@ cd src-tauri && cargo test --lib      # 单元测试（76 项）
 
 `~/Library/Application Support/io.github.yangyaofei.denpajack/`
 
+这个目录可以改：在配置文件里设 `data_dir`（或在通用页的「数据目录」里填），支持绝对路径、`~/…`
+或相对默认目录的相对路径。改后下面这些数据都跟着走，只有 `config.json` 仍留在默认位置（作为定位锚点）。
+
 | 文件 | 内容 |
 |---|---|
 | `config.json` | 全部配置（档案、词典、快捷键、开关） |

@@ -55,6 +55,35 @@ for (const f of ["src/main.ts", "src/hud.ts"]) {
   check(`${f} 无 listen 残留`, !/\blisten\s*</.test(t));
 }
 
+// 2.6) 组件方法名统一(别名已删, 调用点必须用规范名; 写错名字=Alpine 表达式错误)
+const pageFiles = readdirSync("src/pages").filter((f) => f.endsWith(".html"));
+const htmlAll = ["index.html", "hud.html", ...pageFiles.map((f) => `src/pages/${f}`)]
+  .map((f) => readFileSync(f, "utf8"))
+  .join("\n");
+check("无 toggleRec 残留(统一 toggleRecording)", !/\btoggleRec\b/.test(src) && !/\btoggleRec\b/.test(htmlAll));
+check("无 saveKeys 残留(统一 saveCfg)", !/\bsaveKeys\b/.test(src) && !/\bsaveKeys\b/.test(htmlAll));
+check("试音按钮调用 toggleRecording()", /@click="toggleRecording\(\)"/.test(htmlAll));
+check("Key 池 textarea 绑定 saveCfg()", /@change="saveCfg\(\)"/.test(readFileSync("src/pages/asr.html", "utf8")));
+
+// 2.7) hud 重试失败文案指向主窗历史(独立设置窗已废除, 历史在主窗侧栏)
+const hudSrc = readFileSync("src/hud.ts", "utf8");
+check("hud 重试失败指向主窗历史", /主窗/.test(hudSrc) && !/设置→历史/.test(hudSrc));
+
+// 2.8) TS 接口与 Rust settings.rs 字段对齐(settings.rs 为唯一事实来源)
+const rs = readFileSync("src-tauri/src/settings.rs", "utf8");
+const rsFields = (name) => {
+  const body = rs.match(new RegExp(`pub struct ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
+  return [...body.matchAll(/pub\s+(\w+)\s*:/g)].map((m) => m[1]);
+};
+const tsBody = (name) => src.match(new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
+for (const name of ["Config", "LlmProfile", "AsrProfile", "DictEntry"]) {
+  const body = tsBody(name);
+  const missing = rsFields(name).filter((f) => !new RegExp(`\\b${f}\\??\\s*:`).test(body));
+  check(`TS ${name} 未遗漏 settings.rs 字段(缺: ${missing.join(",") || "无"})`, missing.length === 0);
+}
+const deadFields = ["hotkey_key_code", "filler_word_removal", "append_trailing_space"];
+check(`无废弃字段残留(${deadFields.join("/")})`, deadFields.every((f) => !src.includes(f)));
+
 // 3) Rust 命令注册
 const lib = readFileSync("src-tauri/src/lib.rs", "utf8");
 check("poll_versions 已注册 invoke_handler", /commands::poll_versions/.test(lib));

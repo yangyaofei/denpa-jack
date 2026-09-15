@@ -62,6 +62,8 @@ fn parse_frame(data: &[u8]) -> Option<(u8, u8, Vec<u8>)> {
     Some((typ, comp, body))
 }
 
+/// 结算契约(恰好一次): 空文本=没听清错误, 非空=Result。
+/// 本地实现(未并入 engines::settle): 额外落一条长度日志, 且空判据为 `is_empty`(不 trim)。
 fn settle(emit: &dyn Fn(AsrEvent), text: &str) {
     crate::log::elog(&format!("[doubao] settle: len={}", text.chars().count()));
     if text.is_empty() {
@@ -137,7 +139,6 @@ pub async fn run_session(
     }
     let latest_text = String::new();
     let mut latest_text = latest_text;
-    let mut done = false;
     let mut finish_sent = false;
     let mut fed_once = false;
     let mut watchdog: Option<tokio::time::Instant> = None;
@@ -176,11 +177,8 @@ pub async fn run_session(
                 Ok(g) => g,
                 Err(_) => {
                     crate::log::elog("[doubao] watchdog 触发(收尾超时兜底)");
-                    if !done {
-                        done = true;
-                        let t = latest_text.clone();
-                        settle(&emit, &t);
-                    }
+                    let t = latest_text.clone();
+                    settle(&emit, &t);
                     break;
                 }
             },
@@ -198,23 +196,23 @@ pub async fn run_session(
                         fed_once = true;
                         crate::log::elog(&format!("[doubao] first feed {}B", pcm.len()));
                     }
-                    if !done && !finish_sent {
+                    if !finish_sent {
                         let f = frame([0x11, 0x20, 0x01, 0x00], &gzip(&pcm));
                         let _ = sink.send(Message::Binary(f.into())).await;
                     }
                 }
                 Cmd::Finish => {
-                    if !done && !finish_sent {
+                    if !finish_sent {
                         finish_sent = true;
-                        crate::log::elog("[doubao] finish: 停音频+收尾帧; 等服务端最终结果(3s 兜底)");
+                        crate::log::elog(&format!("[doubao] finish: 停音频+收尾帧; 等服务端最终结果({}s 兜底)", crate::engines::DOUBAO_FINALIZE_TIMEOUT_SECS));
                         let f = frame([0x11, 0x22, 0x01, 0x00], &gzip(b""));
-                        // C34: 长录音的收尾帧发送可能被 TCP 背压卡死 → 1s 超时
+                        // C34: 长录音的收尾帧发送可能被 TCP 背压阻塞 → 1s 超时
                         let _ = tokio::time::timeout(
                             std::time::Duration::from_secs(1),
                             sink.send(Message::Binary(f.into())),
                         )
                         .await;
-                        watchdog = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(3));
+                        watchdog = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(crate::engines::DOUBAO_FINALIZE_TIMEOUT_SECS));
                         crate::log::elog("[doubao] finish 分支完成, 进等待");
                     }
                 }
@@ -223,14 +221,11 @@ pub async fn run_session(
                 let Some(m) = msg else {
                     // 流结束/断连(C16: definite 后属正常收尾)
                     crate::log::elog(&format!("[doubao] stream 结束: finish_sent={finish_sent}"));
-                    if !done {
-                        done = true;
-                        if finish_sent {
-                            settle(&emit, &latest_text);
-                        } else {
-                            crate::log::elog("[doubao] 中途断连(未 Finish): 不交付, 报错");
-                            emit(AsrEvent::Error("连接中断, 请重试".into()));
-                        }
+                    if finish_sent {
+                        settle(&emit, &latest_text);
+                    } else {
+                        crate::log::elog("[doubao] 中途断连(未 Finish): 不交付, 报错");
+                        emit(AsrEvent::Error("连接中断, 请重试".into()));
                     }
                     break;
                 };
@@ -247,10 +242,7 @@ pub async fn run_session(
                         .and_then(|obj| obj["message"].as_str().or(obj["error"]["message"].as_str()).map(|s| s.to_string()))
                         .unwrap_or_else(|| format!("错误帧(无法解析): {}", String::from_utf8_lossy(&body)));
                     crate::log::elog(&format!("[doubao] 错误帧: {m}"));
-                    if !done {
-                        done = true;
-                        emit(AsrEvent::Error(m));
-                    }
+                    emit(AsrEvent::Error(m));
                     break;
                 }
                 if typ == 0b1001 {
@@ -277,6 +269,7 @@ pub async fn run_session(
     }
 }
 
+#[cfg(test)]
 fn gunzip(data: &[u8]) -> Vec<u8> {
     let mut d = flate2::read::GzDecoder::new(data);
     let mut out = Vec::new();

@@ -1,13 +1,11 @@
 // Tauri command 层(对齐 Handy commands/): 薄壳, 业务在各自模块
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::audio;
 use crate::deliver;
 use crate::doubao;
 use crate::engines;
 use crate::history;
-use crate::log;
 use crate::overlay::{hide_hud, show_hud_msg};
 use crate::pipeline;
 use crate::settings::Config;
@@ -86,11 +84,11 @@ pub fn open_config_file(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = log::app_log_dir(&app).ok_or("目录不可用")?;
+    let dir = crate::settings::data_dir(&app);
     tauri_plugin_opener::open_path(dir.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
 
-/// hud 失败重试: 用本次录音(AUDIO_PATH)重跑整条管线; 前端控制只重试一次
+/// hud 失败重试: 用本次录音(AppState.last_audio)重跑整条管线; 前端控制只重试一次
 #[tauri::command]
 pub fn retry_last(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
@@ -390,7 +388,7 @@ pub async fn llm_selftest(
         .join(crate::settings::APP_ID)
         .join("llm_logs");
     let mut tool_used = false;
-    if let Ok(mut files) = std::fs::read_dir(&log_dir) {
+    if let Ok(files) = std::fs::read_dir(&log_dir) {
         let mut paths: Vec<_> = files
             .filter_map(|e| e.ok().map(|e| e.path()))
             .collect();

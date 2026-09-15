@@ -52,10 +52,7 @@ pub async fn list_models(provider: &str, base_url: &str, api_key: &str) -> Resul
 /// LLM 调用全量落盘: llm_logs/{ts}-{provider}.json (请求/响应原文, key 脱敏)
 fn dump_call(dir_tag: &str, url: &str, payload: &serde_json::Value, resp: &str) {
     use std::io::Write;
-    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join("Library/Application Support")
-        .join(crate::settings::APP_ID)
-        .join("llm_logs");
+    let dir = crate::settings::data_dir_no_app().join("llm_logs");
     let _ = std::fs::create_dir_all(&dir);
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
