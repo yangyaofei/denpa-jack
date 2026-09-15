@@ -34,3 +34,11 @@
 
 理想做法是向上游提交 PR（两个修改都是通用缺陷，不限于本项目）；
 在合入并发布新版本前，保持本 vendored 副本。
+
+## 上游 PR
+
+已提交：https://github.com/handy-computer/handy-keys/pull/37
+（分支 `fix/missed-modifier-events-reconcile`，改动仅 `src/platform/macos/listener.rs`，42+/4-）
+
+合入并发布新版本后：删除本地 `vendor/handy-keys/`，移除 `Cargo.toml` 的 `[patch.crates-io]`，
+改为直接依赖 crates.io 的修复版。
