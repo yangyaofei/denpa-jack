@@ -1,6 +1,6 @@
 // 词典纠错 headless 测试: cargo run --bin dict_test
-use tauri_app_lib::dict::TextCorrector;
-use tauri_app_lib::settings::DictEntry;
+use denpa_jack_lib::dict::TextCorrector;
+use denpa_jack_lib::settings::DictEntry;
 
 fn main() {
     let entries = vec![

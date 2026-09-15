@@ -212,7 +212,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         focus.bundle
     ));
     // 焦点是本 app(设置窗等) → 只复制, 自贴无意义
-    if focus.bundle.as_deref() == Some("com.yangyaofei.tauri-app") {
+    if focus.bundle.as_deref() == Some(crate::settings::APP_ID) {
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
         return Ok("copied-self".into());
     }

@@ -365,7 +365,9 @@ pub async fn llm_selftest(
     // tool_used 判定: 看 llm_logs 最新一条响应里有没有 tool_calls
     let home = std::env::var("HOME").unwrap_or_default();
     let log_dir = std::path::PathBuf::from(home)
-        .join("Library/Application Support/com.yangyaofei.tauri-app/llm_logs");
+        .join("Library/Application Support")
+        .join(crate::settings::APP_ID)
+        .join("llm_logs");
     let mut tool_used = false;
     if let Ok(mut files) = std::fs::read_dir(&log_dir) {
         let mut paths: Vec<_> = files

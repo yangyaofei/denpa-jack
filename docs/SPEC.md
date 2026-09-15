@@ -1,4 +1,4 @@
-# VoiceInput 需求与架构文档（SPEC）
+# Denpa Jack 需求与架构文档（SPEC）
 
 > 依据：源码全量通读（src-tauri/src/ 全部 25 个 .rs、build.rs、CONTRACTS.md、tauri.conf.json、Cargo.toml、src/main.ts、src/hud.ts、index.html、settings.html、hud.html、vite.config.ts、examples/）。
 > 所有数值、路径、行为均从代码验证，未做推测；无法验证处已标注。
@@ -276,7 +276,7 @@
 
 ### 3.7 托盘（tray.rs 159 行 + tray_events.rs 100 行）
 
-- objc2 手写 NSStatusItem（tauri tray API 在本环境不显示，3 轮失败后弃用）；`mic.fill` 模板图标 18x18，tooltip"Voice 输入"。
+- objc2 手写 NSStatusItem（tauri tray API 在本环境不显示，3 轮失败后弃用）；`mic.fill` 模板图标 18x18，tooltip"Denpa Jack"。
 - 三态图标：默认（模板色）/ 红=录音（set_recording）/ 黄=转写（set_transcribing），均 setContentTintColor 主线程执行。
 - 菜单（tag → 事件）：状态行（禁用，"状态: 待命 (按住 {hotkey} 说话)"/"状态: 录音中…"）｜"录音 (松开转写)"(6)｜"LLM 纠错(慢速高保真)"(1，带勾选态)｜"仅复制不粘贴"(2，带勾选态)｜"打开数据目录"(3)｜"打开词典配置"(7)｜"设置…"(4)｜"退出"(5)。
 - 行为：
@@ -324,7 +324,7 @@
 
 ## 4. 数据与配置
 
-- **config.json**：`~/Library/Application Support/com.yangyaofei.tauri-app/config.json`（app_config_dir，identifier 决定）。
+- **config.json**：`~/Library/Application Support/io.github.yangyaofei.denpajack/config.json`（app_config_dir，identifier 决定；bundle id 常量见 `settings::APP_ID`）。
   - `keys: string[]`：API Key 池（档案间共享；档案 Key 留空时按序取第一个）。
   - `llm_profiles`：id / name / provider(deepseek|zhipu) / base_url(空=默认) / model / api_key / prompt(空=内置) / thinking(bool) / effort(low|high|max，默认 low)。
   - `asr_profiles`：id / name / provider(volcengine|zhipu|openai) / api_key / hotwords_enabled。
@@ -349,8 +349,8 @@
 - 开发：`npm run tauri dev`（beforeDevCommand `npm run dev` → vite，devUrl `http://localhost:1420`，strictPort）。
 - 打包：`npm run tauri build`（beforeBuildCommand `npm run build` → `vite build` → `dist/`；bundle targets `app` + `dmg`）。
 - 签名（tauri.conf.json bundle.macOS）：
-  - `signingIdentity: "VoiceInput Dev"`（自签身份），`hardenedRuntime: false`。
-  - `identifier: "com.yangyaofei.tauri-app"` 固定不变——自签 + identifier 稳定，保证重打包后 TCC 授权（麦克风/辅助功能）持久有效，不重复弹授权。
+  - `identifier: "io.github.yangyaofei.denpajack"` 固定不变——自签证书 + identifier 稳定，保证重打包后 TCC 授权（麦克风/辅助功能）持久有效，不重复弹授权。
+  - 签名不在 tauri 配置里：打包后用 **rcodesign 直接读 `.p12` 文件**签名（不需要钥匙串/系统信任）——见 `docs/CODE-SIGNING.md`；`hardenedRuntime: false`。
 - `macOSPrivateApi: true`；`minimumSystemVersion: "10.15"`；版本 0.1.0。
 - vite 构建（vite.config.ts）：rollupOptions.input 现仅 `index.html` + `hud.html`（**缺 settings.html**，见 §6）。
 - Rust 关键依赖：tauri 2（tray-icon + macos-private-api feature）、cpal 0.18、tokio-tungstenite 0.30（native-tls）、reqwest 0.13（json+multipart）、objc2 0.6 + objc2-app-kit 0.3、core-foundation、pinyin、regex、flate2、uuid、base64。

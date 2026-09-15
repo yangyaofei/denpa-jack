@@ -45,6 +45,12 @@ impl RecordingSession {
         Arc<Mutex<Option<pipeline::SessionHandoff>>>,
     ) {
         let duration_ms = self.started_at.elapsed().as_millis() as u64;
+        // 采集诊断: 每个会话都记"采到多少/峰值多少"——区分"采到静音"与"根本没采到"
+        // (此前只有引擎侧日志, 出现 len=0 时无法判断是采集问题还是服务端问题)
+        let (cap_total, cap_chunks, cap_peak) = self.rec.stats();
+        crate::log::elog(&format!(
+            "[audio] 会话采集: bytes={cap_total} chunks={cap_chunks} peak={cap_peak:.4} 按住时长={duration_ms}ms"
+        ));
         let pcm = self.rec.take_pcm();
         (
             pipeline::SessionHandoff {

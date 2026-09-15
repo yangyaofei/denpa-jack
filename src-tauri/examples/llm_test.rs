@@ -1,5 +1,5 @@
 // LLM 润色 headless 测试: cargo run --bin llm_test
-use tauri_app_lib::llm::{polish, LlmOpts};
+use denpa_jack_lib::llm::{polish, LlmOpts};
 
 #[tokio::main]
 async fn main() {

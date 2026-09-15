@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VoiceInput",
+  "productName": "Denpa Jack",
   "version": "0.1.0",
-  "identifier": "com.yangyaofei.tauri-app",
+  "identifier": "io.github.yangyaofei.denpajack",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Voice 输入",
+        "title": "Denpa Jack",
         "width": 1280,
         "height": 820,
         "minWidth": 980,
@@ -39,7 +39,6 @@
     "macOS": {
       "minimumSystemVersion": "10.15",
       "infoPlist": "Info.plist",
-      "signingIdentity": "VoiceInput Dev",
       "hardenedRuntime": false
     }
   }

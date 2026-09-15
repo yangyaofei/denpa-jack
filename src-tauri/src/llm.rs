@@ -53,7 +53,9 @@ pub async fn list_models(provider: &str, base_url: &str, api_key: &str) -> Resul
 fn dump_call(dir_tag: &str, url: &str, payload: &serde_json::Value, resp: &str) {
     use std::io::Write;
     let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join("Library/Application Support/com.yangyaofei.tauri-app/llm_logs");
+        .join("Library/Application Support")
+        .join(crate::settings::APP_ID)
+        .join("llm_logs");
     let _ = std::fs::create_dir_all(&dir);
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

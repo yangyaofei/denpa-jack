@@ -132,7 +132,7 @@ impl MacTray {
             icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
             if let Some(btn) = item.button(mtm) {
                 btn.setImage(Some(&icon));
-                btn.setToolTip(Some(&*NSString::from_str("Voice 输入")));
+                btn.setToolTip(Some(&*NSString::from_str("Denpa Jack")));
             }
         }
         let menu = unsafe { NSMenu::new(mtm) };

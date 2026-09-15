@@ -2,10 +2,10 @@
 // 复刻 app 的 recording_start→stop 路径, 验证不再崩: cargo run --example smoke_e2e
 use std::sync::mpsc;
 use std::sync::Arc;
-use tauri_app_lib::audio;
-use tauri_app_lib::doubao::{self, AsrEvent, Cmd};
-use tauri_app_lib::dict::TextCorrector;
-use tauri_app_lib::settings::DictEntry;
+use denpa_jack_lib::audio;
+use denpa_jack_lib::doubao::{self, AsrEvent, Cmd};
+use denpa_jack_lib::dict::TextCorrector;
+use denpa_jack_lib::settings::DictEntry;
 
 #[tokio::main]
 async fn main() {

@@ -13,6 +13,8 @@ struct Shared {
     total: usize, // 累计字节(判有效音频, C15: 不能用 buf 判)
     rate: f64,
     pcm_all: Vec<u8>, // 全程累积(停止后写 WAV)
+    peak: f32,        // 本次会话采集到的峰值幅度(诊断: 区分"采到静音"与"没采到")
+    chunks: usize,    // 已发出的 200ms 分块数(诊断)
 }
 
 pub struct Recording {
@@ -49,6 +51,11 @@ impl Recording {
     /// 最近 RMS 0-1000
     pub fn level(&self) -> u32 {
         self.level.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// 采集诊断: (累计字节, 已发分块数, 峰值幅度)
+    pub fn stats(&self) -> (usize, usize, f32) {
+        let s = self.shared.lock().unwrap();
+        (s.total, s.chunks, s.peak)
     }
 }
 
@@ -92,6 +99,14 @@ pub fn start_input(device: Option<String>, tx: Sender<Vec<u8>>) -> Result<Record
     let rate = cfg.sample_rate() as f64;
     let channels = cfg.channels() as usize;
     let fmt = cfg.sample_format();
+    let dev_name = dev
+        .description()
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|_| "?".into());
+    crate::log::elog(&format!(
+        "[audio] 打开设备 name={dev_name} requested_uid={:?} rate={rate} ch={channels} fmt={fmt:?}",
+        device
+    ));
 
     let shared = Arc::new(Mutex::new(Shared {
         carry_t: 0.0,
@@ -99,12 +114,17 @@ pub fn start_input(device: Option<String>, tx: Sender<Vec<u8>>) -> Result<Record
         total: 0,
         rate,
         pcm_all: vec![],
+        peak: 0.0,
+        chunks: 0,
     }));
     let level = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let lv2 = level.clone();
     let sh2 = shared.clone();
     let tx2 = tx.clone();
-    let err_fn = |e| eprintln!("audio stream error: {e}");
+    // 诊断: 流错误必须进 app.log(此前只有 eprintln, 打包版不可见)
+    let err_fn = |e| {
+        crate::log::elog(&format!("[audio] stream error: {e}"));
+    };
 
     let stream = match fmt {
         cpal::SampleFormat::F32 => dev.build_input_stream(
@@ -175,6 +195,11 @@ fn ingest(data: &[f32], channels: usize, s: &Arc<Mutex<Shared>>, tx: &Sender<Vec
     if mono.is_empty() {
         return;
     }
+    // 诊断: 峰值(判断是否真采到声音)
+    let p = mono.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+    if p > st.peak {
+        st.peak = p;
+    }
     let (pcm, carry) = resample_to_16k(&mono, st.rate, st.carry_t);
     st.carry_t = carry;
     let produced = pcm.len();
@@ -185,6 +210,7 @@ fn ingest(data: &[f32], channels: usize, s: &Arc<Mutex<Shared>>, tx: &Sender<Vec
     // 200ms 分包
     while st.buf.len() >= CHUNK_BYTES {
         let piece: Vec<u8> = st.buf.drain(..CHUNK_BYTES).collect();
+        st.chunks += 1;
         let _ = tx.send(piece);
     }
 }

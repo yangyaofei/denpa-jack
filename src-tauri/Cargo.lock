@@ -942,6 +942,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "denpa-jack"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "cpal",
+ "enigo",
+ "flate2",
+ "futures-util",
+ "handy-keys",
+ "http",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "pinyin",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "uuid",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4579,40 +4613,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows 0.61.3",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "core-foundation 0.10.1",
- "core-graphics",
- "cpal",
- "enigo",
- "flate2",
- "futures-util",
- "handy-keys",
- "http",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "pinyin",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "uuid",
 ]
 
 [[package]]

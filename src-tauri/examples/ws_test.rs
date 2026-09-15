@@ -2,7 +2,7 @@
 // 用法: cargo run --bin ws_test -- <api_key> <wav路径> [wav路径...]
 // wav 要求: 16k mono int16 PCM(test_input/ 已满足)
 use std::io::Read;
-use tauri_app_lib::doubao;
+use denpa_jack_lib::doubao;
 use std::time::Duration;
 
 // 简化 wav 解析: 找 data chunk, 返回 i16le PCM

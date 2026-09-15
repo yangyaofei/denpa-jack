@@ -45,6 +45,8 @@ extern "C" fn on_devices_changed(
     _data: *mut std::ffi::c_void,
 ) -> i32 {
     MIC_VER.fetch_add(1, Ordering::Relaxed);
+    // 设备增删 → 麦克风选择可能变(优先级里更高的设备刚插上/拔掉): 清解析缓存
+    crate::recording::invalidate_mic_cache();
     0
 }
 
