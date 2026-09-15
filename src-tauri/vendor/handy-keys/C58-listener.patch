@@ -1,36 +1,52 @@
 --- tmp/handy-keys-0.3.4/src/platform/macos/listener.rs	2006-07-24 09:21:28
-+++ src-tauri/vendor/handy-keys/src/platform/macos/listener.rs	2026-09-13 16:40:16
-@@ -270,6 +270,29 @@
-                 ) as u16;
++++ src-tauri/vendor/handy-keys/src/platform/macos/listener.rs	2026-09-15 12:53:06
+@@ -113,8 +113,10 @@
+ /// Reconcile internally tracked modifiers against the actual CGEventFlags from the OS.
+ ///
+ /// This corrects drift caused by missed events (e.g., tap disabled by timeout, system
+-/// interruptions like Mission Control or screen lock). Should only be called for
+-/// non-FlagsChanged events, where flags reflect the current state with no change pending.
++/// interruptions like Mission Control or screen lock). It is called for non-FlagsChanged
++/// events, and also at the start of every FlagsChanged event: a listener whose traffic is
++/// only modifier keys (paste with Cmd+V, then press a modifier-only hotkey) would
++/// otherwise never reconcile a release that was lost.
+ fn reconcile_modifiers(current: &mut Modifiers, flags: CGEventFlags) {
+     // If OS says a modifier group is NOT held, clear our tracked bits.
+     // This fixes "stuck modifier" from missed release events.
+@@ -130,6 +132,10 @@
+     if !flags.contains(CGEventFlags::MaskAlternate) {
+         current.remove(Modifiers::OPT_LEFT | Modifiers::OPT_RIGHT);
+     }
++    // FN has no side and only ever appears in flags.
++    if !flags_have_fn(flags) {
++        current.remove(Modifiers::FN);
++    }
+ 
+     // If OS says a modifier group IS held but we have no bits for it,
+     // we missed a press event. Default to left side as fallback.
+@@ -145,6 +151,9 @@
+     if flags.contains(CGEventFlags::MaskAlternate) && !current.intersects(Modifiers::OPT) {
+         current.insert(Modifiers::OPT_LEFT);
+     }
++    if flags_have_fn(flags) && !current.contains(Modifiers::FN) {
++        current.insert(Modifiers::FN);
++    }
+ }
+ 
+ /// Context handed to the event tap callback through the refcon pointer.
+@@ -271,6 +280,11 @@
  
                  let changed_modifier = keycode_to_modifier(keycode);
-+
-+                // PATCH(voice-input C58): FlagsChanged 全量对账——事件自带的 flags 是系统真值,
-+                // 任何此前丢失的修饰键抬起(tap 被系统超时禁用窗口/Secure Input 等)在此立即修正。
-+                // 上游只在非 FlagsChanged 事件对账(reconcile_modifiers), 语音输入流程(粘贴后直接按 Fn)
-+                // 无普通键事件, 卡键状态无人清理 → 纯修饰热键精确匹配失败("按不出来")。
-+                {
-+                    let cur = state.current_modifiers;
-+                    let mut m = cur;
-+                    let f = flags;
-+                    if f.contains(CGEventFlags::MaskCommand) {
-+                        if !m.intersects(Modifiers::CMD) { m |= Modifiers::CMD_LEFT; }
-+                    } else { m &= !(Modifiers::CMD_LEFT | Modifiers::CMD_RIGHT); }
-+                    if f.contains(CGEventFlags::MaskShift) {
-+                        if !m.intersects(Modifiers::SHIFT) { m |= Modifiers::SHIFT_LEFT; }
-+                    } else { m &= !(Modifiers::SHIFT_LEFT | Modifiers::SHIFT_RIGHT); }
-+                    if f.contains(CGEventFlags::MaskControl) {
-+                        if !m.intersects(Modifiers::CTRL) { m |= Modifiers::CTRL_LEFT; }
-+                    } else { m &= !(Modifiers::CTRL_LEFT | Modifiers::CTRL_RIGHT); }
-+                    if f.contains(CGEventFlags::MaskAlternate) {
-+                        if !m.intersects(Modifiers::OPT) { m |= Modifiers::OPT_LEFT; }
-+                    } else { m &= !(Modifiers::OPT_LEFT | Modifiers::OPT_RIGHT); }
-+                    state.current_modifiers = m;
-+                }
  
++                // Modifier-only traffic never reaches the non-FlagsChanged reconcile path, so a
++                // release lost while the tap was disabled (timeout, secure input, lock screen, ...)
++                // would stay tracked forever and modifier-only hotkeys would stop matching.
++                reconcile_modifiers(&mut state.current_modifiers, flags);
++
                  // Check if this is a lock key (e.g., Caps Lock) which comes through
                  // as FlagsChanged but isn't a traditional modifier
-@@ -289,10 +312,25 @@
+                 let lock_key = keycode_to_key(keycode);
+@@ -289,10 +303,30 @@
                          changed_modifier: None,
                      });
                  } else if let Some(modifier_bit) = changed_modifier {
@@ -38,9 +54,16 @@
 -                    let was_set = state.current_modifiers.contains(modifier_bit);
 -                    let is_key_down = !was_set;
 -
-+                    // PATCH(voice-input C58): 按下/抬起判定改用 flags 系统真值——
-+                    // 原实现由 tracked 状态推断(was_set→down=!was_set), 丢一次抬起后
-+                    // 下一次真实按下会被反转判定为抬起, 状态永久错乱。
++                    // Derive press/release from the event's flags instead of toggling the tracked
++                    // bit: the previous `!was_set` toggle stayed inverted for a key once one of its
++                    // events was missed. FN (keycode 0x3F) also reaches this branch and only exists
++                    // in flags, so it is resolved via `flags_have_fn()`.
++                    //
++                    // CGEventFlags does not distinguish left/right, so this is group-level: when
++                    // both sides of a group are held and one of them is released, the released side
++                    // keeps its bit until the whole group is released. Group matching is unaffected
++                    // (`Modifiers::matches` matches a compound group by any side), and the next
++                    // reconcile clears it.
 +                    let group_in_flags = if modifier_bit.intersects(Modifiers::CMD) {
 +                        flags.contains(CGEventFlags::MaskCommand)
 +                    } else if modifier_bit.intersects(Modifiers::SHIFT) {
@@ -50,13 +73,11 @@
 +                    } else if modifier_bit.intersects(Modifiers::OPT) {
 +                        flags.contains(CGEventFlags::MaskAlternate)
 +                    } else if modifier_bit.intersects(Modifiers::FN) {
-+                        // 0x3F 的 flagsChanged 也命中 changed_modifier 分支(FN 位), 真值=SecondaryFn
 +                        flags_have_fn(flags)
 +                    } else {
 +                        false
 +                    };
 +                    let is_key_down = group_in_flags;
-+                    // 对账已保证组内 tracked 与 flags 一致(保留左侧位语义)
                      if is_key_down {
                          state.current_modifiers |= modifier_bit;
                      } else {

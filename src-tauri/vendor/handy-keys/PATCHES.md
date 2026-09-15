@@ -42,3 +42,12 @@
 
 合入并发布新版本后：删除本地 `vendor/handy-keys/`，移除 `Cargo.toml` 的 `[patch.crates-io]`，
 改为直接依赖 crates.io 的修复版。
+
+## 与上游 PR 的关系
+
+本目录内容与 PR 分支 `fix/missed-modifier-events-reconcile` 保持一致。提交 PR 时做过一轮重构：
+
+- 删除内联的重复对账代码，改为调用仓库已有的 `reconcile_modifiers()`；
+- 给该函数补上 FN 分支（FN 只在 CGEventFlags 中出现、无左右之分）；
+- 在代码注释中说明 flags 判定的“组级”语义与限制（CGEventFlags 不区分左右，
+  同组两键同时按住时松开一侧，该侧位会保留到整组释放；组匹配不受影响）。
