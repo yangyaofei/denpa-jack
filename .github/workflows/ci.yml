@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Frontend static checks
+        run: node tests/frontend-checks.mjs
+
+      - name: Rust unit tests
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust build check (build.rs contract gate runs here)
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+# 说明：不跑需要真实密钥/麦克风的步骤（文件回放、e2e、真机交付）。
+# 那些在本地用 ./scripts/regression.sh 跑（需要 ASR 密钥与本机权限）。

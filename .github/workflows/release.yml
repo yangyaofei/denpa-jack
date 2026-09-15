@@ -1,0 +1,113 @@
+name: Release
+
+# 触发：推 v* tag，或在 Actions 页面手动指定 tag
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (例如 v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sign-release:
+    runs-on: macos-14
+    env:
+      # 版本号：tag 触发用 ref 名；手动触发用输入
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Inject version from tag
+        run: |
+          V="${RELEASE_TAG#v}"
+          echo "building version $V"
+          node -e "const fs=require('fs');const f='package.json';const j=JSON.parse(fs.readFileSync(f));j.version='$V';fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));j.version='$V';fs.writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          sed -i '' "s/^version = \"[^\"]*\"/version = \"$V\"/" src-tauri/Cargo.toml
+          grep -n "^version" src-tauri/Cargo.toml
+
+      - name: Build app bundle
+        run: npm run tauri build -- --bundles app
+
+      - name: Prepare signing material (from repository secrets)
+        env:
+          P12_B64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          P12_PW: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          if [ -z "$P12_B64" ] || [ -z "$P12_PW" ]; then
+            echo "::error::缺少 APPLE_CERT_P12_BASE64 / APPLE_CERT_PASSWORD；请在仓库 Settings → Secrets and variables → Actions 配置（密码放 Secrets，不要放 Variables）"
+            exit 1
+          fi
+          mkdir -p certs
+          printf '%s' "$P12_B64" | python3 -c "import base64,sys;open('certs/ci.p12','wb').write(base64.b64decode(sys.stdin.read()))"
+          printf '%s' "$P12_PW" > certs/ci.pw
+          chmod 600 certs/ci.p12 certs/ci.pw
+          ls -l certs
+
+      - name: Install rcodesign
+        run: |
+          curl -sSfL -o /tmp/rcodesign.tar.gz \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-aarch64-apple-darwin.tar.gz"
+          tar -xzf /tmp/rcodesign.tar.gz -C /tmp
+          sudo mv /tmp/apple-codesign-0.29.0-aarch64-apple-darwin/rcodesign /usr/local/bin/rcodesign
+          rcodesign --version
+
+      - name: Sign and verify the app
+        run: |
+          APP="src-tauri/target/release/bundle/macos/Denpa Jack.app"
+          rcodesign sign --p12-file certs/ci.p12 --p12-password-file certs/ci.pw "$APP"
+          rcodesign verify "$APP"
+          codesign -dvv "$APP" 2>&1 | grep -E "Identifier|Authority" || true
+
+      - name: Package artifacts
+        run: |
+          V="${RELEASE_TAG#v}"
+          APP="src-tauri/target/release/bundle/macos/Denpa Jack.app"
+          mkdir -p dist-release
+          ditto -c -k --keepParent "$APP" "dist-release/Denpa.Jack_${V}_aarch64.app.zip"
+          hdiutil create -volname "Denpa Jack" -srcfolder "$APP" -ov -format UDZO \
+            "dist-release/Denpa.Jack_${V}_aarch64.dmg"
+          shasum -a 256 dist-release/* > "dist-release/SHA256SUMS_${V}.txt"
+          ls -lh dist-release
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          draft: false
+          generate_release_notes: true
+          body: |
+            macOS (Apple Silicon) build, signed with the project self-signed certificate.
+
+            安装：下载 `.dmg`（或 `.zip`）→ 拖进「应用程序」。
+            首次打开若被 Gatekeeper 拦下（提示无法验证开发者）：
+            系统设置 → 隐私与安全性 → 「仍要打开」；或用 `xattr -dr com.apple.quarantine "/Applications/Denpa Jack.app"`。
+
+            权限：首次启动需要授予「麦克风」与「辅助功能」（见 app 内的权限卡片）。
+          files: |
+            dist-release/*
