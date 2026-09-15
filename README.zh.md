@@ -18,12 +18,12 @@ macOS 菜单栏常驻（不占 Dock）。录音时浮窗显示实时转写文本
   智谱 GLM-ASR（文件式，失败兜底）/ OpenAI Realtime（模块已实现）
 - **词典纠错**（不依赖大模型）：变体替换 + 正则规范化 + **拼音模糊匹配**
   （近音音节按 0.5 代价、仅 3 字以上生效），三层护栏防误替换
-- **LLM 润色**：多档案管理、**工具调用强制结构化回传**（不裸输出）、
+- **LLM 润色**：多档案管理、**工具调用强制结构化回传**（不返回纯文本）、
   思考链开关与思考强度可选、prompt 可编辑（含 Markdown 预览）
 - **交付**：优先 AX 直写目标应用，失败回退 `Cmd+V`；剪贴板可配置为
   「保留转写」或「用后恢复」
-- **历史**：JSONL 记录 + 音频留存（可播放 / 重新转写 / 复制 / 定位），按上限自动裁剪
-- **麦克风**：设备优先级、热插拔**事件驱动**刷新（不按秒轮询）、当前设备实时显示
+- **历史**：JSONL 记录 + 音频留存（可播放 / 重新转写 / 复制 / 在访达中显示），按上限自动裁剪
+- **麦克风**：设备优先级、热插拔**事件驱动**刷新（不做轮询）、当前设备实时显示
 
 ## 工作流程
 
@@ -55,7 +55,7 @@ npm run tauri build
   "src-tauri/target/release/bundle/macos/Denpa Jack.app"
 ```
 
-首次构建需联网：键盘层用的是按 commit 钉死的**打过补丁的 `handy-keys`**——
+首次构建需联网：键盘层用的是固定在指定 commit 的**打过补丁的 `handy-keys`**——
 见 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)。
 
 ## 签名与权限
@@ -70,12 +70,12 @@ npm run tauri build
   这两样都不要变：macOS 的 TCC 按**代码要求**（identifier + 证书叶指纹）记录权限，
   换 bundle id 或换证书都会导致麦克风 / 辅助功能需要重新授权。
 - **在别人的 Mac 上**：本地拷贝（U 盘、`scp`）能直接跑，但权限要在那台机器授权；
-  带隔离标记的拷贝（AirDrop、浏览器、邮件）会被 Gatekeeper 拦，需要
+  带隔离标记的拷贝（AirDrop、浏览器、邮件）会被 Gatekeeper 拦截，需要
   *系统设置 → 隐私与安全性 → 仍要打开*（`xattr -dr com.apple.quarantine` 同样有效）。
   想让别人下载就能跑，只有 **Developer ID + 公证**一条路。
 - CI/CD：rcodesign 也能在 Linux runner 上跑，配合 App Store Connect API Key 还能公证。
 
-完整说明、实测证据与踩过的坑见 [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md)。
+完整说明、实测证据与遇到的问题见 [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md)。
 
 ## 测试
 
@@ -84,9 +84,9 @@ cd src-tauri && cargo test --lib      # 单元测试（76 项）
 ./scripts/regression.sh               # 回归闸门：单测 → 文件回放 → UI 数据链 → e2e → 打包签名
 ```
 
-自测通道（环境变量显式激活，不污染正常启动）：
-`VOICEMAC_AUTOTEST=ui`（页面同款数据链自检）、`VOICEMAC_AUTOTEST=e2e`（真麦端到端）、
-`VOICEMAC_AUTOTEST_FILE=<wav>`（音频文件回放，不碰麦克风）。
+自测模式（环境变量显式激活，不污染正常启动）：
+`VOICEMAC_AUTOTEST=ui`（与页面相同的数据链自检）、`VOICEMAC_AUTOTEST=e2e`（真实麦克风端到端）、
+`VOICEMAC_AUTOTEST_FILE=<wav>`（音频文件回放，不使用麦克风）。
 
 判定标准与用例矩阵见 [docs/TESTING.md](docs/TESTING.md)、[docs/TEST-MATRIX.md](docs/TEST-MATRIX.md)。
 
@@ -107,7 +107,7 @@ cd src-tauri && cargo test --lib      # 单元测试（76 项）
 | 文档 | 内容 |
 |---|---|
 | [docs/SPEC.md](docs/SPEC.md) | 需求与架构说明（功能清单、模块划分、数据流） |
-| [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | 用 rcodesign 直接读 `.p12` 签名、TCC 要求、实测证据与踩坑记录 |
+| [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | 用 rcodesign 直接读 `.p12` 签名、TCC 要求、实测证据与遇到的问题 |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | 依赖说明：handy-keys 的本地补丁、上游 PR、合并后收尾 |
 | [docs/TESTING.md](docs/TESTING.md) / [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md) | 测试组织与「每修必加用例」矩阵 |
 | [docs/SYNC.md](docs/SYNC.md) | 前端内容与后端状态的同步关系（数据项 × 通道 × 时机） |
@@ -115,7 +115,7 @@ cd src-tauri && cargo test --lib      # 单元测试（76 项）
 | [docs/DEVIATION-AUDIT.md](docs/DEVIATION-AUDIT.md) | 与参照实现的有意偏差及原因 |
 | [docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md) | 待办与明确不做的事项（含理由） |
 | [docs/SPIKE-STREAMING.md](docs/SPIKE-STREAMING.md) | 流式 ASR 方案调研（本地/云端，含实测数据） |
-| [docs/WINDOW-SEMANTICS.md](docs/WINDOW-SEMANTICS.md) | 窗口层级与焦点语义（不抢焦点、浮窗定位） |
+| [docs/WINDOW-SEMANTICS.md](docs/WINDOW-SEMANTICS.md) | 窗口层级与焦点语义（不抢占焦点、浮窗定位） |
 | [docs/icon/README.md](docs/icon/README.md) | 应用图标：定稿资产、生成脚本、历史决策 |
 
 ## 已知边界

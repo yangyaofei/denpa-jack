@@ -1,4 +1,4 @@
-# 窗口语义对照表（抄全清单——根治"来回反复"）
+# 窗口语义对照表（完整清单——避免反复修改）
 来源: Handy crates/handy/src/macos/overlay.rs:7 FloatingPanel + Swift 版 FloatingPanel.swift
 | Handy/Swift 语义 | 作用 | Tauri 实现 | 状态 |
 |---|---|---|---|

@@ -1,4 +1,4 @@
-# Handy 组件语义对照表（抄全清单 v2）
+# Handy 组件语义对照表（完整移植清单 v2）
 来源: Handy 源码（github.com/cjpais/Handy，30.8k★，Tauri 2 同类；对照时用的本地 clone 已随调研目录清理，需要时重新 clone）
 规则: 移植组件先列语义清单再实现; 出 bug 先查本表漏了哪条语义, 不打补丁。
 
@@ -14,14 +14,14 @@
 ## 2. Rust→前端事件（C43 根因区）
 | Handy 实现 | 语义 | 我们的实现 | 状态 |
 |---|---|---|---|
-| emit_to("recording_overlay", "mic-level") (overlay.rs:744) + 注释: Tauri 2 的 emit 广播+listener filter 机制 (738-743) | 定向 emit 在 Handy 可用 | emit_to("hud") **实测不达**(Any/AnyLabel 均不达, emit 返回 Ok) | ❌→轮询绕过 |
+| emit_to("recording_overlay", "mic-level") (overlay.rs:744) + 注释: Tauri 2 的 emit 广播+listener filter 机制 (738-743) | 定向 emit 在 Handy 可用 | emit_to("hud") **实测不可达**(Any/AnyLabel 均不可达, emit 返回 Ok) | ❌→轮询绕过 |
 | — | — | **轮询替代**: HudSnapshot+hud_poll() 150ms 拉取(lib.rs/commands.rs/hud.ts) | ✅ 已验证 |
 | backlog: 事件通道真因(疑 capabilities/core:event 粒度或 api/cargo 版本组合) | — | 待深挖, 轮询保底 | 🔍 |
 
 ## 3. 托盘
 | Handy 实现 | 语义 | 我们的实现 | 状态 |
 |---|---|---|---|
-| Tauri TrayIcon + recreate_tray_icon() hide/re-show (tray.rs:614, tauri#12060 NSStatusItem 静默消失恢复) | 消失后可自愈 | 手写 objc2 NSStatusItem(tray.rs)——**结构上绕开该 bug**; 用户报过"状态栏不在"(多屏=内屏规则, 非消失 bug) | ✅ |
+| Tauri TrayIcon + recreate_tray_icon() hide/re-show (tray.rs:614, tauri#12060 NSStatusItem 静默消失恢复) | 消失后可自愈 | 手写 objc2 NSStatusItem(tray.rs)——**结构上绕开该 bug**; 用户报过"状态栏不在"(多屏时按内屏规则, 非消失 bug) | ✅ |
 
 ## 4. 热键
 | Handy 实现 | 语义 | 我们的实现 | 状态 |
@@ -31,7 +31,7 @@
 ## 5. 粘贴 (paste_tx)
 | Handy 实现 | 语义 | 我们的实现 | 状态 |
 |---|---|---|---|
-| macos.rs 336 行全套: 懒承诺声明/回执轮询/QUIET_PERIOD 200ms/RESTORE 8s/FAILED 500ms/Concealment markers/settle 恰一次 | 粘贴可靠性 | paste_tx.rs 整套移植+审计一致 | ✅ |
+| macos.rs 336 行全套: lazy promise 声明/回执轮询/QUIET_PERIOD 200ms/RESTORE 8s/FAILED 500ms/Concealment markers/settle 恰一次 | 粘贴可靠性 | paste_tx.rs 整套移植+审计一致 | ✅ |
 
 ## 6. 键盘注入
 | Handy 实现 | 语义 | 我们的实现 | 状态 |

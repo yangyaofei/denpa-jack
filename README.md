@@ -92,7 +92,7 @@ cd src-tauri && cargo test --lib      # unit tests (76)
 ./scripts/regression.sh               # gate: unit → file-replay → UI data chain → e2e → bundle+sign
 ```
 
-Self-test channels (explicit env vars, never active on a normal launch):
+Self-test modes (explicit env vars, never active on a normal launch):
 `VOICEMAC_AUTOTEST=ui` (page-level data chain), `VOICEMAC_AUTOTEST=e2e` (real microphone),
 `VOICEMAC_AUTOTEST_FILE=<wav>` (audio file replay, no microphone).
 

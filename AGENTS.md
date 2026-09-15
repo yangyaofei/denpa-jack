@@ -2,7 +2,7 @@
 
 未来道具14号机：电波劫持者（Denpa Jack / 未来ガジェット14号機：電波ジャック）。
 
-macOS 菜单栏语音输入：**按住热键说话 → ASR → 词典纠错 →（可选）LLM 润色 → 自动上屏**。
+macOS 菜单栏语音输入：**按住热键说话 → ASR → 词典纠错 →（可选）LLM 润色 → 自动写入当前光标位置**。
 本文件是这个仓库的契约（给在这里工作的人 / agent 看）。用户级工作规则另见 `~/.config/opencode/AGENTS.md`。
 
 ## 一句话架构
@@ -37,7 +37,7 @@ npm run tauri build                     # 打包（ad-hoc 签名）→ 再用 rc
 
 签名与权限：见 `docs/CODE-SIGNING.md`（含 p12 生成、rcodesign 用法、TCC 要求与实测证据）。
 
-## 铁律（违反会出线上问题，均有历史教训）
+## 铁律（违反会在实际使用中出问题，均有历史教训）
 
 1. **改完必须自测**：`cargo test --lib` + 装机实测；日志在
    `~/Library/Application Support/io.github.yangyaofei.denpajack/app.log`（`[diag]`/`[voice]`/`[ui]`/`[audio]`/`[perm]` 前缀）。
@@ -50,18 +50,26 @@ npm run tauri build                     # 打包（ad-hoc 签名）→ 再用 rc
 8. **不要用脚本批量替换源码**：逐处 `edit`，改完看编译输出与日志；`tmp/` 下的本地脚本不参与构建。
 9. **提交信息写清"问题 / 发现过程 / 方案 / 实现 / 总结"**：本项目问题多来自真机行为，只写 "fix bug" 会丢失上下文。
 
+## 编号约定（文档与代码注释里会出现）
+
+| 编号 | 含义 | 说明 |
+|---|---|---|
+| `C<n>` | 变更 / 教训编号 | 按时间递增；含义在出现处的上下文里写明（如 "C39 已实测确认的崩溃"） |
+| `B<n>` | 缺陷编号 | 同上 |
+| `L1`–`L7` | 证据分级 | `L1` 本机实测 / `L2` 自跑原型 / `L3` 源码分析 / `L4` 官方文档 / `L5` 社区反馈 / `L6` 博客教程 / `L7` 直觉；关键结论要求 `L1`–`L3` |
+
 ## 文档索引
 
 | 文档 | 用途 |
 |---|---|
 | `docs/SPEC.md` | 需求与架构（功能清单、模块职责、数据流）—— 改架构先改它 |
 | `docs/CONTRACTS.md` | 跨边界契约（线程模型、坐标系、生命周期），由 `build.rs` 强制 |
-| `docs/CODE-SIGNING.md` | 签名与权限（rcodesign、TCC、实测证据、坑） |
+| `docs/CODE-SIGNING.md` | 签名与权限（rcodesign、TCC、实测证据、常见问题） |
 | `docs/TESTING.md` / `docs/TEST-MATRIX.md` | 测试组织 / "每次修复补一条用例"矩阵 |
 | `docs/SYNC.md` | 前端内容与后端状态的同步时机 |
 | `docs/HANDY-COMPAT.md` / `docs/DEVIATION-AUDIT.md` | 与参考实现 Handy 的逐组件对照 / 有意偏离 |
 | `docs/FEATURE-BACKLOG.md` | 待办与明确的非目标（含理由） |
 | `docs/SPIKE-STREAMING.md` | 流式 ASR 方案调研（本地与云端，含实测） |
-| `docs/WINDOW_SEMANTICS.md` | 窗口层级与焦点语义 |
+| `docs/WINDOW-SEMANTICS.md` | 窗口层级与焦点语义 |
 | `docs/icon/README.md` | 图标资产、生成脚本与决策历史 |
-| `docs/REFACTOR.md` | 优雅性清账清单（对齐 Handy 骨架） |
+| `docs/REFACTOR.md` | 优雅性清理清单（对齐 Handy 骨架） |

@@ -1,6 +1,6 @@
 # 代码签名与权限（Code Signing & Permissions）
 
-本文记录本项目的签名方案、为什么这么选、以及踩过的坑。**结论先行**：签名用
+本文记录本项目的签名方案、为什么这么选、以及遇到的问题。**结论先行**：签名用
 [rcodesign](https://github.com/indygreg/apple-platform-rs)（apple-codesign）直接读 `.p12`
 文件完成，**不需要把证书导入钥匙串，也不需要系统信任它**。
 
@@ -8,7 +8,7 @@
 
 | 需求 | 自签 + rcodesign | 说明 |
 |---|---|---|
-| 本机长期不掉权限 | ✅ | TCC 按「指定要求 (DR)」记录：`identifier + certificate leaf`，只要证书和 bundle id 不变，重打包不重新授权 |
+| 本机长期不会丢失权限 | ✅ | TCC 按「指定要求 (DR)」记录：`identifier + certificate leaf`，只要证书和 bundle id 不变，重打包不重新授权 |
 | 证书只是文件夹里的文件 | ✅ | `.p12` + 密码文件，签名命令直接读；不导入钥匙串、不进系统信任设置 |
 | 将来能上 CI/CD | ✅ | rcodesign 是纯 Rust，可在 Linux/Windows runner 上签名（官方提供 GitHub Action） |
 | 给别人的机器分发（零摩擦） | ❌ | 自签不满足 Gatekeeper（策略要求 `anchor apple generic`），别人下载需手动放行；要做到零摩擦只能 Developer ID + 公证 |
@@ -18,7 +18,7 @@ bundle id 固定为 `io.github.yangyaofei.denpajack`，证书 CN 为 `Denpa Jack
 
 ## 2. 实测证据
 
-**A. `codesign` 用未信任的自签证书会失败**（这不是我们选的，是硬性要求）
+**A. `codesign` 用未信任的自签证书会失败**（这是硬性要求）
 
 ```
 $ security find-identity "$KC"
@@ -78,7 +78,7 @@ Denpa Jack.app: satisfies its Designated Requirement
 |---|---|---|
 | 证书+私钥 | `~/Documents/certs/denpa-jack-dev-10y.p12` | 10 年有效期，密码保护 |
 | 密码 | `~/Documents/certs/denpa-jack-dev-10y.pw` | 供脚本 `--p12-password-file` 使用（chmod 600）；也可改为密码管理器 + 环境变量 |
-| 生成产物 | `denpa-jack/tmp/certs/`（gitignored） | `key.pem` / `cert.pem` / `dev.p12`；临时工作副本，可随时重生成 |
+| 生成产物 | 仓库内 `tmp/certs/`（gitignored） | `key.pem` / `cert.pem` / `dev.p12`；临时工作副本，可随时重生成 |
 | 旧证书 | 已从钥匙串与信任设置中移除 | 旧身份 `VoiceInput Dev` 不再使用 |
 
 生成（如证书丢失需重建，注意：**重建=新身份=要重新授权一次**）：
@@ -127,7 +127,7 @@ mkdir -p ~/.local/bin && cp apple-codesign-0.29.0-aarch64-apple-darwin/rcodesign
 ```bash
 security import ~/Documents/certs/denpa-jack-dev-10y.p12 \
   -k ~/Library/Keychains/login.keychain-db -P "<密码>" -T /usr/bin/codesign -A
-# 用 rcodesign 的话这一步只是为了备用（例如某天想用 codesign 手动验证）
+# 用 rcodesign 的话这一步只是为了备用（例如日后想用 codesign 手动验证）
 ```
 
 - 只把 `.p12` + `.pw` 带过去即可；rcodesign 直接可用，**不需要任何信任设置**
@@ -153,15 +153,15 @@ macOS 15 起 Apple 移除了「右键 → 打开」的绕过方式，只能走�
   → `codesign --keychain`（GitHub 官方 p12 指南的流程，其中不含 `add-trusted-cert`，
   因为 Apple 签发的证书本就受信任）
 
-## 8. 踩过的坑
+## 8. 常见问题与处理方法
 
-| 坑 | 现象 | 处理 |
+| 问题 | 现象 | 处理 |
 |---|---|---|
 | `security import` 拒绝空密码 p12 | `MAC verification failed during PKCS12 import (wrong password?)` | p12 必须设非空密码 |
 | 自签证书未受信任 | `CSSMERR_TP_NOT_TRUSTED` / `codesign: no identity found` | 要么 `add-trusted-cert`，要么改用 rcodesign（本项目选后者） |
 | tauri.conf 的 `signingIdentity` | 身份不在钥匙串时，打包签名步骤会失败 | 已移除该字段；打包产出 ad-hoc 签名，随后由 rcodesign 覆盖 |
 | `security delete-identity` 的副作用 | 从登录钥匙串删除身份后，独立钥匙串文件里的身份也不再被 `find-identity -v` 视为有效 | 独立钥匙串方案已被 rcodesign 取代，不再需要 |
-| 额外二进制混进 bundle | `Contents/MacOS/` 里出现了 `llm_test2` | 已把 `src/bin/` 下的开发工具移到 `examples/`（`cargo run --example …`） |
+| 额外二进制文件被打包进 bundle | `Contents/MacOS/` 里出现了 `llm_test2` | 已把 `src/bin/` 下的开发工具移到 `examples/`（`cargo run --example …`） |
 | iconset 目录名 | `iconutil` 报 `Invalid Iconset` | 目录名必须以 `.iconset` 结尾 |
 | zsh 不做词分割 | `for s in "16 16"; do set -- $s; sips -z $2 $1` 里 `$2` 为空 → sips 静默失败 | 逐条显式写 sips |
 
