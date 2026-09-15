@@ -80,7 +80,9 @@ jobs:
         run: |
           APP="src-tauri/target/release/bundle/macos/Denpa Jack.app"
           rcodesign sign --p12-file certs/ci.p12 --p12-password-file certs/ci.pw "$APP"
-          rcodesign verify "$APP"
+          # rcodesign verify 只认 Mach-O 单文件；校验整个 .app 包用 codesign --verify --deep
+          rcodesign verify "$APP/Contents/MacOS/denpa-jack"
+          codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dvv "$APP" 2>&1 | grep -E "Identifier|Authority" || true
 
       - name: Package artifacts
