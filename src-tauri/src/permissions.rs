@@ -2,8 +2,12 @@
 //
 // 本项目必需两项(缺了对应能力就不可用):
 //   - microphone    (TCC 麦克风): 录音。授权状态由 AVFoundation 查询(权威来源, 非猜测)
-//   - accessibility (TCC 辅助功能/AX): 把结果直接写进光标或自动粘贴
-// 不需要"输入监控": 键盘监听走 Carbon 全局快捷键(global-shortcut 插件), 不用 CGEventTap
+//   - accessibility (TCC 辅助功能/AX): ①键盘监听与快捷键录制 ②把结果直接写进光标或自动粘贴
+//
+// **不需要"输入监控"**: 只有"自研 CGEventTap listen-only 引擎"才需要它, 该引擎已在 C54 删除。
+// 现在键盘层 = handy-keys(HotkeyManager/KeyboardListener, 内部 CGEventTap), 但库自己的权限要求是
+// 辅助功能(listener.rs: AXIsProcessTrusted 检查); 录音期间的 esc 走 Carbon 全局快捷键(global-shortcut 插件)。
+// 实机验证: 只授予辅助功能时热键/录制/AX 写入全部正常。
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]

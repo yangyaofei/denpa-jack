@@ -61,6 +61,17 @@ Denpa Jack.app: satisfies its Designated Requirement
 
 麦克风授权后采集与转写均正常 → **自签 + rcodesign 能满足本机自用**。
 
+### 需要的权限：三项里只有两项必需
+
+| 权限 | 是否必需 | 用在哪 | 说明 |
+|---|---|---|---|
+| 麦克风 | ✅ | 录音 | 授权状态用 AVFoundation `authorizationStatusForMediaType` 查（权威，非"试着录一下猜"）；缺失时按下热键**直接拒绝并提示** |
+| 辅助功能 (Accessibility) | ✅ | ①键盘监听与快捷键录制（handy-keys 的 `HotkeyManager`/`KeyboardListener`，库以 `AXIsProcessTrusted` 为准）②AX 直写光标 / 自动粘贴 | 缺它仍能录音，但结果只能进剪贴板（会明确提示） |
+| 输入监控 (Input Monitoring) | ❌ 不需要 | —— | 只有"自研 CGEventTap listen-only 引擎"才需要它，该引擎已在 C54 删除；esc 用 Carbon 全局快捷键，不需要任何 TCC |
+
+实机验证：本机只授予「辅助功能」（日志 `[deliver] ax_trusted=true`），热键、快捷键录制、自动粘贴全部正常；
+启动时的权限总检查也只报告麦克风 / 辅助功能两项（见 `src-tauri/src/permissions.rs`）。
+
 ## 3. 资产与位置（都在仓库之外）
 
 | 文件 | 位置 | 说明 |
