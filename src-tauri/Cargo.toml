@@ -51,6 +51,7 @@ handy-keys = "0.3.4"
 tempfile = "3"
 
 [patch.crates-io]
-# handy-keys 0.3.4 打了两个 macOS 键盘状态修复(见 vendor/handy-keys/PATCHES.md),
-# vendored 进仓库以保证 clone 后可编译(不再依赖 tmp/ 下的临时目录)。
-handy-keys = { path = "vendor/handy-keys" }
+# handy-keys 0.3.4 打了两个 macOS 键盘状态修复，以 fork 的固定 commit 引入（见 docs/DEPENDENCIES.md）。
+# 用 rev 而非 branch：Cargo.lock 也钉死该版本，分支后续变动不会影响构建。
+# 上游合并发布新版本后：删除本段，改回 crates.io 的修复版。
+handy-keys = { git = "https://github.com/yangyaofei/handy-keys", rev = "27edee4e7af2689630f5450887197a8dce7a0a1d" }

@@ -1875,6 +1875,7 @@ dependencies = [
 [[package]]
 name = "handy-keys"
 version = "0.3.4"
+source = "git+https://github.com/yangyaofei/handy-keys?rev=27edee4e7af2689630f5450887197a8dce7a0a1d#27edee4e7af2689630f5450887197a8dce7a0a1d"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
