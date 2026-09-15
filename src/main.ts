@@ -121,6 +121,8 @@ function describeCombo(s: string): string {
     settingsOpen: false,
     llmModelsError: "",
   permWarning: "",
+  // 权限总检查(麦克风 + 辅助功能): 启动即查, 缺项顶部横幅 + 通用页卡片
+  perms: [] as any[],
   prioSel: 0,
 
   sections: [
@@ -151,7 +153,8 @@ function describeCombo(s: string): string {
     await this.refreshMics();
     // 录音开始后刷新"当前输入设备"(运行时事实);
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
-    invoke("check_permissions").catch(() => {});
+    await this.checkPerms();
+    listen<any[]>("permissions", (e) => { this.perms = e.payload || []; });
     this.uiSelftest();
   
     // C46 主窗轮询(组件作用域 this 可用): 800ms 拉版本, 变化才刷新
@@ -607,6 +610,31 @@ function describeCombo(s: string): string {
         try { await invoke("ui_log", { msg }); } catch {}
       }
     }
+  },
+
+  // ==== 权限总检查(麦克风 + 辅助功能) ====
+  missingPerms(): any[] {
+    return this.perms.filter((p: any) => !p.granted);
+  },
+  permStatusText(p: any): string {
+    if (p.granted) return "已授权";
+    if (p.status === "not_determined") return "未决定（首次使用会弹窗）";
+    if (p.status === "restricted") return "受限";
+    return "未授权";
+  },
+  async checkPerms() {
+    try {
+      this.perms = await invoke<any[]>("check_permissions");
+    } catch (e) {
+      console.warn("check_permissions 失败", e);
+    }
+  },
+  async requestMic() {
+    try { await invoke("request_microphone"); } catch (e) { console.warn(e); }
+    setTimeout(() => this.checkPerms(), 900);
+  },
+  async openPermSettings(p: any) {
+    try { await invoke("open_system_settings", { url: p.settings_url }); } catch (e) { console.warn(e); }
   },
 
   async initMock() {

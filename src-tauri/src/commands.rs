@@ -174,13 +174,34 @@ pub fn resume_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
     crate::shortcut::resume_all(&app)
 }
 
+/// 权限总检查: 返回全部必需权限(麦克风/辅助功能)的当前状态, 缺项时同时推事件给前端
 #[tauri::command]
-pub fn check_permissions(app: tauri::AppHandle) -> bool {
-    let ok = deliver::ax_trusted(false);
-    if !ok {
+pub fn check_permissions(app: tauri::AppHandle) -> Vec<crate::permissions::PermState> {
+    let list = crate::permissions::all();
+    if list.iter().any(|p| !p.granted) {
         let _ = Emitter::emit_to(&app, "main", "permission-ax", false);
     }
-    ok
+    let _ = Emitter::emit_to(&app, "main", "permissions", &list);
+    list
+}
+
+/// 主动请求麦克风权限(未决定时弹系统框; 已拒绝不会弹, 需去系统设置)
+#[tauri::command]
+pub fn request_microphone() {
+    crate::permissions::request_mic();
+}
+
+/// 打开系统设置的指定隐私面板(权限引导用; 只允许系统设置 URL)
+#[tauri::command]
+pub fn open_system_settings(url: String) -> Result<(), String> {
+    if !url.starts_with("x-apple.systempreferences:") {
+        return Err("仅允许打开系统设置面板".into());
+    }
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| format!("打开系统设置失败: {e}"))?;
+    Ok(())
 }
 
 // ==== 自启动(对齐 Handy autostart) ====

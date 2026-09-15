@@ -13,6 +13,7 @@ mod mic_watch;
 mod openai_realtime;
 mod overlay;
 mod paste_tx;
+mod permissions;
 mod pipeline;
 mod recording;
 pub mod settings;
@@ -115,12 +116,37 @@ pub fn run() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
             }
             tray_events::spawn_tray(app.handle()).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-            // 权限引导: 弹系统授权窗 + 提示
+            // 权限总检查: 一次性查清全部必需权限(麦克风 + 辅助功能)
+            // 缺项 → 落日志 + 推给前端 + 把主窗拉出来, 让用户第一眼就看到"缺什么、会怎样"
             let h = app.handle().clone();
             std::thread::spawn(move || {
-                if !deliver::ax_trusted(true) {
+                // 麦克风未决定 → 弹系统授权框; 已拒绝不会再弹(需去系统设置)
+                if crate::permissions::mic_status_code() == 0 {
+                    crate::permissions::request_mic();
+                    std::thread::sleep(std::time::Duration::from_millis(800));
+                }
+                // 辅助功能: 带引导提示的检查(AXIsProcessTrustedWithOptions(prompt))
+                let ax = deliver::ax_trusted(true);
+                let missing = crate::permissions::missing();
+                if missing.is_empty() {
+                    log::log(&h, "[perm] 权限齐备: 麦克风 + 辅助功能");
+                } else {
+                    log::log(
+                        &h,
+                        &format!(
+                            "[perm] 缺失权限 {:?} (麦克风={}, 辅助功能={})",
+                            missing,
+                            crate::permissions::mic_status_text(),
+                            ax
+                        ),
+                    );
                     use tauri::Emitter;
-                    let _ = Emitter::emit_to(&h, "main", "permission-ax", false);
+                    let _ = Emitter::emit_to(&h, "main", "permissions", &crate::permissions::all());
+                    crate::hud_set(|s| s.msg = format!("缺少权限: {}", missing.join("、")));
+                    if let Some(w) = h.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
                 }
             });
             // hud 浮窗
@@ -200,7 +226,7 @@ pub fn run() {
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
             commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,
             commands::capture_begin, commands::capture_poll, commands::capture_end,
-            commands::check_permissions,
+            commands::check_permissions, commands::request_microphone, commands::open_system_settings,
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
             settings::get_config, settings::save_config,
         ])

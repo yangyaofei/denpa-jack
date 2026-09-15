@@ -1,5 +1,29 @@
       <section x-show="section === 'general'" class="page">
         <h1>通用</h1>
+        <div class="card" x-show="perms.length">
+          <div class="row">
+            <div>
+              <div class="row-title">权限</div>
+              <div class="row-hint">两项都必须有；缺任一项都会影响使用（启动时自动检查，授权后无需重启）</div>
+            </div>
+            <button class="mini" @click="checkPerms()">重新检测</button>
+          </div>
+          <template x-for="p in perms" :key="p.key">
+            <div>
+              <div class="perm-row">
+                <span class="perm-dot" :class="p.granted ? 'ok' : 'bad'"></span>
+                <span class="perm-name" x-text="p.label"></span>
+                <span class="perm-state" :class="p.granted ? '' : 'bad'" x-text="permStatusText(p)"></span>
+                <span class="perm-actions">
+                  <button class="mini" x-show="!p.granted && p.key === 'microphone' && p.status === 'not_determined'"
+                          @click="requestMic()">请求授权</button>
+                  <button class="mini" x-show="!p.granted" @click="openPermSettings(p)">打开系统设置</button>
+                </span>
+              </div>
+              <div class="row-hint perm-impact" x-show="!p.granted" x-text="`${p.purpose} —— ${p.impact}`"></div>
+            </div>
+          </template>
+        </div>
         <div class="card">
           <div class="row">
             <div>

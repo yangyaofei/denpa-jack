@@ -264,3 +264,17 @@ details.think pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0
 .hk-add:hover { background: rgba(10,132,255,0.08); }
 .hk-capture { border: 1px solid rgba(10,132,255,0.4); border-radius: 6px; padding: 10px 12px; background: rgba(10,132,255,0.04); }
 .hk-live { font-family: ui-monospace, monospace; font-size: 13px; margin-bottom: 6px; }
+
+/* 权限总检查: 顶部横幅 + 通用页卡片行 */
+.perm-banner { display: flex; align-items: center; gap: 8px; margin: 10px 16px 0; padding: 8px 12px;
+  border-radius: 8px; background: rgba(255,59,48,0.12); color: #c0392b; font-size: 12px; cursor: pointer; }
+.perm-banner:hover { background: rgba(255,59,48,0.18); }
+.perm-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; }
+.perm-name { font-size: 13px; color: var(--label, #1d1d1f); }
+.perm-state { font-size: 11px; color: var(--label2, #6e6e73); }
+.perm-state.bad { color: #c0392b; }
+.perm-actions { margin-left: auto; display: flex; gap: 6px; }
+.perm-dot { width: 8px; height: 8px; border-radius: 50%; background: #c7c7cc; flex: none; }
+.perm-dot.ok { background: #34c759; }
+.perm-dot.bad { background: #ff3b30; }
+.perm-impact { padding: 0 2px 6px 18px; }

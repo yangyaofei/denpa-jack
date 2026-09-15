@@ -19,6 +19,10 @@
       <div class="side-status" x-text="statusLine()"></div>
     </div>
 <div class="content-in">
+      <div class="perm-banner" x-show="missingPerms().length" @click="section = 'general'">
+        <span class="perm-dot bad"></span>
+        <span x-text="'缺少权限：' + missingPerms().map(p => p.label).join('、') + ' —— 缺权限时应用无法正常工作，点此查看'"></span>
+      </div>
       <div data-page="asr"></div>
       <div data-page="history"></div>
       <div data-page="general"></div>

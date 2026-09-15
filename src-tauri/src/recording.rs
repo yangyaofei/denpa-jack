@@ -243,6 +243,21 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             return Err("已在录音中".into());
         }
     }
+    // 权限总检查: 没有麦克风权限就不开录——直接说清缺什么、去哪儿开
+    // (否则表现为"看起来在录音, 实际采到全零", 用户实测过这种困惑)
+    if !crate::permissions::mic_granted() {
+        let msg = match crate::permissions::mic_status_code() {
+            0 => "麦克风权限未授予: 系统设置 → 隐私与安全性 → 麦克风",
+            1 => "麦克风权限受限: 系统设置 → 隐私与安全性 → 麦克风",
+            _ => "麦克风权限被拒绝: 请在 系统设置 → 隐私与安全性 → 麦克风 中允许",
+        };
+        log::elog(&format!(
+            "[perm] 录音被拒绝: 麦克风未授权({})",
+            crate::permissions::mic_status_text()
+        ));
+        crate::overlay::show_hud_msg(&app, msg);
+        return Err(msg.into());
+    }
     let mic = resolve_mic(&app, &mut cfg);
     let mic_name = mic.clone();
     let (tx, rx) = ttx::channel::<doubao::Cmd>(64);
