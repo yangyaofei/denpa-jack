@@ -291,8 +291,23 @@ pub fn data_dir_no_app() -> PathBuf {
         .map(|h| PathBuf::from(h).join("Library/Application Support").join(APP_ID))
         .unwrap_or_else(|_| PathBuf::from("."));
     fs::create_dir_all(&base).ok();
-    *DATA_ROOT.lock().unwrap() = Some(base.clone());
-    base
+    // 没有 AppHandle 时直接从磁盘读 config.json 取 data_dir，保证日志与业务写在同一目录
+    let configured = fs::read_to_string(base.join("config.json"))
+        .ok()
+        .map(|s| configured_data_dir_from_json(&s))
+        .unwrap_or_default();
+    let p = resolve_data_dir(&base, &configured);
+    fs::create_dir_all(&p).ok();
+    *DATA_ROOT.lock().unwrap() = Some(p.clone());
+    p
+}
+
+/// 从 config.json 文本里取 data_dir（无 AppHandle 场景用；缺失/解析失败一律视为空=默认目录）
+fn configured_data_dir_from_json(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("data_dir").and_then(|d| d.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default()
 }
 
 pub fn config_path(app: &tauri::AppHandle) -> PathBuf {

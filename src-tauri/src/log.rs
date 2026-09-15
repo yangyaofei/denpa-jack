@@ -22,12 +22,17 @@ pub fn log(app: &tauri::AppHandle, msg: &str) {
             let _ = writeln!(f, "[{now}] {msg}");
         }
     }
-    eprintln!("[voice] {msg}");
+    // stderr 已被 crash_log 指向同一个日志文件时不再重复写
+    if !crate::crash_log::stderr_redirected() {
+        eprintln!("[voice] {msg}");
+    }
 }
 
 /// 无 app 句柄时的诊断日志: stderr + app.log 双写(打包版 stderr 不可见)
 pub fn elog(msg: &str) {
-    eprintln!("[vm] {msg}");
+    if !crate::crash_log::stderr_redirected() {
+        eprintln!("[vm] {msg}");
+    }
     use std::io::Write;
     // C53: 与 log() 共用 LOG_LOCK——否则多线程并发 append 会让日志行交错(实测 "[diag] ...[ts] setup done" 两行互相嵌入,
     // grep 按"key-engine"检索时整行丢失, 造成"日志没打"的误判)

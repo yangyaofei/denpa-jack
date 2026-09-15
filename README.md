@@ -123,6 +123,7 @@ moves with it except `config.json`, which stays in the default location and acts
 | [docs/CONTRACTS.md](docs/CONTRACTS.md) | cross-boundary contracts (threading, coordinates, lifecycle), enforced at build time |
 | [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | signing with rcodesign straight from a `.p12`, TCC requirements, measured evidence, pitfalls |
 | [docs/CI-CD.md](docs/CI-CD.md) | GitHub Actions: test pipeline, release pipeline, repository credentials it needs |
+| [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) | crash and silent-exit diagnostics: what the log covers, how to read it, self-test modes |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | dependency notes: the patched `handy-keys`, upstream PR, cleanup after merge |
 | [docs/TESTING.md](docs/TESTING.md) / [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md) | test organisation, "every fix adds a case" matrix |
 | [docs/SYNC.md](docs/SYNC.md) | how front-end content stays in sync with back-end state |

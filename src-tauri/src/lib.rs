@@ -2,6 +2,7 @@ pub mod audio;
 mod audio_feedback;
 mod autotest;
 mod commands;
+pub mod crash_log;
 mod deliver;
 pub mod dict;
 pub mod doubao;
@@ -90,10 +91,6 @@ pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value
 pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 
 pub fn run() {
-    // panic 落盘(打包版 stderr 不可见; 线程静默退出会让日志中断, 无法事后定位)
-    std::panic::set_hook(Box::new(|info| {
-        crate::log::elog(&format!("[panic] {info}"));
-    }));
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 二次启动: 唤出设置窗
@@ -114,6 +111,9 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // 菜单栏常驻, 不占 Dock
             // 预热数据目录缓存（history/recordings/llm_logs/app.log 都从它派生）
             log::log(app.handle(), &format!("数据目录: {}", crate::settings::data_dir(app.handle()).display()));
+            // 死亡诊断: 会话文件(判定上次是否正常运行结束) + 崩溃报告扫描 + 心跳
+            crate::crash_log::begin_session(&crate::settings::data_dir(app.handle()));
+            crate::crash_log::spawn_heartbeat();
             if let Err(e) = mic_watch::start() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
             }
@@ -231,8 +231,18 @@ pub fn run() {
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
             settings::get_config, settings::save_config,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            // 退出路径留痕: 没有这行日志时, "应用消失" 就分不清是正常退出还是崩溃
+            tauri::RunEvent::ExitRequested { code, .. } => {
+                log::log(app, &format!("ExitRequested code={code:?}"));
+            }
+            tauri::RunEvent::Exit => {
+                crate::crash_log::end_session(&crate::settings::data_dir(app));
+            }
+            _ => {}
+        });
 }
 
 

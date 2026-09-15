@@ -84,7 +84,10 @@ pub fn handle_tray_event(app: &tauri::AppHandle, ev: &str) {
                 let _ = w.set_focus();
             }
         }
-        "quit" => app.exit(0),
+        "quit" => {
+            crate::log::log(app, "托盘菜单: 退出");
+            app.exit(0)
+        }
         _ => {}
     }
 }

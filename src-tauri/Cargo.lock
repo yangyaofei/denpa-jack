@@ -955,6 +955,7 @@ dependencies = [
  "futures-util",
  "handy-keys",
  "http",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",

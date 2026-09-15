@@ -2,6 +2,7 @@
 //   VOICEMAC_AUTOTEST_FILE=<wav>  文件回放全链路(走真实交付路径, 自建会话不碰真实麦克风)
 //   VOICEMAC_AUTOTEST=e2e         真实麦克风录音 2.5s 全链路
 //   VOICEMAC_AUTOTEST=ui          数据链验证(页面调用函数 vs 磁盘真值)
+//   VOICEMAC_AUTOTEST=quit        2 秒后走正常退出路径(验证"正常退出"标记与会话文件清理)
 use tauri::{AppHandle, Manager};
 
 use crate::doubao;
@@ -10,6 +11,15 @@ use crate::recording::wav_data_chunk;
 use crate::AppState;
 
 pub fn maybe_spawn(app: &AppHandle) {
+    if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("quit") {
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2000));
+            log::log(&app2, "AUTOTEST-QUIT: 走正常退出路径");
+            app2.exit(0);
+        });
+        return;
+    }
     if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("ui") {
         let app2 = app.clone();
         std::thread::spawn(move || run_ui_chain(app2));

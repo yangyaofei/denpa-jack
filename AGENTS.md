@@ -75,6 +75,7 @@ CI 需要的仓库凭据（Secrets）与发版流程见 `docs/CI-CD.md`。
 | `docs/SPEC.md` | 需求与架构（功能清单、模块职责、数据流）—— 改架构先改它 |
 | `docs/CONTRACTS.md` | 跨边界契约（线程模型、坐标系、生命周期），由 `build.rs` 强制 |
 | `docs/CODE-SIGNING.md` | 签名与权限（rcodesign、TCC、实测证据、常见问题） |
+| `docs/DIAGNOSTICS.md` | 崩溃与静默退出诊断（日志能覆盖什么、事后怎么判读、自测通道） |
 | `docs/TESTING.md` / `docs/TEST-MATRIX.md` | 测试组织 / "每次修复补一条用例"矩阵 |
 | `docs/SYNC.md` | 前端内容与后端状态的同步时机 |
 | `docs/HANDY-COMPAT.md` / `docs/DEVIATION-AUDIT.md` | 与参考实现 Handy 的逐组件对照 / 有意偏离 |

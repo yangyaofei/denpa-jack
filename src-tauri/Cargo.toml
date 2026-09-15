@@ -47,6 +47,7 @@ core-graphics = "0.25.0"
 handy-keys = "0.3.4"
 objc2-av-foundation = { version = "0.3.2", features = ["AVMediaFormat", "block2"] }
 block2 = "0.6"
+libc = "0.2.189"
 
 
 [dev-dependencies]
