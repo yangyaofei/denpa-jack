@@ -1,6 +1,6 @@
 # Denpa Jack 需求与架构文档（SPEC）
 
-> 依据：源码全量通读（src-tauri/src/ 全部 25 个 .rs、build.rs、CONTRACTS.md、tauri.conf.json、Cargo.toml、src/main.ts、src/hud.ts、index.html、settings.html、hud.html、vite.config.ts、examples/）。
+> 依据：源码全量通读（src-tauri/src/ 全部 25 个 .rs、build.rs、docs/CONTRACTS.md、tauri.conf.json、Cargo.toml、src/main.ts、src/hud.ts、index.html、settings.html、hud.html、vite.config.ts、examples/）。
 > 所有数值、路径、行为均从代码验证，未做推测；无法验证处已标注。
 
 ## 1. 项目定位
@@ -167,7 +167,7 @@
 
 ### 3.2 交接与代际（pipeline.rs，274 行）
 
-- `SessionHandoff`：`audio_path / pcm(Arc<Vec<u8>>) / focus / duration_ms / engine / gen`。会话数据只经此流动，禁止新会话级 static（CONTRACTS.md 生命周期节）。
+- `SessionHandoff`：`audio_path / pcm(Arc<Vec<u8>>) / focus / duration_ms / engine / gen`。会话数据只经此流动，禁止新会话级 static（docs/CONTRACTS.md 生命周期节）。
 - 代际令牌：`SESSION_GEN`（每会话递增）、`CANCELLED_GEN`（abort 时写入被放弃会话的代）。交付前 `gen != 0 && gen == CANCELLED_GEN` → delivered="cancelled"，只入历史不粘贴。
 - `post_process`（Result 触发，专用线程 + `catch_unwind`）：
   1. 配置读取失败 → asr-final（raw 即 final）+ 返回。
@@ -225,7 +225,7 @@
   - transcript 分段累积（`conversation.item.input_audio_transcription.completed`）+ `response.audio_transcript.delta` 拼 partial。
   - Finish：按键定则立即 `input_audio_buffer.commit`，在 `FINALIZE_TIMEOUT_SECS` 窗口内收最后一帧即结算。
   - 断连契约与 doubao 对齐：未 Finish 的中途断连报错。
-- settle 恰好一次（CONTRACTS.md）：空文本=Error"没听清(转写为空)"，非空=Result；断连/错误帧/panic 均不静默。
+- settle 恰好一次（docs/CONTRACTS.md）：空文本=Error"没听清(转写为空)"，非空=Result；断连/错误帧/panic 均不静默。
 
 ### 3.5 后处理管线组件
 
@@ -286,12 +286,12 @@
   - 5：app.exit(0)。
 - 事件线程经 mpsc 接 tag 字符串分发；`refresh_tray`：主线程 Drop 旧托盘（removeStatusItem）→ spawn_tray 重建。
 
-### 3.8 契约闸与契约文档（build.rs 38 行 + CONTRACTS.md）
+### 3.8 契约闸与契约文档（build.rs 38 行 + docs/CONTRACTS.md）
 
-- build.rs（CONTRACTS.md 的编译期执行者，违者 panic 编译失败）：
+- build.rs（docs/CONTRACTS.md 的编译期执行者，违者 panic 编译失败）：
   - 写坐标 API（`setFrameOrigin` / `CGDisplayBounds` / `CGGetDisplaysWithPoint` / `cursor_position`）只准出现在 overlay.rs；`mouseLocation` 额外允许 autotest.rs（读坐标的验证者）。
   - 使用主线程-only API（`NSStatusItem` / `NSPasteboard` / `setFrameOrigin` / `NSSound`）的文件必须同现 `run_on_main_thread` 或 `MainThreadMarker` 调度标记（audio_feedback.rs 豁免，play_on_main 内部已调度）。
-- CONTRACTS.md（跨边界契约，教训来源 C27/C41/C26/C39）：
+- docs/CONTRACTS.md（跨边界契约，教训来源 C27/C41/C26/C39）：
   - 坐标三体系对照：NS（主屏左下原点，y 向上）/ CG（主屏左上，y 向下）/ Tauri logical（封装 CG，向下）——互不兼容；一次计算只用一套；坐标操作收口 overlay.rs。
   - 线程模型：NSWindow/NSStatusItem/NSPasteboard/NSSound 仅主线程（经 run_on_main_thread）；tauri 窗口方法线程安全；AX API/CGEvent 构造任意线程；全局快捷键回调只发信号；tokio 引擎会话跑专用 current_thread runtime。
   - 生命周期：objc2 Retained 自动释放；裸 CGEvent/CF 必须 CFRelease；会话附属物一律持 Recording.cancel 令牌；交接数据只经 SessionHandoff。

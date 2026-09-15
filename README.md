@@ -114,7 +114,9 @@ See [docs/TESTING.md](docs/TESTING.md) and [docs/TEST-MATRIX.md](docs/TEST-MATRI
 
 | Document | Contents |
 |---|---|
+| [AGENTS.md](AGENTS.md) | project contract for contributors and agents: layout, commands, hard rules |
 | [docs/SPEC.md](docs/SPEC.md) | requirements and architecture (features, modules, data flow) |
+| [docs/CONTRACTS.md](docs/CONTRACTS.md) | cross-boundary contracts (threading, coordinates, lifecycle), enforced at build time |
 | [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | signing with rcodesign straight from a `.p12`, TCC requirements, measured evidence, pitfalls |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | dependency notes: the patched `handy-keys`, upstream PR, cleanup after merge |
 | [docs/TESTING.md](docs/TESTING.md) / [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md) | test organisation, "every fix adds a case" matrix |
@@ -124,6 +126,7 @@ See [docs/TESTING.md](docs/TESTING.md) and [docs/TEST-MATRIX.md](docs/TEST-MATRI
 | [docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md) | open items and explicit non-goals (with reasons) |
 | [docs/SPIKE-STREAMING.md](docs/SPIKE-STREAMING.md) | streaming ASR options (local and cloud, measured) |
 | [docs/WINDOW-SEMANTICS.md](docs/WINDOW-SEMANTICS.md) | window levels and focus semantics |
+| [docs/REFACTOR.md](docs/REFACTOR.md) | code-quality checklist (alignment with the Handy skeleton) |
 | [docs/icon/README.md](docs/icon/README.md) | app icon: final assets, generation scripts, decision history |
 
 ## Known limits

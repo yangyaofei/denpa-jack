@@ -1,4 +1,4 @@
-// 跨边界契约的编译期强制(CONTRACTS.md 的执行者):
+// 跨边界契约的编译期强制(docs/CONTRACTS.md 的执行者):
 // 坐标 API 只准 overlay.rs 出现——模块收口从"约定"升级为"编译失败"
 fn main() {
     println!("cargo:rerun-if-changed=src/");
@@ -17,7 +17,7 @@ fn main() {
             if name != "overlay.rs" && content.contains(api) {
                 panic!(
                     "契约违规: 坐标 API `{api}` 只允许出现在 overlay.rs(全 NS 链路), 发现于 {name}。\
-                     见 CONTRACTS.md 坐标系一节——三套坐标系互不兼容, 新坐标代码进 overlay.rs 并注明体系。"
+                     见 docs/CONTRACTS.md 坐标系一节——三套坐标系互不兼容, 新坐标代码进 overlay.rs 并注明体系。"
                 );
             }
         }
@@ -31,7 +31,7 @@ fn main() {
         {
             panic!(
                 "契约违规: {name} 使用主线程-only AppKit API 但未见 run_on_main_thread/MainThreadMarker 调度。\
-                 见 CONTRACTS.md 线程模型一节。"
+                 见 docs/CONTRACTS.md 线程模型一节。"
             );
         }
     }
