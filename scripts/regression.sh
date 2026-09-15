@@ -6,7 +6,7 @@ echo "== 1/4 cargo test =="
 (cd src-tauri && cargo test --lib 2>&1 | tail -1)
 echo "== 2/4 文件回放链路 =="
 pkill -x tauri-app 2>/dev/null; sleep 1
-W=/Users/yangyaofei/workspace/research-plan/voice-mac-app/test_input/real_1780279293_6d783cb4-bb15-4e94-a911-c3b7149538e6_16k.wav
+W=tests/fixtures/real_1780279293_6d783cb4-bb15-4e94-a911-c3b7149538e6_16k.wav
 H="$HOME/Library/Application Support/com.yangyaofei.tauri-app/history.jsonl"
 BEFORE=$(wc -l < "$H" 2>/dev/null || echo 0)
 timeout 60 env VOICEMAC_AUTOTEST_FILE="$W" src-tauri/target/release/tauri-app > tmp/reg-file.txt 2>&1

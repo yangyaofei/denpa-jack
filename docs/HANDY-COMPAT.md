@@ -1,5 +1,5 @@
 # Handy 组件语义对照表（抄全清单 v2）
-来源: research-plan/voice-mac-app/tmp/handy/src-tauri/src/（clone 30.8k★, Tauri 2 同类）
+来源: Handy 源码（github.com/cjpais/Handy，30.8k★，Tauri 2 同类；对照时用的本地 clone 已随调研目录清理，需要时重新 clone）
 规则: 移植组件先列语义清单再实现; 出 bug 先查本表漏了哪条语义, 不打补丁。
 
 ## 1. 浮窗 (hud)
