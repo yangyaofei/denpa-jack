@@ -16,6 +16,36 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # 防线：防止"被忽略的路径/凭据/真人录音"再次进入版本库
+      # 背景：曾用 git mv 把已跟踪文件移进被 gitignore 的 tmp/，忽略规则对已跟踪文件无效 → 真人录音被推送到公开仓库
+      - name: Tracked-file guard
+        run: |
+          fail=0
+
+          tracked_tmp=$(git ls-files tmp/ || true)
+          if [ -n "$tracked_tmp" ]; then
+            echo "::error::tmp/ 下不应有被跟踪的文件（忽略规则对已跟踪文件无效）："
+            echo "$tracked_tmp" | head -5
+            fail=1
+          fi
+
+          tracked_secret=$(git ls-files | grep -iE '(^|/)(secrets?\.env.*|.*\.p12|.*\.pw|.*\.pem|.*\.key|.*\.jks)$' || true)
+          if [ -n "$tracked_secret" ]; then
+            echo "::error::疑似凭据/密钥文件被跟踪："
+            echo "$tracked_secret" | head -5
+            fail=1
+          fi
+
+          private_audio=$(git ls-files | grep -E '^tests/fixtures/real_' || true)
+          if [ -n "$private_audio" ]; then
+            echo "::error::tests/fixtures 下不应出现真人录音（real_*.wav）；合成小样用 sample_*.wav："
+            echo "$private_audio" | head -5
+            fail=1
+          fi
+
+          [ "$fail" -eq 0 ] && echo "通过：没有被误跟踪的忽略路径/凭据/真人录音"
+          exit $fail
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
