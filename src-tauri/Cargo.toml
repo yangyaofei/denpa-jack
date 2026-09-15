@@ -51,4 +51,6 @@ handy-keys = "0.3.4"
 tempfile = "3"
 
 [patch.crates-io]
-handy-keys = { path = "../tmp/handy-keys-fork" }
+# handy-keys 0.3.4 打了两个 macOS 键盘状态修复(见 vendor/handy-keys/PATCHES.md),
+# vendored 进仓库以保证 clone 后可编译(不再依赖 tmp/ 下的临时目录)。
+handy-keys = { path = "vendor/handy-keys" }
