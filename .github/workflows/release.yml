@@ -97,19 +97,17 @@ jobs:
           ls -lh dist-release
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_TAG }}
-          draft: false
-          generate_release_notes: true
-          body: |
-            macOS (Apple Silicon) build, signed with the project self-signed certificate.
-
-            安装：下载 `.dmg`（或 `.zip`）→ 拖进「应用程序」。
-            首次打开若被 Gatekeeper 拦下（提示无法验证开发者）：
-            系统设置 → 隐私与安全性 → 「仍要打开」；或用 `xattr -dr com.apple.quarantine "/Applications/Denpa Jack.app"`。
-
-            权限：首次启动需要授予「麦克风」与「辅助功能」（见 app 内的权限卡片）。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 用 gh CLI 建/更新 Release（runner 自带 gh；避免第三方 action 的 Node 运行时弃用问题）
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist-release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes "$(cat .github/release-notes.md)" \
+              dist-release/*
+          fi
           files: |
             dist-release/*
