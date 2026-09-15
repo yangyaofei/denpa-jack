@@ -78,7 +78,7 @@ Denpa Jack.app: satisfies its Designated Requirement
 |---|---|---|
 | 证书+私钥 | `~/Documents/certs/denpa-jack-dev-10y.p12` | 10 年有效期，密码保护 |
 | 密码 | `~/Documents/certs/denpa-jack-dev-10y.pw` | 供脚本 `--p12-password-file` 使用（chmod 600）；也可改为密码管理器 + 环境变量 |
-| 生成产物 | `voice-input/tmp/certs/`（gitignored） | `key.pem` / `cert.pem` / `dev.p12`；临时工作副本，可随时重生成 |
+| 生成产物 | `denpa-jack/tmp/certs/`（gitignored） | `key.pem` / `cert.pem` / `dev.p12`；临时工作副本，可随时重生成 |
 | 旧证书 | 已从钥匙串与信任设置中移除 | 旧身份 `VoiceInput Dev` 不再使用 |
 
 生成（如证书丢失需重建，注意：**重建=新身份=要重新授权一次**）：
