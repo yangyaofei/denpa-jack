@@ -7,3 +7,6 @@ src-tauri/gen/
 
 # 密钥（API keys），不入库
 secrets.env
+
+# 签名资产与密钥（仅本地/CI secret，不入库）
+certs/

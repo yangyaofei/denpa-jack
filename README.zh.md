@@ -50,8 +50,8 @@ npm run tauri dev          # 开发
 npm run tauri build
 # 直接用证书文件签名（不需要钥匙串、不需要系统信任）
 ~/.local/bin/rcodesign sign \
-  --p12-file "$HOME/Documents/certs/denpa-jack-dev-10y.p12" \
-  --p12-password-file "$HOME/Documents/certs/denpa-jack-dev-10y.pw" \
+  --p12-file "certs/denpa-jack-dev-10y.p12" \
+  --p12-password-file "certs/denpa-jack-dev-10y.pw" \
   "src-tauri/target/release/bundle/macos/Denpa Jack.app"
 ```
 
@@ -66,7 +66,7 @@ npm run tauri build
 签名，`codesign --verify` 能通过，TCC 权限也正常工作（本机已端到端验证）。
 
 - Bundle id 固定为 `io.github.yangyaofei.denpajack`；证书是本机自签的 `Denpa Jack Dev`
-  （10 年），存放在仓库之外（`~/Documents/certs/denpa-jack-dev-10y.p12` 与 `.pw`）。
+  （10 年），放在仓库内的 `certs/` 目录（该目录已 gitignore，不会入库）。
   这两样都不要变：macOS 的 TCC 按**代码要求**（identifier + 证书叶指纹）记录权限，
   换 bundle id 或换证书都会导致麦克风 / 辅助功能需要重新授权。
 - **在别人的 Mac 上**：本地拷贝（U 盘、`scp`）能直接跑，但权限要在那台机器授权；
@@ -108,6 +108,7 @@ cd src-tauri && cargo test --lib      # 单元测试（76 项）
 |---|---|
 | [docs/SPEC.md](docs/SPEC.md) | 需求与架构说明（功能清单、模块划分、数据流） |
 | [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | 用 rcodesign 直接读 `.p12` 签名、TCC 要求、实测证据与遇到的问题 |
+| [docs/CI-CD.md](docs/CI-CD.md) | GitHub Actions：测试流水线、发版流水线、CI 需要的仓库凭据 |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | 依赖说明：handy-keys 的本地补丁、上游 PR、合并后收尾 |
 | [docs/TESTING.md](docs/TESTING.md) / [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md) | 测试组织与「每修必加用例」矩阵 |
 | [docs/SYNC.md](docs/SYNC.md) | 前端内容与后端状态的同步关系（数据项 × 通道 × 时机） |

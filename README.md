@@ -55,8 +55,8 @@ Package for macOS:
 npm run tauri build
 # sign directly with the certificate file (no keychain, no trust needed)
 ~/.local/bin/rcodesign sign \
-  --p12-file "$HOME/Documents/certs/denpa-jack-dev-10y.p12" \
-  --p12-password-file "$HOME/Documents/certs/denpa-jack-dev-10y.pw" \
+  --p12-file "certs/denpa-jack-dev-10y.p12" \
+  --p12-password-file "certs/denpa-jack-dev-10y.pw" \
   "src-tauri/target/release/bundle/macos/Denpa Jack.app"
 ```
 
@@ -73,10 +73,10 @@ standard signature that passes `codesign --verify` — and TCC permissions work 
 (verified end-to-end on this machine).
 
 - Bundle id is fixed at `io.github.yangyaofei.denpajack`; the certificate is a 10-year
-  self-signed `Denpa Jack Dev`, stored outside the repository
-  (`~/Documents/certs/denpa-jack-dev-10y.p12` + `.pw`). Keep both unchanged — macOS TCC records
-  permissions against a *code requirement* (`identifier` + certificate leaf), so a new bundle id
-  or a new certificate means granting microphone / accessibility again.
+  self-signed `Denpa Jack Dev`, kept in the repo's `certs/` directory (gitignored, never committed;
+  in CI it is injected from repository secrets — see [docs/CI-CD.md](docs/CI-CD.md)). Keep both
+  unchanged — macOS TCC records permissions against a *code requirement* (`identifier` + certificate
+  leaf), so a new bundle id or a new certificate means granting microphone / accessibility again.
 - On **another Mac**: a copy made locally (USB, `scp`) runs directly but permissions must be
   granted there; a quarantined copy (AirDrop, browser, mail) is blocked by Gatekeeper and needs
   *System Settings → Privacy & Security → Open Anyway* (`xattr -dr com.apple.quarantine` also
@@ -118,6 +118,7 @@ See [docs/TESTING.md](docs/TESTING.md) and [docs/TEST-MATRIX.md](docs/TEST-MATRI
 | [docs/SPEC.md](docs/SPEC.md) | requirements and architecture (features, modules, data flow) |
 | [docs/CONTRACTS.md](docs/CONTRACTS.md) | cross-boundary contracts (threading, coordinates, lifecycle), enforced at build time |
 | [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | signing with rcodesign straight from a `.p12`, TCC requirements, measured evidence, pitfalls |
+| [docs/CI-CD.md](docs/CI-CD.md) | GitHub Actions: test pipeline, release pipeline, repository credentials it needs |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | dependency notes: the patched `handy-keys`, upstream PR, cleanup after merge |
 | [docs/TESTING.md](docs/TESTING.md) / [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md) | test organisation, "every fix adds a case" matrix |
 | [docs/SYNC.md](docs/SYNC.md) | how front-end content stays in sync with back-end state |

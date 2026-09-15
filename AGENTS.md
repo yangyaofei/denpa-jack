@@ -24,6 +24,8 @@ Rust 后端（`src-tauri/src/`）负责录音、识别、纠错、交付；WebVi
 | `docs/` | 全部文档（README 除外）。`SPEC.md` = 需求与架构；`CONTRACTS.md` = 跨边界契约；索引见下 |
 | `scripts/regression.sh` | 回归闸门：`cargo test` → 文件回放链路 → 前端检查 → UI 数据链 → e2e 真麦 → 打包签名 |
 | `tests/` | `smoke.mjs`（node 冒烟）、`frontend-checks.mjs`（产物/源码静态检查）、`fixtures/`（回归用音频，TTS 合成，不含真人录音） |
+| `certs/` | 签名资产与密钥（`.p12` / 密码 / `secrets.env`）——**gitignored，不入库**；CI 里由 repository secrets 注入，见 `docs/CI-CD.md` |
+| `.github/workflows/` | `ci.yml`（测试）、`release.yml`（打 tag 即构建+签名+发 Release） |
 
 ## 命令
 
@@ -33,9 +35,13 @@ cargo check                             # 编译检查（build.rs 契约闸会�
 npm run dev                             # 前端开发服务器(:1420)；配合 npm run tauri dev 使用
 npm run tauri build                     # 打包（ad-hoc 签名）→ 再用 rcodesign 覆盖签名
 ./scripts/regression.sh                 # 全链路回归（改交付/识别/录音后跑）
+
+# CI/CD：推 v* tag 即在 GitHub Actions 上构建+签名+发 Release（见 docs/CI-CD.md）
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
-签名与权限：见 `docs/CODE-SIGNING.md`（含 p12 生成、rcodesign 用法、TCC 要求与实测证据）。
+签名与权限：见 `docs/CODE-SIGNING.md`（含 p12 生成、rcodesign 用法、TCC 要求与实测证据）；
+CI 需要的仓库凭据（Secrets）与发版流程见 `docs/CI-CD.md`。
 
 ## 铁律（违反会在实际使用中出问题，均有历史教训）
 

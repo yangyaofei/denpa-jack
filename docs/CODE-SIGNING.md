@@ -72,14 +72,18 @@ Denpa Jack.app: satisfies its Designated Requirement
 实机验证：本机只授予「辅助功能」（日志 `[deliver] ax_trusted=true`），热键、快捷键录制、自动粘贴全部正常；
 启动时的权限总检查也只报告麦克风 / 辅助功能两项（见 `src-tauri/src/permissions.rs`）。
 
-## 3. 资产与位置（都在仓库之外）
+## 3. 资产与位置（仓库内 `certs/`，已 gitignore）
 
 | 文件 | 位置 | 说明 |
 |---|---|---|
-| 证书+私钥 | `~/Documents/certs/denpa-jack-dev-10y.p12` | 10 年有效期，密码保护 |
-| 密码 | `~/Documents/certs/denpa-jack-dev-10y.pw` | 供脚本 `--p12-password-file` 使用（chmod 600）；也可改为密码管理器 + 环境变量 |
+| 证书+私钥 | `certs/denpa-jack-dev-10y.p12` | 10 年有效期，密码保护 |
+| 密码 | `certs/denpa-jack-dev-10y.pw` | 供脚本 `--p12-password-file` 使用（chmod 600）；也可改为密码管理器 + 环境变量 |
+| API 密钥 | `certs/secrets.env` | 本地开发用的 `VOLCENGINE_API_KEY` / `ZHIPU_API_KEY` / `DEEPSEEK_API_KEY`，不入库 |
 | 生成产物 | 仓库内 `tmp/certs/`（gitignored） | `key.pem` / `cert.pem` / `dev.p12`；临时工作副本，可随时重生成 |
 | 旧证书 | 已从钥匙串与信任设置中移除 | 旧身份 `VoiceInput Dev` 不再使用 |
+
+`certs/` 整个目录在 `.gitignore` 里，不会被提交；CI 需要的两份材料（p12 的 base64 与密码）
+放 repository secrets，见 [CI-CD.md](CI-CD.md)。
 
 生成（如证书丢失需重建，注意：**重建=新身份=要重新授权一次**）：
 
@@ -97,8 +101,8 @@ openssl pkcs12 -export -legacy -out dev.p12 -inkey key.pem -in cert.pem -passout
 npm run tauri build                     # 注意：signingIdentity 已从 tauri.conf.json 移除 →
                                         # tauri 会做 ad-hoc 签名（Identifier=denpa_jack-xxxx），随后被覆盖
 ~/.local/bin/rcodesign sign \
-  --p12-file "$HOME/Documents/certs/denpa-jack-dev-10y.p12" \
-  --p12-password-file "$HOME/Documents/certs/denpa-jack-dev-10y.pw" \
+  --p12-file "certs/denpa-jack-dev-10y.p12" \
+  --p12-password-file "certs/denpa-jack-dev-10y.pw" \
   "src-tauri/target/release/bundle/macos/Denpa Jack.app"
 codesign --verify --deep "src-tauri/target/release/bundle/macos/Denpa Jack.app"
 ```
@@ -125,7 +129,7 @@ mkdir -p ~/.local/bin && cp apple-codesign-0.29.0-aarch64-apple-darwin/rcodesign
 ## 5. 换机器 / 重装系统
 
 ```bash
-security import ~/Documents/certs/denpa-jack-dev-10y.p12 \
+security import certs/denpa-jack-dev-10y.p12 \
   -k ~/Library/Keychains/login.keychain-db -P "<密码>" -T /usr/bin/codesign -A
 # 用 rcodesign 的话这一步只是为了备用（例如日后想用 codesign 手动验证）
 ```
@@ -143,15 +147,18 @@ security import ~/Documents/certs/denpa-jack-dev-10y.p12 \
 macOS 15 起 Apple 移除了「右键 → 打开」的绕过方式，只能走系统设置里的「仍要打开」。
 想彻底免除这一步骤：Developer ID（$99/年）+ 公证（`rcodesign notary-submit` 或 `notarytool`）。
 
-## 7. CI/CD（将来）
+## 7. CI/CD（已实现，见 CI-CD.md）
 
-- **签名**：rcodesign 可在 Linux runner 上直接签（`indygreg/apple-code-sign-action`），
-  把 p12 与密码放 CI secret 即可，**不需要 macOS runner、不需要钥匙串**
+- 仓库里 `.github/workflows/release.yml`：推 `v*` tag → `npm run tauri build --bundles app` →
+  rcodesign 用 secrets 里的 p12 签名 → 打 zip/dmg + SHA256 → 建 Release。
+  证书与密码从 repository **secrets** 注入，不需要钥匙串。
+- **签名**：rcodesign 是纯 Rust 实现，跨平台可跑（Linux runner 也能签），
+  所以签名不绑定 macOS runner；本项目用 macOS runner 只是因为要构建 arm64 二进制。
 - **公证**：需要付费 Apple 账号的 App Store Connect API Key（`.p8`）；自签证书**不能公证**
-  （公证要求 Apple 签发的身份）
+  （公证要求 Apple 签发的身份）。
 - 若将来改用 Apple 证书：`security create-keychain` → `security import` → `unlock-keychain`
   → `codesign --keychain`（GitHub 官方 p12 指南的流程，其中不含 `add-trusted-cert`，
-  因为 Apple 签发的证书本就受信任）
+  因为 Apple 签发的证书本就受信任）。
 
 ## 8. 常见问题与处理方法
 

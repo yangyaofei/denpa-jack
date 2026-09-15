@@ -22,8 +22,9 @@ timeout 40 env VOICEMAC_AUTOTEST=e2e src-tauri/target/release/denpa-jack > tmp/r
 echo "== 5/5 打包+签名 =="
 npm run tauri build 2>&1 | grep -cE "Bundling Denpa Jack.app"
 # 签名用 rcodesign 直接读 p12 文件(不需要钥匙串导入/不需要系统信任; 详见 docs/CODE-SIGNING.md)
+# 签名资产在仓库内 certs/（gitignored）
 ~/.local/bin/rcodesign sign \
-  --p12-file "$HOME/Documents/certs/denpa-jack-dev-10y.p12" \
-  --p12-password-file "$HOME/Documents/certs/denpa-jack-dev-10y.pw" \
+  --p12-file "certs/denpa-jack-dev-10y.p12" \
+  --p12-password-file "certs/denpa-jack-dev-10y.pw" \
   "src-tauri/target/release/bundle/macos/Denpa Jack.app"
 echo "REGRESSION PASS"
