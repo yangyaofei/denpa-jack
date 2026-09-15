@@ -93,8 +93,10 @@ jobs:
           ditto -c -k --keepParent "$APP" "dist-release/Denpa.Jack_${V}_aarch64.app.zip"
           hdiutil create -volname "Denpa Jack" -srcfolder "$APP" -ov -format UDZO \
             "dist-release/Denpa.Jack_${V}_aarch64.dmg"
-          shasum -a 256 dist-release/* > "dist-release/SHA256SUMS_${V}.txt"
-          ls -lh dist-release
+          cd dist-release
+          shasum -a 256 Denpa.Jack_* > "SHA256SUMS_${V}.txt"
+          cat "SHA256SUMS_${V}.txt"
+          ls -lh
 
       - name: Publish release
         env:
