@@ -148,12 +148,7 @@ function describeCombo(s: string): string {
     });
     await this.loadCfg();
     await this.refreshHistory();
-    try {
-      // Rust Vec<(uid,name)> 序列化为数组的数组 → 转对象
-      const raw = await invoke<[string, string][]>("list_mics");
-      this.mics = raw.map(([uid, name]) => ({ uid, name }));
-    } catch (e) { console.error("list_mics:", e); }
-    try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {}
+    await this.refreshMics();
     // 录音开始后刷新"当前输入设备"(运行时事实);
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
     invoke("check_permissions").catch(() => {});
@@ -162,6 +157,7 @@ function describeCombo(s: string): string {
     // C46 主窗轮询(组件作用域 this 可用): 800ms 拉版本, 变化才刷新
     let lastHistVer = -1;
     let lastCfgVer = -1;
+    let lastMicVer = -1;
     let tick = 0;
     setInterval(async () => {
       try {
@@ -177,6 +173,11 @@ function describeCombo(s: string): string {
         if (v.config !== lastCfgVer) {
           lastCfgVer = v.config;
           await this.loadCfg();
+        }
+        if (v.mics !== lastMicVer) {
+          lastMicVer = v.mics;
+          await this.refreshMics();
+          invoke("ui_log", { msg: `mics →${v.mics} 重扫完成 ${this.mics.length} 个设备` }).catch(() => {});
         }
       } catch (e) {
         invoke("ui_log", { msg: `poll 异常: ${e}` }).catch(() => {});
@@ -296,6 +297,22 @@ function describeCombo(s: string): string {
     if (!this.cfg) return;
     this.cfg.mic_device_uid = uid;
     await this.saveCfg();
+  },
+  // 优先级行显示: uid → 设备名; 未在列表中(旧配置/已拔)时回落为原值
+  micName(uid: string): string {
+    return this.mics.find((m: any) => m.uid === uid)?.name ?? uid;
+  },
+  // 重扫设备列表 + 当前输入设备(事件驱动: CoreAudio 设备变化 → poll_versions.mics 变化时调用)
+  async refreshMics() {
+    try {
+      const raw = await invoke<[string, string][]>("list_mics");
+      this.mics = raw.map(([uid, name]) => ({ uid, name }));
+    } catch (e) { console.error("list_mics:", e); }
+    try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {}
+  },
+  switchSection(id: string) {
+    this.section = id;
+    if (id === "asr" || id === "general") this.refreshMics();
   },
   mdRender(src: string): string {
     try {

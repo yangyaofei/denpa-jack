@@ -394,20 +394,15 @@ pub fn get_default_prompt() -> String {
     crate::settings::DEFAULT_LLM_PROMPT.to_string()
 }
 
-/// HIG settings: 独立固定尺寸设置窗(隐藏 min/max), 已开则聚焦
+/// UI v6 已废除独立设置窗: 此命令改为聚焦主窗(托盘"设置"入口)
 #[tauri::command]
 pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("settings") {
-        let _ = w.show(); let _ = w.set_focus();
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App("settings.html".into()))
-        .title("设置")
-        .inner_size(560.0, 600.0)
-        .resizable(false)
-        .build()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    Err("主窗口不存在".into())
 }
 
 /// C55 后端录制(用户定则): begin→poll→end(提交/取消), 轮询通道
@@ -478,13 +473,14 @@ pub fn hud_poll() -> crate::HudSnapshot {
 }
 
 #[derive(serde::Serialize)]
-pub struct Versions { pub history: u64, pub config: u64 }
+pub struct Versions { pub history: u64, pub config: u64, pub mics: u64 }
 
 #[tauri::command]
 pub fn poll_versions() -> Versions {
     Versions {
         history: crate::history::history_version(),
         config: crate::settings::config_version(),
+        mics: crate::mic_watch::mic_version(),
     }
 }
 

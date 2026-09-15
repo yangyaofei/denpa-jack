@@ -9,6 +9,7 @@ mod engines;
 mod history;
 pub mod llm;
 mod log;
+mod mic_watch;
 mod openai_realtime;
 mod overlay;
 mod paste_tx;
@@ -110,6 +111,9 @@ pub fn run() {
         .setup(|app| {
             log::log(app.handle(), "setup begin");
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // 菜单栏常驻, 不占 Dock
+            if let Err(e) = mic_watch::start() {
+                log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
+            }
             tray_events::spawn_tray(app.handle()).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             // 权限引导: 弹系统授权窗 + 提示
             let h = app.handle().clone();

@@ -13,7 +13,7 @@
       <nav>
         <template x-for="s in filteredSections()" :key="s.id">
           <button class="nav-item" :class="{active: section === s.id}"
-               x-text="s.title" @click="section = s.id"></button>
+               x-text="s.title" @click="switchSection(s.id)"></button>
         </template>
       </nav>
       <div class="side-status" x-text="statusLine()"></div>
