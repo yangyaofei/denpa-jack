@@ -349,11 +349,16 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
                 let dir = crate::settings::data_dir(&app_shot);
                 match crate::screen_context::capture_and_prune(&dir, "ctx") {
                     Ok(shot) => {
+                        // sha256 与后续 [llm] 带图请求里的指纹对照 → 证明发出去的图就是这一张
+                        let fp = std::fs::read(&shot.path)
+                            .map(|raw| crate::screen_context::sha256_short_of(&raw))
+                            .unwrap_or_else(|_| "读取失败".into());
                         log::elog(&format!(
-                            "[ctx] 截图已采集 path={} bytes={} ms={} display={:?}",
+                            "[ctx] 截图已采集 path={} bytes={} ms={} sha256={} display={:?}",
                             shot.path.display(),
                             shot.bytes,
                             shot.elapsed_ms,
+                            fp,
                             shot.display
                         ));
                         *slot.lock().unwrap() = Some(shot.path);

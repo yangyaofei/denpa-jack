@@ -109,13 +109,28 @@ pub async fn polish(
         dict_terms.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
     );
     // 屏幕上下文：截图 base64 内联进 user 消息；读图失败只记日志并退回纯文本纠错（不阻塞交付）
+    // 日志里把 base64 换成"可核验指纹"（字节数/data URL 字符数/前缀/sha256 前 16 位），
+    // 既不让日志背 1.7MB 的 base64，又能证明发出去的内容确实等于磁盘上那张截图。
     let mut shot_note: Option<String> = None;
     let image_url = match screenshot {
-        Some(p) => match crate::screen_context::to_data_url(p) {
-            Ok(u) => {
-                let mb = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) as f64 / 1024.0 / 1024.0;
-                shot_note = Some(format!("<截图内联: {} ({mb:.2} MB)>", p.display()));
-                Some(u)
+        Some(p) => match crate::screen_context::inline_image(p) {
+            Ok(img) => {
+                let mb = img.bytes as f64 / 1024.0 / 1024.0;
+                shot_note = Some(format!(
+                    "<截图内联: {} ({mb:.2} MB, {} 字节, data URL {} 字符, 前缀 {}, sha256 {}…)>",
+                    p.display(),
+                    img.bytes,
+                    img.data_url.chars().count(),
+                    crate::screen_context::data_url_prefix(&img.data_url),
+                    img.sha256_short
+                ));
+                crate::log::elog(&format!(
+                    "[llm] 带图请求: bytes={} data_url_chars={} sha256={}",
+                    img.bytes,
+                    img.data_url.chars().count(),
+                    img.sha256_short
+                ));
+                Some(img.data_url)
             }
             Err(e) => {
                 crate::log::elog(&format!("[llm] 截图读取失败, 退回纯文本纠错: {e}"));

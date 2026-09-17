@@ -82,14 +82,45 @@ pub fn capture(dir: &Path, tag: &str) -> Result<Shot, String> {
     })
 }
 
-/// 读成 base64 data URL（模型请求内联用）
-pub fn to_data_url(path: &Path) -> Result<String, String> {
+/// 读成 base64 data URL（模型请求内联用）。
+/// 同时返回可核验的指纹：字节数、data URL 字符数、sha256 前 16 位——日志里用它证明
+/// "发出去的 base64 内容 = 磁盘上这张截图"。`shasum -a 256 <文件>` 可对照。
+pub struct InlineImage {
+    pub data_url: String,
+    pub bytes: usize,
+    pub sha256_short: String,
+}
+
+pub fn inline_image(path: &Path) -> Result<InlineImage, String> {
     use base64::Engine;
     let raw = std::fs::read(path).map_err(|e| format!("读截图失败: {e}"))?;
-    Ok(format!(
+    let bytes = raw.len();
+    let sha256_short = sha256_short_of(&raw);
+    let data_url = format!(
         "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(raw)
-    ))
+        base64::engine::general_purpose::STANDARD.encode(&raw)
+    );
+    Ok(InlineImage { data_url, bytes, sha256_short })
+}
+
+/// data URL 的前 32 个字符（形如 `data:image/png;base64,iVBORw0KG…`）——日志里让人一眼看到
+/// "确实是一个内联 data URL 而不是文件路径"。
+pub fn data_url_prefix(data_url: &str) -> String {
+    data_url.chars().take(32).collect()
+}
+
+/// 原始字节的 sha256 前 16 位十六进制
+pub fn sha256_short_of(raw: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(raw);
+    let hex = format!("{:x}", h.finalize());
+    hex[..16].to_string()
+}
+
+/// 读成 base64 data URL（模型请求内联用）
+pub fn to_data_url(path: &Path) -> Result<String, String> {
+    Ok(inline_image(path)?.data_url)
 }
 
 /// 只保留最近 `keep` 张截图（按文件名里的时间戳排序）
@@ -150,6 +181,31 @@ mod tests {
     #[test]
     fn data_url_missing_file_errors() {
         assert!(to_data_url(Path::new("/nonexistent/none.png")).is_err());
+    }
+
+    /// 指纹要和标准 sha256 一致（外部可用 `shasum -a 256` 对照核验）
+    #[test]
+    fn sha256_short_matches_known_digest() {
+        // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        assert_eq!(sha256_short_of(b"hello"), "2cf24dba5fb0a30e");
+        assert_eq!(sha256_short_of(b""), "e3b0c44298fc1c14");
+    }
+
+    /// inline_image 的三项指纹互相自洽：字节数=文件大小、data URL 前缀正确、sha 与文件内容一致
+    #[test]
+    fn inline_image_reports_verifiable_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("shot.png");
+        let raw = b"\x89PNG\r\n\x1a\nfake";
+        std::fs::write(&p, raw).unwrap();
+        let img = inline_image(&p).unwrap();
+        assert_eq!(img.bytes, raw.len());
+        assert_eq!(img.sha256_short, sha256_short_of(raw));
+        assert!(img.data_url.starts_with("data:image/png;base64,"));
+        let prefix = data_url_prefix(&img.data_url);
+        assert_eq!(prefix.chars().count(), 32);
+        assert!(prefix.starts_with("data:image/png;base64,iVBOR"), "前缀应露出内联 png 特征: {prefix}");
+        assert!(img.data_url.chars().count() > img.bytes, "base64 应比原始字节长");
     }
 
     #[test]
