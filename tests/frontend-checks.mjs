@@ -141,4 +141,17 @@ check(
   /Condvar/.test(segQ) && /CV\.wait\(/.test(segQ) && /state = SegState::Transcribing/.test(segQ),
 );
 
+// 5) 版本号清单一致性
+// 发版时六处必须同号(package.json / package-lock.json 顶层 / package-lock.json packages[""] /
+// Cargo.toml / Cargo.lock / tauri.conf.json); 漏一处会让包版本、关于页显示、更新判断错位
+const pkgV = JSON.parse(readFileSync("package.json", "utf8")).version;
+const lockRaw = readFileSync("package-lock.json", "utf8");
+const lockV = JSON.parse(lockRaw).version;
+const lockRootV = JSON.parse(lockRaw).packages[""].version;
+const cargoV = readFileSync("src-tauri/Cargo.toml", "utf8").match(/^version = "([^"]+)"/m)?.[1];
+const confV = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+const cargoLockV = readFileSync("src-tauri/Cargo.lock", "utf8").match(/name = "denpa-jack"\nversion = "([^"]+)"/)?.[1];
+const allV = [pkgV, lockV, lockRootV, cargoV, confV, cargoLockV];
+check(`版本号六处一致(${allV.join("/")})`, allV.every((v) => v && v === allV[0]));
+
 process.exit(fail ? 1 : 0);
