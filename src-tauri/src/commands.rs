@@ -398,6 +398,9 @@ pub async fn llm_selftest(
         },
         thinking: prof.thinking,
         effort: if prof.effort.is_empty() { "low".into() } else { prof.effort.clone() },
+        timeout_secs: cfg.llm_timeout_secs,
+        max_tokens: cfg.llm_max_tokens,
+        retries: cfg.llm_retries,
     };
     let terms: Vec<String> = cfg.dict.iter().map(|d| d.term.clone()).collect();
     let input = dict_text.clone();

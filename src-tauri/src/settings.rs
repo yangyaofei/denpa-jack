@@ -185,6 +185,18 @@ pub struct Config {
     /// （需要屏幕录制权限；截图存 `<数据目录>/screen_context/`，默认关）
     #[serde(default)]
     pub screenshot_context: bool,
+    /// LLM 请求超时（秒）。越大越能容忍慢思考模型，但出错时用户等待也更久。
+    #[serde(default = "d_llm_timeout")]
+    pub llm_timeout_secs: u64,
+    /// LLM 最大输出 token；0 = 不传该字段（用服务端默认）。
+    /// 思考型模型可能把预算耗在思考上导致正文为空，需要时在这里调大。
+    #[serde(default)]
+    pub llm_max_tokens: u32,
+    /// LLM 失败重试次数（0 = 不重试）。
+    /// 只有"传输失败 / 响应读不出 / HTTP 5xx 或 429 / 响应无有效输出"才重试；
+    /// 4xx（模型名、Key、参数错误）属配置问题，重试无意义，直接返回错误。
+    #[serde(default = "d_llm_retries")]
+    pub llm_retries: u32,
     #[serde(default = "d_max_rec")]
     pub max_recording_seconds: u32, // 1800
     #[serde(default = "d_min_rec")]
@@ -469,6 +481,8 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
 pub fn d_max_rec() -> u32 { 1800 }
 fn d_min_rec() -> f64 { 0.3 }
 fn d_keep_audio() -> u32 { 50 }
+fn d_llm_timeout() -> u64 { 30 }
+fn d_llm_retries() -> u32 { 2 }
 pub fn default_config() -> Config {
     Config {
         use_llm_correction: true,
@@ -526,6 +540,26 @@ pub const DEFAULT_LLM_PROMPT: &str = r#"
 * 代码标记：变量名、文件路径、API 强制使用反引号 ( ` ) 包裹。示例：`userId`, `config.yaml`
 * 序号补零：Phase one -> Phase 01; Step 5 -> Step 05。
 * 中英空格：中英文之间强制添加空格。
+
+### 6. 截图上下文对照 (Screenshot Grounding) - [优先]
+
+随附截图是本次转写的**上下文**：屏幕上往往正显示着你刚才说的话涉及的内容（文档、窗口标题、代码、列表、聊天记录），其中的词可以直接复用。
+
+* 转写里出现**听着别扭、不成词、或与常见写法对不上**的片段时，先去截图里找有没有**同一个词**（同音 / 近音 / 缩写 / 中英混写）。
+  * 找得到 → 采用截图里的写法（含大小写、连字符、中英空格），不要另造写法。
+  * 找不到 → 保持原样，不要凭猜测换成别的词。
+* 截图里的专有名词、文件名、命令、变量名若与转写片段明显指同一个东西，以截图为准。
+* 不要把截图里与这段转写无关的内容写进结果，也不要复述截图内容。
+
+示例（截图里显示一行 `基线文档全部通读`）：
+* Input: "你把那个机线文档全部通读一遍，然后再说结论。"
+* Output: 你把那个 `基线文档` 全部通读一遍，然后再说结论。
+* 解析: "机线文档"不成词，截图同一位置写着"基线文档全部通读" → 按截图写法修正。
+
+示例（截图里没有对应词）：
+* Input: "然后那个机组里面的文档，我们都要。"
+* Output: 然后那个机组里面的文档，我们都要。
+* 解析: 截图里找不到与"机组"对应的写法 → 保持原样，不猜。
 
 ## Few-Shot Examples (学习这种"中间力度")
 

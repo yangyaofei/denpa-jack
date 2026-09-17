@@ -12,6 +12,12 @@ pub struct LlmOpts {
     pub thinking: bool,
     /// 思考强度: low / high
     pub effort: String,
+    /// 请求超时（秒）
+    pub timeout_secs: u64,
+    /// 最大输出 token；0 = 不传该字段
+    pub max_tokens: u32,
+    /// 失败重试次数（仅对可重试失败生效）
+    pub retries: u32,
 }
 
 /// 按 provider 拉取可用模型列表(OpenAI 兼容 GET /models)
@@ -171,21 +177,10 @@ pub async fn polish(
     // 直传: 选项是什么就发什么, 不做映射/降级/强制(错误由服务端返回, 测试按钮可见)
     payload["thinking"] = json!({"type": if o.thinking { "enabled" } else { "disabled" }});
     payload["reasoning_effort"] = json!(o.effort);
+    if o.max_tokens > 0 {
+        payload["max_tokens"] = json!(o.max_tokens);
+    }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let t0 = std::time::Instant::now();
-    let resp = client
-        .post(url.clone())
-        .header("Authorization", format!("Bearer {key}"))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("LLM 请求失败: {e}"))?;
-    let status = resp.status();
-    let raw = resp.text().await.map_err(|e| format!("LLM 响应读取失败: {e}"))?;
     // 落盘前把 base64 换成文件引用：请求里是完整内联数据，日志里只留路径与大小（截图本体已存 screen_context/）
     let mut dump_payload = payload.clone();
     if let Some(note) = &shot_note {
@@ -195,20 +190,120 @@ pub async fn polish(
             }
         }
     }
-    dump_call(
-        &format!("{}-{}ms", &o.provider, t0.elapsed().as_millis()),
-        &url,
-        &dump_payload,
-        &raw,
-    );
-    let body: Value = serde_json::from_str(&raw).map_err(|e| format!("LLM 响应解析失败: {e}"))?;
+
+    // 失败重试：只对"传输失败/响应读不出/5xx/429/无有效输出"重试；4xx 配置错误直接返回
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(o.timeout_secs.max(1)))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let attempts = o.retries + 1;
+    let mut last_err = String::new();
+    for attempt in 1..=attempts {
+        let t0 = std::time::Instant::now();
+        match attempt_once(&client, &url, &key, &payload).await {
+            Ok(out) => {
+                dump_call(
+                    &format!("{}-{}ms-a{attempt}", &o.provider, t0.elapsed().as_millis()),
+                    &url,
+                    &dump_payload,
+                    &out.raw,
+                );
+                if attempt > 1 {
+                    crate::log::elog(&format!("[llm] 第 {attempt} 次尝试成功（共 {attempts} 次机会）"));
+                }
+                return Ok(LlmOut { text: out.text, thinking: out.thinking });
+            }
+            Err(e) => {
+                dump_call(
+                    &format!("{}-{}ms-a{attempt}-失败", &o.provider, t0.elapsed().as_millis()),
+                    &url,
+                    &dump_payload,
+                    &e.detail,
+                );
+                crate::log::elog(&format!(
+                    "[llm] 失败 第{attempt}/{attempts}次 可重试={} 原因={} 详情={}",
+                    e.retryable,
+                    e.kind,
+                    e.detail.chars().take(200).collect::<String>()
+                ));
+                last_err = format!("{}（{}）", e.kind, e.detail.chars().take(200).collect::<String>());
+                if !e.retryable || attempt == attempts {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400 * 2u64.pow(attempt - 1)));
+            }
+        }
+    }
+    Err(format!("LLM 失败（已尝试 {attempts} 次）: {last_err}"))
+}
+
+/// 一次请求的结果（成功时带原始响应文本，便于落盘）
+struct AttemptOk {
+    raw: String,
+    text: String,
+    thinking: Option<String>,
+}
+
+/// 一次尝试的失败：`retryable` 决定是否值得重试
+struct AttemptErr {
+    kind: String,
+    detail: String,
+    retryable: bool,
+}
+
+/// 是否值得重试：传输/解析类失败与 5xx/429 值得；4xx（模型名、Key、参数错）不值得
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || (500..600).contains(&status)
+}
+
+async fn attempt_once(
+    client: &reqwest::Client,
+    url: &str,
+    key: &str,
+    payload: &Value,
+) -> Result<AttemptOk, AttemptErr> {
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {key}"))
+        .json(payload)
+        .send()
+        .await
+        .map_err(|e| AttemptErr {
+            kind: "请求失败".into(),
+            detail: e.to_string(),
+            retryable: true,
+        })?;
+    let status = resp.status();
+    let raw = resp.text().await.map_err(|e| AttemptErr {
+        kind: format!("响应读取失败 HTTP {status}"),
+        detail: e.to_string(),
+        retryable: is_retryable_status(status.as_u16()) || status.is_success(),
+    })?;
+    let body: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(AttemptErr {
+                kind: format!("响应解析失败 HTTP {status}"),
+                detail: format!("{e} | 原始响应前 200 字: {}", raw.chars().take(200).collect::<String>()),
+                retryable: is_retryable_status(status.as_u16()) || status.is_success(),
+            })
+        }
+    };
     if !status.is_success() {
-        return Err(format!("LLM HTTP {status}: {}", body));
+        return Err(AttemptErr {
+            kind: format!("HTTP {status}"),
+            detail: body.to_string(),
+            retryable: is_retryable_status(status.as_u16()),
+        });
     }
     let thinking = extract_thinking(&body);
     match extract_text(&body) {
-        Some(t) => Ok(LlmOut { text: t, thinking }),
-        None => Err(format!("LLM 无有效输出: {body}")),
+        Some(t) => Ok(AttemptOk { raw, text: t, thinking }),
+        None => Err(AttemptErr {
+            kind: "无有效输出".into(),
+            detail: body.to_string(),
+            retryable: true,
+        }),
     }
 }
 
@@ -241,6 +336,18 @@ fn extract_text(body: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 重试判据：只有 429 与 5xx 值得重试；其它 4xx（模型名/Key/参数错）重试无意义
+    #[test]
+    fn retry_decision_matches_status_semantics() {
+        for s in [429, 500, 502, 503, 504] {
+            assert!(is_retryable_status(s), "{s} 应可重试");
+        }
+        for s in [400, 401, 403, 404, 422] {
+            assert!(!is_retryable_status(s), "{s} 不应重试");
+        }
+        assert!(!is_retryable_status(200));
+    }
 
     #[test]
     fn user_content_without_image_is_plain_text() {

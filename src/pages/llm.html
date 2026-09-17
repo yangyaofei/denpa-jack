@@ -27,6 +27,27 @@
         </template>
         <button class="add-btn" @click="newLlm()">+ 添加模型档案</button>
 
+        <div class="card">
+          <div class="row">
+            <div>
+              <div class="row-title">调用参数</div>
+              <div class="row-hint">三个档案共用；改动随「保存」写入配置。超时越大越能容忍慢思考模型（出错时等待也更久）；最大输出 token 留 0 = 不传该字段（用服务端默认），思考型模型正文为空时可调大；重试只针对传输失败 / 响应读不出 / 5xx / 429 / 无有效输出，配置类错误（模型名、Key、参数）不重试</div>
+            </div>
+          </div>
+          <label class="row">
+            <div><div class="row-title">请求超时（秒）</div></div>
+            <input class="inp sm" type="number" min="5" max="600" x-model.number="cfg.llm_timeout_secs" @change="saveCfg()" />
+          </label>
+          <label class="row">
+            <div><div class="row-title">最大输出 token</div><div class="row-hint">0 = 不传（服务端默认）</div></div>
+            <input class="inp sm" type="number" min="0" max="100000" step="256" x-model.number="cfg.llm_max_tokens" @change="saveCfg()" />
+          </label>
+          <label class="row">
+            <div><div class="row-title">失败重试次数</div><div class="row-hint">0 = 不重试；每次重试间隔 0.4s、0.8s…递增</div></div>
+            <input class="inp sm" type="number" min="0" max="5" x-model.number="cfg.llm_retries" @change="saveCfg()" />
+          </label>
+        </div>
+
         <!-- LLM 编辑 sheet -->
         <template x-if="llmEdit"><div class="overlay" @click.self="llmEdit = null">
           <div class="sheet wide">

@@ -35,6 +35,7 @@ export interface Config {
   bindings: Record<string, BindingSet>;
   use_llm_correction: boolean; clipboard_only: boolean;
   screenshot_context: boolean;
+  llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
   keep_in_clipboard: boolean; auto_submit: boolean;
   overlay_position: string; history_limit: number;
@@ -693,6 +694,7 @@ function describeCombo(s: string): string {
       keep_in_clipboard: false, auto_submit: false,
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
+      llm_timeout_secs: 30, llm_max_tokens: 0, llm_retries: 2,
       extra_tail_ms: 0, mic_device_uid: "", mic_priority: ["Wireless Mic Rx (DJI)"],
       data_dir: "",
       bindings: { transcribe: { current: ["f5"] } },

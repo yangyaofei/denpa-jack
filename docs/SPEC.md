@@ -271,6 +271,39 @@
   - `save_wav`：`recordings/rec_{unix_millis}.wav`，16k mono i16le 标准 44B 头；`wav_header` 为落盘/上传公共函数（消除 zhipu_file 重复，REFACTOR ✅19）。
   - `prune_recordings`：按文件名排序保留最近 keep 个。
 
+#### 3.5.2 LLM 调用参数与失败重试
+
+三个参数在配置里（大模型页「调用参数」卡，三个档案共用）：
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `llm_timeout_secs` | 30 | 单次请求超时；慢思考模型（effort=high）可调大 |
+| `llm_max_tokens` | 0（不传） | 输出预算上限；思考型模型把预算耗在思考上导致正文为空时调大 |
+| `llm_retries` | 2 | 失败重试次数（总尝试 = 重试 + 1），退避 0.4s / 0.8s… |
+
+重试判据（`llm.rs::is_retryable_status` + 失败分类）：**传输失败、响应读取失败、响应非 JSON、HTTP 5xx/429、响应无有效输出** 重试；
+**4xx（模型名、Key、参数错误）不重试**——那是配置问题，重试只会浪费等待时间。
+
+失败可见性：每次尝试都写 `llm_logs/{时间}-{provider}-{耗时}ms-a{第几次}[-失败].json`（含原始响应体），
+并落 `[llm] 失败 第N/M次 可重试=… 原因=… 详情=…` 到 app.log；全部失败后 history 的 warning 记为
+`LLM 失败（已尝试 N 次）: …`，本次转写退回 ASR 原文（既有降级语义不变）。
+
+> 判定依据：2026-09-17 实测 —— 200 条历史里 191 次 LLM 成功；失败中 3 次是
+> `error decoding response body`（响应体读取失败，旧代码只报这一句、看不出原因，也无法重试）。
+> 修复后同样的失败会打印 HTTP 状态与响应体片段，并按上面的判据重试（本地用 127.0.0.1:9 验证过重试两次 + 清晰报错）。
+
+#### 3.5.3 提示词里的截图对照规则
+
+内置提示词（`settings::DEFAULT_LLM_PROMPT`）含第 6 节「截图上下文对照 (Screenshot Grounding)」：
+- 转写片段听着别扭/不成词/与常见写法对不上时，先到截图里找**同一个词**（同音/近音/缩写/中英混写）；
+  找到就用截图里的写法，找不到就保持原样（禁止臆造替换）。
+- 明确"不要把截图里与这段转写无关的内容写进结果"。
+- 两个示例分别对应"截图里有正解 → 按截图改"与"截图无线索 → 不改"。
+
+依据：实测发现仅靠"图作为宽松语境"不足——图里写着的词也可能不被采用（见
+`day-07-context/artifacts/image-context-usage-findings.md` 用例 5：图里有"基线文档"，输出却是"基座文档"），
+而图里没有的词任何模型都改不对。该节把行为要求写死，并给出正/负两侧的示例。
+
 ### 3.6 HUD 浮窗（overlay.rs 141 行 + hud.html + hud.ts）
 
 - `overlay.rs`：
@@ -349,6 +382,7 @@
   - 行为开关与数值：
     - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`auto_submit`（false）。
     - `screenshot_context`（默认 false）：把当前屏幕截图作为纠错上下文。详见 §3.5.1。
+    - `llm_timeout_secs`（默认 30）、`llm_max_tokens`（默认 0 = 不传该字段，用服务端默认）、`llm_retries`（默认 2）：LLM 调用参数，大模型页「调用参数」卡可改。详见 §3.5.2。
     - `overlay_position`（"bottom"）、`history_limit`（200，0 不限）、`keep_audio_count`（50）。
     - `max_recording_seconds`（1800）、`min_recording_seconds`（0.3）、`extra_tail_ms`（0，≤2000）。
     - `mic_device_uid`、`mic_priority`（CoreAudio DeviceUID 序列）。

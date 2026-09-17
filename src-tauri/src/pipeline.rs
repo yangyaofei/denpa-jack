@@ -89,6 +89,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                     },
                     thinking: prof.thinking,
                     effort: if prof.effort.is_empty() { "low".into() } else { prof.effort.clone() },
+                    timeout_secs: cfg.llm_timeout_secs,
+                    max_tokens: cfg.llm_max_tokens,
+                    retries: cfg.llm_retries,
                 };
                 // 词典注入: 带变体映射(纠错指向性更强, LLM 上下文充足不加预算限制)
                 let terms: Vec<String> = cfg
