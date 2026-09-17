@@ -93,7 +93,14 @@ jobs:
           # rcodesign verify 只认 Mach-O 单文件；校验整个 .app 包用 codesign --verify --deep
           rcodesign verify "$APP/Contents/MacOS/denpa-jack"
           codesign --verify --deep --strict --verbose=2 "$APP"
-          codesign -dvv "$APP" 2>&1 | grep -E "Identifier|Authority" || true
+          # 断言签名身份：不是本项目证书就等于更新后会丢权限（实测踩过：updater 包早于签名生成）
+          # 不用 `codesign … | grep -q …`：grep -q 命中即退出会给 codesign 发 SIGPIPE，
+          # 在 set -e 的默认 shell 语义下容易误判，这里先取输出再匹配。
+          DV="$(codesign -dvv "$APP" 2>&1 || true)"
+          case "$DV" in
+            *"Authority=Denpa Jack Dev"*) echo "签名身份 ✓ Denpa Jack Dev" ;;
+            *) echo "::error::签名后 Authority 不是 Denpa Jack Dev（更新包与 TCC 身份都会出错）"; printf '%s\n' "$DV" | head -6; exit 1 ;;
+          esac
 
       - name: Package artifacts
         run: |
@@ -103,12 +110,10 @@ jobs:
           ditto -c -k --keepParent "$APP" "dist-release/Denpa.Jack_${V}_aarch64.app.zip"
           hdiutil create -volname "Denpa Jack" -srcfolder "$APP" -ov -format UDZO \
             "dist-release/Denpa.Jack_${V}_aarch64.dmg"
-          # 应用内更新用的产物（Tauri 构建时已生成 .tar.gz 与 .sig）：
-          # 换成不含空格的稳定文件名，URL 由下面写进 latest.json
-          cp "src-tauri/target/release/bundle/macos/Denpa Jack.app.tar.gz" \
-             "dist-release/Denpa.Jack_${V}_aarch64.app.tar.gz"
-          cp "src-tauri/target/release/bundle/macos/Denpa Jack.app.tar.gz.sig" \
-             "dist-release/Denpa.Jack_${V}_aarch64.app.tar.gz.sig"
+          # 应用内更新用的产物：必须在**代码签名之后**重新打包（tauri build 阶段产出的 tar.gz
+          # 早于签名，里面是 ad-hoc 的 app → 更新后身份变化、权限授权全丢；实测踩过这个坑）。
+          # 脚本内部有"必须是 Denpa Jack Dev 签名"的守卫。
+          scripts/package-updater.sh "$V" dist-release
           # latest.json：应用内更新器轮询的清单（pubkey 校验签名 → 下载 → 替换）
           # 签名值必须是 .sig 文件全文（含 untrusted comment 行），交给 jq 转义换行
           # 注意：路径里的 ${V} 必须用双引号，单引号不会展开（曾因此产出 signature 为空的清单）
