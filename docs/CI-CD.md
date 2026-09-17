@@ -29,9 +29,9 @@ CI 不跑需要真实密钥与本机权限的步骤（文件回放、e2e 真麦�
 
 ```bash
 # 方式一：推 tag（CI 自动构建+签名+建 Release）
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.1 && git push origin v0.2.0
 
-# 方式二：在 Actions 页面手动 Run workflow，填 tag（例如 v0.2.0）
+# 方式二：在 Actions 页面手动 Run workflow，填 tag（例如 v0.3.1）
 ```
 
 工作流会用 tag 里的版本号覆盖 `package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` 的版本，
