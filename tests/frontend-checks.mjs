@@ -87,5 +87,12 @@ check(`无废弃字段残留(${deadFields.join("/")})`, deadFields.every((f) => 
 // 3) Rust 命令注册
 const lib = readFileSync("src-tauri/src/lib.rs", "utf8");
 check("poll_versions 已注册 invoke_handler", /commands::poll_versions/.test(lib));
+// 关于页版本号走我们自己的命令(不走 JS API 动态 chunk): 注册与前端调用两侧都要在
+check("app_version 已注册 invoke_handler", /commands::app_version/.test(lib));
+check("前端用 app_version 取版本", /invoke<string>\("app_version"\)/.test(readFileSync("src/main.ts", "utf8")));
+check(
+  "关于页版本为运行时渲染(非硬编码)",
+  /x-text="version/.test(readFileSync("src/pages/about.html", "utf8")),
+);
 
 process.exit(fail ? 1 : 0);

@@ -88,6 +88,15 @@ pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
     tauri_plugin_opener::open_path(dir.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// 应用版本（关于页显示）。
+/// 取自 Cargo.toml 的 version（与 tauri.conf.json / package.json 发布时由 tag 统一注入，三者一致）。
+/// 不走前端 `@tauri-apps/api/app` 的 getVersion()——那条路要动态加载一个 JS chunk，
+/// 多一层依赖（chunk 加载/权限），一旦失败页面就只剩占位符；这里用我们自己的命令，同一套 invoke 通道。
+#[tauri::command]
+pub fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// hud 失败重试: 用本次录音(AppState.last_audio)重跑整条管线; 前端控制只重试一次
 #[tauri::command]
 pub fn retry_last(app: tauri::AppHandle) -> Result<(), String> {

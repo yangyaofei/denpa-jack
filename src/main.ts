@@ -164,10 +164,10 @@ function describeCombo(s: string): string {
     await this.refreshHistory();
     await this.refreshMics();
     try {
-      const { getVersion } = await import("@tauri-apps/api/app");
-      this.version = await getVersion();
+      this.version = await invoke<string>("app_version");
     } catch (e) {
       console.warn("取应用版本失败", e);
+      this.version = "";
     }
     // 录音开始后刷新"当前输入设备"(运行时事实);
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
