@@ -25,6 +25,12 @@ pub fn maybe_spawn(app: &AppHandle) {
         std::thread::spawn(move || run_ui_chain(app2));
         return;
     }
+    // 应用内更新自测：check 只检查；VOICEMAC_AUTOTEST_UPDATE=install 时连下载安装一起跑（成功后应用会重启）
+    if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("update") {
+        let app2 = app.clone();
+        std::thread::spawn(move || run_update_chain(app2));
+        return;
+    }
     if let Ok(wavpath) = std::env::var("VOICEMAC_AUTOTEST_FILE") {
         let app2 = app.clone();
         std::thread::spawn(move || run_file(app2, wavpath));
@@ -186,4 +192,51 @@ fn run_ui_chain(app: tauri::AppHandle) {
     std::fs::write(&jsonl, kept.join("\n") + "\n").ok();
     crate::log::elog("[ui-chain] PASS: 数据链与磁盘一致+实时性 OK");
     app.exit(0);
+}
+
+/// 应用内更新链路自测：检查 →（可选）下载安装。
+/// 默认只检查并打印结果；`VOICEMAC_AUTOTEST_UPDATE=install` 时执行安装（成功后应用会自动重启）。
+fn run_update_chain(app: tauri::AppHandle) {
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let do_install = std::env::var("VOICEMAC_AUTOTEST_UPDATE").as_deref() == Ok("install");
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+    let Ok(rt) = rt else {
+        crate::log::elog("[update-chain] FAIL: 建 runtime 失败");
+        app.exit(1);
+        return;
+    };
+    rt.block_on(async {
+        match crate::update::update_check(app.clone()).await {
+            Ok(Some(info)) => {
+                crate::log::elog(&format!(
+                    "[update-chain] 有新版本 {} (当前 {}) date={:?}",
+                    info.version, info.current, info.date
+                ));
+                if do_install {
+                    crate::log::elog("[update-chain] 开始安装（成功后进程会重启）");
+                    match crate::update::update_install(app.clone()).await {
+                        Ok(()) => crate::log::elog("[update-chain] install 返回（通常不会到这里）"),
+                        Err(e) => {
+                            crate::log::elog(&format!("[update-chain] FAIL: 安装失败 {e}"));
+                            app.exit(1);
+                        }
+                    }
+                } else {
+                    crate::log::elog("[update-chain] PASS: 检查链路 OK（未安装）");
+                    app.exit(0);
+                }
+            }
+            Ok(None) => {
+                crate::log::elog(&format!(
+                    "[update-chain] PASS: 已是最新（当前 {}）",
+                    env!("CARGO_PKG_VERSION")
+                ));
+                app.exit(0);
+            }
+            Err(e) => {
+                crate::log::elog(&format!("[update-chain] FAIL: 检查失败 {e}"));
+                app.exit(1);
+            }
+        }
+    });
 }

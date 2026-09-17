@@ -8,6 +8,26 @@
           <div class="row-hint">麦克风需要系统"麦克风"权限; 自动粘贴需要"辅助功能"权限; 「截图作为纠错上下文」需要"屏幕录制"权限(可选)。都能在「通用」页的权限卡里查看状态并跳转系统设置</div>
         </div>
         <div class="card">
+          <div class="row">
+            <div>
+              <div class="row-title">应用内更新</div>
+              <div class="row-hint" x-text="updateStateText()"></div>
+            </div>
+            <div class="btns">
+              <button class="mini" @click="checkUpdate(false)" :disabled="updateBusy">检查更新</button>
+              <button class="mini primary" x-show="updateInfo" @click="installUpdate()" :disabled="updateBusy">下载并安装</button>
+            </div>
+          </div>
+          <label class="row">
+            <div>
+              <div class="row-title">启动时自动检查</div>
+              <div class="row-hint">只检查并显示提示，不会自动下载安装</div>
+            </div>
+            <input type="checkbox" class="switch" x-model="cfg.auto_check_update" @change="saveCfg()" />
+          </label>
+          <div class="row-hint" x-show="updateInfo" x-text="`新版本 ${updateInfo?.version ?? ''} 更新说明：${updateInfo?.notes || '(无)'}`"></div>
+        </div>
+        <div class="card">
           <div class="row-title">设定</div>
           <div class="row-hint">桥田至开发的未来道具，在 250G 的移动硬盘上搭载天线而做成的东西：可对周边可视化终端强制电波放送，并把硬盘上记录的声音、图像强制播放。有效范围限于整个秋叶原，且只支持模拟信号。可与 13 号机连动，读取其记录的思考、梦、妄想等数据并以模拟信号传播；设定定时器后还能在指定时间自动播放。</div>
           <div class="row-hint">名字来源于日语自造词：未经许可、占用正规电波同频段强制发送自己的内容。本项目借它指"按下热键，把你的声音强制变成文字投递出去"。</div>

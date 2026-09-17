@@ -383,6 +383,7 @@
     - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`auto_submit`（false）。
     - `screenshot_context`（默认 false）：把当前屏幕截图作为纠错上下文。详见 §3.5.1。
     - `llm_timeout_secs`（默认 30）、`llm_max_tokens`（默认 0 = 不传该字段，用服务端默认）、`llm_retries`（默认 2）：LLM 调用参数，大模型页「调用参数」卡可改。详见 §3.5.2。
+    - `auto_check_update`（默认 true）：启动时自动检查更新（只报告，不自动安装）。详见 §3.11。
     - `overlay_position`（"bottom"）、`history_limit`（200，0 不限）、`keep_audio_count`（50）。
     - `max_recording_seconds`（1800）、`min_recording_seconds`（0.3）、`extra_tail_ms`（0，≤2000）。
     - `mic_device_uid`、`mic_priority`（CoreAudio DeviceUID 序列）。
@@ -394,6 +395,21 @@
 - **screen_context/**（同目录）：屏幕上下文截图归档，`screen-{millis}-ctx.png`，保留最近 200 张（超出删最早）。仅当 `screenshot_context=true` 时产生；用途是事后核对"当时屏幕上是什么、模型看到的是不是这个"。
 
 ## 5. 构建与签名
+
+### 5.1 应用内更新（`update.rs` + `tauri-plugin-updater`）
+
+为什么自带更新：浏览器下载的 app 会带 `com.apple.quarantine`，macOS 按"来自互联网的未受信任 App"处理，
+会重新索要麦克风/辅助功能权限（实测过）。应用自己下载则不带该标记（未声明 `LSFileQuarantineEnabled`），
+且新二进制满足同一份代码签名要求 → **TCC 授权保持不变**。
+
+- 链路：关于页「检查更新」→（可选）启动时自动检查 → 下载 `*.app.tar.gz` → 验签 → 替换自身 → 重启（`app.restart()`）
+- 信任：minisign 签名强制校验，无法关闭。公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`；
+  私钥只在 CI Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `_PASSWORD`），本机备份 `certs/denpa-jack-updater.key` + `certs/updater-signing.pw`
+- 清单：`https://github.com/yangyaofei/denpa-jack/releases/latest/download/latest.json`（由 release.yml 生成，含 version/notes/pub_date/platforms.darwin-aarch64.signature|url）
+- 行为：只报告不自动装（`auto_check_update` 默认 true），安装必须用户点「下载并安装」；进度经 `update-progress` 事件显示
+- 自测：`VOICEMAC_AUTOTEST=update`（只检查）、`VOICEMAC_AUTOTEST=update VOICEMAC_AUTOTEST_UPDATE=install`（连安装一起跑）
+- 注意：私钥丢失后已安装的 app 收不到新版本（只能手动重下）；换密钥等于换信任根，同理
+
 
 - 前端依赖：`npm install`（@tauri-apps/api 2、alpinejs 3、marked 18 等）。
 - 开发：`npm run tauri dev`（beforeDevCommand `npm run dev` → vite，devUrl `http://localhost:1420`，strictPort）。

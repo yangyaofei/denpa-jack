@@ -33,6 +33,10 @@ and a level meter.
   trimmed to a configurable limit
 - **Microphone** — device priority list, **event-driven** hot-plug refresh (no polling),
   live display of the device actually in use
+- **In-app updates** — the app checks `latest.json` on the release channel, downloads the
+  signed archive itself and replaces itself (minisign-verified, cannot be disabled).
+  Downloads made by the app carry no quarantine flag, so macOS keeps the existing
+  Microphone/Accessibility grants across upgrades
 
 ## How it works
 

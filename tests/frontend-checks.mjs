@@ -89,6 +89,15 @@ const lib = readFileSync("src-tauri/src/lib.rs", "utf8");
 check("poll_versions 已注册 invoke_handler", /commands::poll_versions/.test(lib));
 // 关于页版本号走我们自己的命令(不走 JS API 动态 chunk): 注册与前端调用两侧都要在
 check("app_version 已注册 invoke_handler", /commands::app_version/.test(lib));
+check("update_check 已注册 invoke_handler", /update::update_check/.test(lib));
+check("update_install 已注册 invoke_handler", /update::update_install/.test(lib));
+check("关于页有应用内更新卡", /应用内更新/.test(readFileSync("src/pages/about.html", "utf8")));
+check(
+  "tauri.conf 配好 updater(端址+公钥)",
+  /"updater"/.test(readFileSync("src-tauri/tauri.conf.json", "utf8")) &&
+    /"pubkey"/.test(readFileSync("src-tauri/tauri.conf.json", "utf8")) &&
+    /createUpdaterArtifacts/.test(readFileSync("src-tauri/tauri.conf.json", "utf8")),
+);
 check("前端用 app_version 取版本", /invoke<string>\("app_version"\)/.test(readFileSync("src/main.ts", "utf8")));
 check(
   "关于页版本为运行时渲染(非硬编码)",

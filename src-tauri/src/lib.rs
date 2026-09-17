@@ -18,6 +18,7 @@ mod permissions;
 mod pipeline;
 mod recording;
 pub mod screen_context;
+mod update;
 pub mod settings;
 mod shortcut;
 #[allow(unused_unsafe)]
@@ -102,6 +103,9 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // 内置更新：自己下载并替换自身，绕开浏览器下载带来的 quarantine（见 docs/SPEC.md「应用内更新」）
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -224,6 +228,7 @@ pub fn run() {
             commands::clear_history, commands::copy_text, commands::get_hotwords,
             recording::recording_start, recording::recording_stop,
             recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::dev_nav, commands::app_version,
+            update::update_check, update::update_install,
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
             commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,

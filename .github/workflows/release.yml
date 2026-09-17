@@ -51,7 +51,17 @@ jobs:
           grep -n "^version" src-tauri/Cargo.toml
 
       - name: Build app bundle
-        run: npm run tauri build -- --bundles app
+        env:
+          # 更新包的 minisign 签名（tauri-plugin-updater 强制要求，无法关闭）
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::缺少 TAURI_SIGNING_PRIVATE_KEY；应用内更新需要对更新包签名（本机密钥见 certs/denpa-jack-updater.key）"
+            exit 1
+          fi
+          npm run tauri build -- --bundles app
+          ls -l "src-tauri/target/release/bundle/macos/"
 
       - name: Prepare signing material (from repository secrets)
         env:
@@ -93,8 +103,25 @@ jobs:
           ditto -c -k --keepParent "$APP" "dist-release/Denpa.Jack_${V}_aarch64.app.zip"
           hdiutil create -volname "Denpa Jack" -srcfolder "$APP" -ov -format UDZO \
             "dist-release/Denpa.Jack_${V}_aarch64.dmg"
+          # 应用内更新用的产物（Tauri 构建时已生成 .tar.gz 与 .sig）：
+          # 换成不含空格的稳定文件名，URL 由下面写进 latest.json
+          cp "src-tauri/target/release/bundle/macos/Denpa Jack.app.tar.gz" \
+             "dist-release/Denpa.Jack_${V}_aarch64.app.tar.gz"
+          cp "src-tauri/target/release/bundle/macos/Denpa Jack.app.tar.gz.sig" \
+             "dist-release/Denpa.Jack_${V}_aarch64.app.tar.gz.sig"
+          # latest.json：应用内更新器轮询的清单（pubkey 校验签名 → 下载 → 替换）
+          # 签名值必须是 .sig 文件全文（含 untrusted comment 行），交给 jq 转义换行
+          jq -n \
+            --arg v "$V" \
+            --arg sig "$(cat 'dist-release/Denpa.Jack_${V}_aarch64.app.tar.gz.sig')" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Denpa.Jack_${V}_aarch64.app.tar.gz" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "$(cat .github/release-notes.md)" \
+            '{version:$v, notes:$notes, pub_date:$date, platforms:{"darwin-aarch64":{signature:$sig, url:$url}}}' \
+            > dist-release/latest.json
+          cat dist-release/latest.json | head -c 400; echo
           cd dist-release
-          shasum -a 256 Denpa.Jack_* > "SHA256SUMS_${V}.txt"
+          shasum -a 256 Denpa.Jack_*.zip Denpa.Jack_*.dmg Denpa.Jack_*.tar.gz > "SHA256SUMS_${V}.txt"
           cat "SHA256SUMS_${V}.txt"
           ls -lh
 

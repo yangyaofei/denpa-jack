@@ -197,6 +197,9 @@ pub struct Config {
     /// 4xx（模型名、Key、参数错误）属配置问题，重试无意义，直接返回错误。
     #[serde(default = "d_llm_retries")]
     pub llm_retries: u32,
+    /// 启动时自动检查更新（只报告新版本，不自动安装；关于页可手动检查与安装）
+    #[serde(default = "default_true")]
+    pub auto_check_update: bool,
     #[serde(default = "d_max_rec")]
     pub max_recording_seconds: u32, // 1800
     #[serde(default = "d_min_rec")]

@@ -35,6 +35,7 @@ export interface Config {
   bindings: Record<string, BindingSet>;
   use_llm_correction: boolean; clipboard_only: boolean;
   screenshot_context: boolean;
+  auto_check_update: boolean;
   llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
   keep_in_clipboard: boolean; auto_submit: boolean;
@@ -133,6 +134,11 @@ function describeCombo(s: string): string {
   perms: [] as any[],
   // 应用版本(关于页显示): 从 tauri.conf.json 的 version 读, 避免页面上硬编码后与发布版本漂移
   version: "",
+  // 应用内更新状态(关于页): 检查中/有新版本/进度/错误
+  updateInfo: null as any,
+  updateBusy: false,
+  updateProgress: "",
+  updateErr: "",
   prioSel: 0,
 
   sections: [
@@ -174,6 +180,15 @@ function describeCombo(s: string): string {
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
     await this.checkPerms();
     this.uiSelftest();
+    // 启动时自动检查更新(只报告, 不自动安装); 失败静默
+    if (this.cfg?.auto_check_update) this.checkUpdate(true);
+    listen("update-progress", (e: any) => {
+      const p = e.payload || {};
+      const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
+      this.updateProgress = p.total
+        ? `下载中 ${mb(p.downloaded)} / ${mb(p.total)} MB`
+        : `下载中 ${mb(p.downloaded)} MB`;
+    });
   
     // C46 主窗轮询(组件作用域 this 可用): 800ms 拉版本, 变化才刷新
     let lastHistVer = -1;
@@ -673,6 +688,46 @@ function describeCombo(s: string): string {
     try { await invoke("open_system_settings", { url: p.settings_url }); } catch (e) { console.warn(e); }
   },
 
+  // ==== 应用内更新(关于页) ====
+  updateStateText(): string {
+    if (this.updateBusy) return this.updateProgress || "处理中…";
+    if (this.updateErr) return `失败：${this.updateErr}`;
+    if (this.updateInfo) return `有新版本 ${this.updateInfo.version}（当前 ${this.updateInfo.current}）`;
+    return `当前 ${this.version || "—"}；未检查`;
+  },
+  // silent=true 用于启动时自动检查(失败不打扰、只记控制台)
+  async checkUpdate(silent = true) {
+    if (this.updateBusy) return;
+    this.updateBusy = true;
+    this.updateErr = "";
+    this.updateProgress = "检查中…";
+    try {
+      const info = await invoke<any | null>("update_check");
+      this.updateInfo = info;
+      this.updateProgress = "";
+      if (!silent) this.updateProgress = info ? "" : "";
+    } catch (e: any) {
+      this.updateErr = String(e);
+      this.updateInfo = null;
+      if (silent) console.warn("自动检查更新失败（已忽略）", e);
+    } finally {
+      this.updateBusy = false;
+    }
+  },
+  async installUpdate() {
+    if (this.updateBusy) return;
+    this.updateBusy = true;
+    this.updateErr = "";
+    this.updateProgress = "下载中…";
+    try {
+      await invoke("update_install"); // 成功后应用会重启，不会返回
+    } catch (e: any) {
+      this.updateErr = String(e);
+      this.updateProgress = "";
+      this.updateBusy = false;
+    }
+  },
+
   async initMock() {
     this.mics = [
         { uid: "mock-uid-1", name: "Wireless Mic Rx (DJI)" },
@@ -695,6 +750,7 @@ function describeCombo(s: string): string {
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
       llm_timeout_secs: 30, llm_max_tokens: 0, llm_retries: 2,
+      auto_check_update: true,
       extra_tail_ms: 0, mic_device_uid: "", mic_priority: ["Wireless Mic Rx (DJI)"],
       data_dir: "",
       bindings: { transcribe: { current: ["f5"] } },
