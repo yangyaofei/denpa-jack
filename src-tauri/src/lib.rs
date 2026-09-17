@@ -93,15 +93,24 @@ pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value
 pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 二次启动: 唤出设置窗
+    // 自测模式跳过单实例插件：单实例的判重基于应用名（不是 bundle id），
+    // 会让"独立 bundle id 的测试副本"在正式实例运行时被转发参数后立刻退出，导致自测无法进行。
+    // （见 docs/SPEC.md 自测通道一节：VOICEMAC_AUTOTEST=update 用副本验证更新链路）
+    let autotest = std::env::var("VOICEMAC_AUTOTEST").is_ok();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(not(test))]
+    let builder = if autotest {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 二次启动: 唤出主窗
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
         }))
-        .plugin(tauri_plugin_opener::init())
+    };
+    builder
         .plugin(tauri_plugin_clipboard_manager::init())
         // 内置更新：自己下载并替换自身，绕开浏览器下载带来的 quarantine（见 docs/SPEC.md「应用内更新」）
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -127,13 +136,16 @@ pub fn run() {
             // 缺项 → 落日志 + 推给前端 + 把主窗拉出来, 让用户第一眼就看到"缺什么、会怎样"
             let h = app.handle().clone();
             std::thread::spawn(move || {
+                // 自测模式（VOICEMAC_AUTOTEST=*）不弹任何系统授权框：
+                // 测试常常在非交互环境下跑（也可能用独立 bundle id 的副本），弹窗只会留下无人处理的气泡
+                let autotest = std::env::var("VOICEMAC_AUTOTEST").is_ok();
                 // 麦克风未决定 → 弹系统授权框; 已拒绝不会再弹(需去系统设置)
-                if crate::permissions::mic_status_code() == 0 {
+                if !autotest && crate::permissions::mic_status_code() == 0 {
                     crate::permissions::request_mic();
                     std::thread::sleep(std::time::Duration::from_millis(800));
                 }
                 // 辅助功能: 带引导提示的检查(AXIsProcessTrustedWithOptions(prompt))
-                let ax = deliver::ax_trusted(true);
+                let ax = deliver::ax_trusted(!autotest);
                 let missing = crate::permissions::missing();
                 if missing.is_empty() {
                     log::log(&h, "[perm] 权限齐备: 麦克风 + 辅助功能");
