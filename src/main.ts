@@ -134,7 +134,9 @@ function describeCombo(s: string): string {
   perms: [] as any[],
   // 应用版本(关于页显示): 从 tauri.conf.json 的 version 读, 避免页面上硬编码后与发布版本漂移
   version: "",
-  // 应用内更新状态(关于页): 检查中/有新版本/进度/错误
+  // 应用内更新状态(关于页): idle=未检查 / checking / latest=已是最新 / available=有新版本 / error
+  updateState: "idle" as "idle" | "checking" | "latest" | "available" | "error",
+  updateCheckedAt: "",
   updateInfo: null as any,
   updateBusy: false,
   updateProgress: "",
@@ -689,10 +691,14 @@ function describeCombo(s: string): string {
   },
 
   // ==== 应用内更新(关于页) ====
+  // 状态文字要能区分"检查过、已是最新"和"从未检查"——否则用户看到"未检查"会以为功能没生效
   updateStateText(): string {
-    if (this.updateBusy) return this.updateProgress || "处理中…";
-    if (this.updateErr) return `失败：${this.updateErr}`;
-    if (this.updateInfo) return `有新版本 ${this.updateInfo.version}（当前 ${this.updateInfo.current}）`;
+    if (this.updateState === "checking") return this.updateProgress || "检查中…";
+    if (this.updateState === "error") return `失败：${this.updateErr}`;
+    if (this.updateState === "available" && this.updateInfo)
+      return `有新版本 ${this.updateInfo.version}（当前 ${this.updateInfo.current}）`;
+    if (this.updateState === "latest")
+      return `已是最新${this.updateCheckedAt ? `（最后检查 ${this.updateCheckedAt}）` : ""}`;
     return `当前 ${this.version || "—"}；未检查`;
   },
   // silent=true 用于启动时自动检查(失败不打扰、只记控制台)
@@ -700,15 +706,18 @@ function describeCombo(s: string): string {
     if (this.updateBusy) return;
     this.updateBusy = true;
     this.updateErr = "";
+    this.updateState = "checking";
     this.updateProgress = "检查中…";
     try {
       const info = await invoke<any | null>("update_check");
       this.updateInfo = info;
+      this.updateState = info ? "available" : "latest";
+      this.updateCheckedAt = new Date().toLocaleTimeString();
       this.updateProgress = "";
-      if (!silent) this.updateProgress = info ? "" : "";
     } catch (e: any) {
       this.updateErr = String(e);
       this.updateInfo = null;
+      this.updateState = "error";
       if (silent) console.warn("自动检查更新失败（已忽略）", e);
     } finally {
       this.updateBusy = false;
@@ -724,6 +733,7 @@ function describeCombo(s: string): string {
     } catch (e: any) {
       this.updateErr = String(e);
       this.updateProgress = "";
+      this.updateState = "error";
       this.updateBusy = false;
     }
   },
