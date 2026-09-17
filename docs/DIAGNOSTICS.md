@@ -15,6 +15,19 @@
 
 数据目录可在设置页「数据」卡里改（改后日志与历史一起搬过去）。
 
+## 旧数据目录与本机迁移记录
+
+改名前/早期版本用过别的数据目录，内容不会自动跟着走。本机在 2026-09-17 手工迁移过一次：
+
+| 旧目录 | 迁入内容 |
+|---|---|
+| `~/Library/Application Support/com.yangyaofei.tauri-app/` | `history.jsonl`（200 条，与现行 schema 相同）、`recordings/`（50 个 wav，文件名 `rec_<毫秒>.wav` 不冲突）、`llm_logs/`（741 个） |
+| `~/Library/Application Support/VoiceMac/` | `history.jsonl`（19 条，Swift 期 schema 需转换：`createdAt`→`ts`、`originalText`→`raw`、`correctedText`→`final_text`、`asrProvider`→`engine`、`deliverMode`→`delivered`）、`dictionary.json`（3 条：谢克数学/腾讯云/机器学习，`guardWords`→`guard_words`、`boost` 保留） |
+
+合并方式：历史按 `ts` 去重排序后写回；录音与 `llm_logs` 按文件名拷贝（不覆盖已有）；
+迁移同时把 `history_limit` 调到 5000、`keep_audio_count` 调到 500，避免旧内容被上限裁掉。
+`VoiceMac/audio/` 下的 20 个 `.raw`（无 wav 头，格式未确认）未迁移，仍留在原目录。
+
 ## 日志里与死亡相关的行
 
 | 前缀 | 含义 |
