@@ -130,6 +130,8 @@ function describeCombo(s: string): string {
   permWarning: "",
   // 权限总检查(麦克风 + 辅助功能): 启动即查, 缺项顶部横幅 + 通用页卡片
   perms: [] as any[],
+  // 应用版本(关于页显示): 从 tauri.conf.json 的 version 读, 避免页面上硬编码后与发布版本漂移
+  version: "",
   prioSel: 0,
 
   sections: [
@@ -161,6 +163,12 @@ function describeCombo(s: string): string {
     await this.loadCfg();
     await this.refreshHistory();
     await this.refreshMics();
+    try {
+      const { getVersion } = await import("@tauri-apps/api/app");
+      this.version = await getVersion();
+    } catch (e) {
+      console.warn("取应用版本失败", e);
+    }
     // 录音开始后刷新"当前输入设备"(运行时事实);
     try { this.hotwordsPreview = await invoke("get_hotwords"); } catch (_) {}
     await this.checkPerms();

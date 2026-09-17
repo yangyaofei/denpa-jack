@@ -111,7 +111,7 @@
     - 思考强度：low/high/max（直传 `reasoning_effort`，不做映射）。
     - 系统提示词：随档案保存；空则回填内置默认 prompt；编辑/Markdown 预览切换（marked 渲染）。
     - 测试按钮：`llm_selftest` 走真实链路——固定测试输入 → 词典纠错 → LLM（真实 tool_calls）→ 显示词典结果、是否 tool_calls、延迟、LLM 输出；支持传未保存草稿作 override。
-- **关于**：版本 0.1.0、一句话定位、权限说明。
+- **关于**：版本（运行时 `getVersion()` 读 tauri.conf.json 的 version，不在页面里硬编码）、一句话定位、权限说明。
 - 注：历史管理不在设置窗（侧栏隐藏"历史"节），历史管理在主窗双栏。
 
 ### 2.4 失败处理
@@ -367,7 +367,7 @@
 - 签名（tauri.conf.json bundle.macOS）：
   - `identifier: "io.github.yangyaofei.denpajack"` 固定不变——自签证书 + identifier 稳定，保证重打包后 TCC 授权（麦克风/辅助功能）持久有效，不重复弹授权。
   - 签名不在 tauri 配置里：打包后用 **rcodesign 直接读 `.p12` 文件**签名（不需要钥匙串/系统信任）——见 `docs/CODE-SIGNING.md`；`hardenedRuntime: false`。
-- `macOSPrivateApi: true`；`minimumSystemVersion: "10.15"`；版本 0.1.0。
+- `macOSPrivateApi: true`；`minimumSystemVersion: "10.15"`；版本号在 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` 三处必须一致（发布时由 tag 统一注入，见 docs/CI-CD.md）。
 - vite 构建（vite.config.ts）：rollupOptions.input 现仅 `index.html` + `hud.html`（**缺 settings.html**，见 §6）。
 - Rust 关键依赖：tauri 2（tray-icon + macos-private-api feature）、cpal 0.18、tokio-tungstenite 0.30（native-tls）、reqwest 0.13（json+multipart）、objc2 0.6 + objc2-app-kit 0.3、core-foundation、pinyin、regex、flate2、uuid、base64。
 - 回归顺序：`cargo check` 0 error → `cargo run --example dict_test` 5/5 → `VOICEMAC_AUTOTEST_FILE=<wav>` 交付 ✓ → `VOICEMAC_AUTOTEST=e2e` 按键链 ✓ → 打包签名可启动（TCC 授权 ALIVE）。
