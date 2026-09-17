@@ -104,4 +104,41 @@ check(
   /x-text="version/.test(readFileSync("src/pages/about.html", "utf8")),
 );
 
+// 4) 分段队列(HUD 队列)静态断言
+// 用户定则: 不显示段号/"已交付"字样、队列按需展开、失败可重试、清空两步确认、不丢段
+const hudTs = readFileSync("src/hud.ts", "utf8");
+const hudHtml = readFileSync("hud.html", "utf8");
+const segQ = readFileSync("src-tauri/src/segment_queue.rs", "utf8");
+const queueCmds = ["queue_retry", "queue_clear", "queue_dismiss"];
+check(
+  `队列三命令已注册 invoke_handler(${queueCmds.join("/")})`,
+  queueCmds.every((c) => new RegExp(`commands::${c}`).test(lib)),
+);
+check(
+  `hud.ts 调用三命令(${queueCmds.join("/")})`,
+  queueCmds.every((c) => hudTs.includes(`invoke("${c}")`)),
+);
+// 注释里可能写"不显示已交付"这样的规则说明; 断言要看去掉注释后的真实代码/标记
+const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+check(
+  "hud 不显示段号/已交付字样(用户定则)",
+  !/已交付/.test(stripComments(hudTs)) &&
+    !/已交付/.test(stripComments(hudHtml)) &&
+    !/第\s*\$\{/.test(stripComments(hudTs)),
+);
+check("hud.html 队列按需展开(hasqueue 才 664px)", /\.hud\.hasqueue\s*\{\s*width:\s*664px/.test(hudHtml));
+check("hud.html 当前文字可多行且有滚动上限", /max-height:\s*174px/.test(hudHtml) && /cur-text/.test(hudHtml));
+check("hud.ts 存活规则: 完成 350ms / 只剩失败 2500ms", /scheduleHide\(350\)/.test(hudTs) && /scheduleHide\(failed \? 2500 : 350\)/.test(hudTs));
+check("hud.ts 尺寸上报 hud_resize(width,height)", /hud_resize",\s*\{\s*width/.test(hudTs));
+check("segment_queue.rs 在 lib.rs 启动 worker", /segment_queue::start\(/.test(lib));
+check(
+  "队列不丢段: 失败/清空都先写历史",
+  /delivered: "failed"/.test(segQ) && /delivered: "cancelled"/.test(segQ),
+);
+// 串行机制: 单 worker 用 Condvar 等 Queued 段, 一次只把一段置为 Transcribing(交付顺序=FIFO)
+check(
+  "队列串行保证顺序(单 worker + Condvar)",
+  /Condvar/.test(segQ) && /CV\.wait\(/.test(segQ) && /state = SegState::Transcribing/.test(segQ),
+);
+
 process.exit(fail ? 1 : 0);

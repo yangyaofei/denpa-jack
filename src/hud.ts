@@ -1,118 +1,210 @@
-// 录音浮窗生命周期(用户定则):
-//   按住=录音中(逐字滚动) → 松开=转写/润色/交付(不自动消失) → 粘贴成功=立即关闭
-//   ASR 失败=浮窗保留(partial 文本不动)+重试按钮; 重试一次仍失败=引导去主窗历史
-//   LLM 失败但 ASR 成功=粘贴 ASR 原文+显示问题 2.5s 后关
+// 录音浮窗(用户定则, 分段队列方案 D —— 与 docs/SPEC.md、src-tauri/src/segment_queue.rs 同源)
+//
+// 布局:
+//   左栏 = 当前(录音中=实时文字; 没在录音时=正在转写的那段), 可换行/多行(最多 8 行后框内滚动)
+//   右栏 = 队列(其余排队/失败段, 一行一段, 单行截断)
+//   右栏只在真的有排队段时出现, 面板 480px → 664px; 队列空了收回 480px
+//   一律不显示段号、"已交付"等字样(用户定则: 多余的字不写)
+//
+// 存活规则(快照驱动, 150ms 轮询; 用户定稿):
+//   1) 录音中 / 队列非空(排队或转写中) → 一直显示, 无超时
+//   2) 全部交付完成 → 350ms 后收起(与既有"粘贴成功浮窗立即消失"一致)
+//   3) 队列里只剩失败段 → 2.5s 提示后收起(与既有"录音太短已丢弃"提示同长)
+//   4) 失败 + 队列非空 → 保持显示; 队列跑空后才开始那 2.5s
+//   5) 「清空」两步确认(点一下变"确认清空？"), 只清排队段; 排队段音频与原文已进历史
+//      (delivered="cancelled"), 不丢数据; 「关闭」= 不再提示失败段(段已进历史, 可在历史页重跑)
 import { invoke } from "@tauri-apps/api/core";
 
 const $ = (id: string) => document.getElementById(id)!;
+const hud = $("hud");
 const statusEl = $("status");
-const textEl = $("text");
+const curText = $("curText");
 const fill = $("fill") as HTMLElement;
 const dot = $("dot");
+const qlist = $("qlist");
+const clearBtn = $("clearBtn") as HTMLButtonElement;
 const failActions = $("failActions");
 const failMsg = $("failMsg");
 const retryBtn = $("retryBtn") as HTMLButtonElement;
+const closeBtn = $("closeBtn") as HTMLButtonElement;
 
-let retried = false; // hud 只重试一次, 再失败引导去主窗历史
+// —— 浮窗存活: 所有收起都走这里, 有新动态就取消(规则 1 优先) ——
+let hideTimer: number | undefined;
+function scheduleHide(ms: number) {
+  if (hideTimer) clearTimeout(hideTimer);
+  hideTimer = window.setTimeout(() => {
+    hideTimer = undefined;
+    invoke("hud_hide").catch(() => {});
+  }, ms);
+}
+function cancelHide() {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = undefined;
+  }
+}
 
 function setState(cls: string, msg: string, keepText = true) {
   dot.className = "dot " + cls;
   statusEl.textContent = msg;
-  if (!keepText) textEl.textContent = "";
+  if (!keepText) curText.textContent = "";
   failActions.classList.remove("show");
 }
 
-// 暴露给 fail-actions 按钮
-(window as any).__retry = async () => {
-  if (retried) return;
-  retried = true;
+// 尺寸上报: 面板宽(单栏/两栏)与内容高度都告诉 Rust, 由它设置窗口尺寸并重新贴屏
+let lastSize = "";
+function pushResize() {
+  const w = hud.classList.contains("hasqueue") ? 664 : 480;
+  const h = Math.ceil(hud.getBoundingClientRect().height);
+  const sig = `${w}x${h}`;
+  if (sig === lastSize) return;
+  lastSize = sig;
+  invoke("hud_resize", { width: w, height: h }).catch(() => {});
+}
+
+// 右栏: 队列列表(只有状态图标 + 文字; 失败行标红)
+let queueSig = "";
+function renderQueue(rows: any[]) {
+  // 键控签名: 状态 + 文本; 一样就不动 DOM(避免 150ms 一次的重绘打断滚动/闪动)
+  const sig = rows.map((r) => `${r.state}|${r.text}`).join("\n");
+  if (sig === queueSig) return;
+  queueSig = sig;
+  qlist.innerHTML = rows
+    .map((r) => {
+      const icon = r.state === "failed" ? "✕" : r.state === "transcribing" ? "⟳" : "•";
+      const text = (r.text || "").replace(/[<>&]/g, (c: string) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
+      return `<div class="qrow ${r.state}"><span class="b">${icon}</span><span class="t">${text}</span></div>`;
+    })
+    .join("");
+}
+
+// 失败提示: 一行说明 + 重试/关闭; 文案固定(失败原因在历史与日志里)
+function showFail(show: boolean) {
+  if (show) {
+    failMsg.textContent = "转写失败（音频已存入历史，可重试）";
+    failActions.classList.add("show");
+  } else {
+    failActions.classList.remove("show");
+  }
+}
+
+retryBtn.disabled = false;
+retryBtn.onclick = async () => {
   retryBtn.disabled = true;
   failMsg.textContent = "重试中…";
   try {
-    await invoke("retry_last");
-    // 成功则后续 asr-final 接管; 失败则 asr-error 再次到达
+    await invoke("queue_retry");
+    // 成功 → 该段回到队列, 后续快照会把它显示为排队/转写中
   } catch (e) {
-    showRetryFailed(String(e));
+    failMsg.textContent = `重试失败(${String(e).slice(0, 40)}); 可到主窗『历史』里重跑`;
+  } finally {
+    retryBtn.disabled = false;
+    cancelHide(); // 用户操作过 → 重新按规则计时
   }
 };
-(window as any).__close = () => invoke("hud_hide");
+closeBtn.onclick = async () => {
+  try {
+    await invoke("queue_dismiss"); // 只是不再提示; 段已进历史, 可在历史页重跑
+  } catch {}
+  showFail(false);
+};
+// 「清空」两步确认: 第一下变成"确认清空？"，2.6s 内再点才真清(防误触)
+let clearArmed = false;
+clearBtn.onclick = async () => {
+  if (!clearArmed) {
+    clearArmed = true;
+    clearBtn.textContent = "确认清空？";
+    clearBtn.classList.add("confirm");
+    window.setTimeout(() => {
+      if (clearArmed) {
+        clearArmed = false;
+        clearBtn.textContent = "清空";
+        clearBtn.classList.remove("confirm");
+      }
+    }, 2600);
+    return;
+  }
+  clearArmed = false;
+  clearBtn.textContent = "清空";
+  clearBtn.classList.remove("confirm");
+  try {
+    await invoke("queue_clear");
+  } catch {}
+  cancelHide();
+};
 
-function showRetryFailed(err: string) {
-  setState("err", "⚠️ 转写失败");
-  failActions.classList.add("show");
-  failMsg.textContent = `重试失败(${err.slice(0, 40)}); 可到主窗的『历史』里重试`;
-}
-;;;;;;
-// 阶段状态: 无自动隐藏——从松开一直显示到 asr-final(交付完成);;
-
-// C43 诊断: 前端事件监听注册完成落日志(Rust 侧正常但前端无反应时, 由此定位断联)
-invoke("ui_log", { msg: "hud listeners ready" }).catch(() => {});
-let partialCount = 0;;
-
-// C43 A/B 实验: 同事件带显式 AnyLabel target 再注册, 收到则打日志(区分默认 target 与定向 target 的路由差异);
-
-// C43b 轮询模式: 事件通道(Rust→webview)在本机打包版不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
-// 前端改为 150ms 拉取快照驱动状态机——invoke 通道已证可靠。
+// C43b 轮询模式: 事件通道(Rust→webview)在本机打包版不可达, 前端 150ms 拉快照驱动状态机
 let pollVer = -1;
-let hideTimer: number | undefined;
 let lastFinal = "";
 async function pollOnce() {
   try {
     const s = await invoke<any>("hud_poll");
     if (s.version === pollVer) return;
     pollVer = s.version;
-    // level
+
+    // 电平条
     const lv = Math.min(1, (s.level / 1000) * 6);
     fill.style.width = `${Math.max(4, lv * 100)}%`;
     fill.className = lv > 0.9 ? "fill hot" : "fill";
-    // C47 幂等全量重绘: 快照=单一真源, 空=清——杜绝 hide 清快照后 DOM 残留旧内容
-    // (旧实现 if(s.partial) 只写不清, 下次 show 瞬间闪现上一次的文本)
+
+    // 状态行
     if (s.status === "recording") {
       setState("", "● 录音中", false);
-      document.getElementById("hint")!.textContent = "松开结束 · esc 取消";
       fill.style.width = "0";
     } else if (s.status === "transcribing") {
       setState("idle", "… 转写中");
-      fill.style.width = "0";
     } else if (s.status === "busy") {
       setState("idle", "✦ AI 润色中…");
     } else {
-      // 空状态(idle/隐藏): 状态行+文本全清
       setState("", "", false);
-      document.getElementById("hint")!.textContent = "";
     }
-    textEl.textContent = s.partial || "";
-    // 用户定则: 文字超窗后始终显示最新部分——旧内容上滚, 视口保持滚动到底部
-    textEl.scrollTop = textEl.scrollHeight;
-    if (!s.msg && !s.err) failActions.classList.remove("show");
     if (s.msg) {
       setState("idle", s.msg, false);
-      fill.style.width = "0";
-      if (hideTimer) clearTimeout(hideTimer);
-      hideTimer = window.setTimeout(() => invoke("hud_hide"), 2500);
+      scheduleHide(2500); // 一次性提示(如"录音太短已丢弃"): 2.5s
     }
+
+    // 左栏: 当前段(录音中显示实时文字, 始终滚到最新)
+    const cur = s.seg_current;
+    const curStr = cur ? String(cur.text || "") : "";
+    if (curText.textContent !== curStr) curText.textContent = curStr;
+    if (cur && cur.state === "recording") curText.scrollTop = curText.scrollHeight;
+
+    // 右栏: 队列(空 → 不显示右栏, 面板收回单栏宽度)
+    const q: any[] = s.seg_queue || [];
+    renderQueue(q);
+    hud.classList.toggle("hasqueue", q.length > 0);
+    clearBtn.classList.toggle("show", q.some((r) => r.state === "queued"));
+
+    // 失败提示 + 存活规则
+    const failed = !!s.seg_failed;
+    showFail(failed);
     if (s.err) {
-      setState("idle", `⚠️ ${String(s.err).slice(0, 60)}`);
-      failActions.classList.add("show");
-      fill.style.width = "0";
-      if (hideTimer) clearTimeout(hideTimer);
-      hideTimer = window.setTimeout(() => invoke("hud_hide"), 2500);
+      // 引擎/交付级错误(asr-error): 同样按"只剩失败 2.5s"处理, 但文案用错误原文
+      setState("err", `⚠️ ${String(s.err).slice(0, 60)}`);
+      showFail(true);
+      scheduleHide(2500);
     }
-    // finished
-    if (s.finished) {
+    const queueBusy = q.some((r) => r.state === "queued" || r.state === "transcribing");
+    const busy = s.status === "recording" || s.status === "transcribing" || (cur && cur.state === "transcribing") || queueBusy || failed;
+    if (busy) cancelHide(); // 规则 1/4: 有活或只剩失败 → 不自动收
+    else if (s.finished) {
+      // 规则 2: 全部交付完成 → 350ms 收起
       const d = s.finished;
-      if (JSON.stringify(d) !== lastFinal) {
-        lastFinal = JSON.stringify(d);
-        // 用户定则: 文字粘贴出去(交付完成)浮窗立即消失——不留展示期
+      const sig = JSON.stringify(d);
+      if (sig !== lastFinal) {
+        lastFinal = sig;
         setState("ok", d.warning ? `⚠️ ${String(d.warning).slice(0, 40)}` : `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"}`);
-        textEl.textContent = d.final || d.raw || "";
-        setTimeout(() => invoke("hud_hide"), 350);
+        scheduleHide(350);
       }
+    } else if (s.version !== 0) {
+      // 规则 2/3: 没活可干了 → 失败段保留 2.5s, 否则 350ms 收起
+      scheduleHide(failed ? 2500 : 350);
     }
+
+    requestAnimationFrame(pushResize);
   } catch {
     // poll 失败静默(窗口隐藏期间)
   }
 }
 setInterval(pollOnce, 150);
 pollOnce();
-invoke("ui_log", { msg: "hud poll loop started" }).catch(() => {});

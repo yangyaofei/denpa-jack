@@ -21,19 +21,29 @@ pub struct SessionHandoff {
 pub static CANCELLED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static SESSION_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandoff>) {
+/// 后处理结果 —— 分段队列据此决定"出队"还是"保留为失败段等重试"(见 segment_queue.rs)
+pub enum Outcome {
+    /// 正常走完(含 LLM 降级成原文, 以及被 esc 取消后只入历史的情况)
+    Delivered,
+    /// ASR 没识别到语音内容(有 warning, 不算失败——重试也没有意义)
+    NoSpeech,
+    /// 失败(配置读取失败 / 交付失败等): 队列保留该段, 音频与原文进历史, 可重试
+    Failed(String),
+}
+
+pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> Outcome {
     // 转写内容属隐私: 仅 debug 构建落日志, release 脱敏(Handy redact_text 等价)
     #[cfg(debug_assertions)]
     crate::log::elog(&format!("[pipeline] begin raw={:.40}", raw));
     #[cfg(not(debug_assertions))]
     crate::log::elog("[pipeline] begin");
-    let ho = ho.unwrap_or_default();
     let cfg: Config = match crate::settings::get_config(app.clone()) {
         Ok(c) => c,
         Err(e) => {
-            let _ = crate::emit_both(&app, "asr-final", serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": format!("配置读取失败: {e}")}));
-            crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": format!("配置读取失败: {e}")})));
-            return;
+            let msg = format!("配置读取失败: {e}");
+            let _ = crate::emit_both(&app, "asr-final", serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg}));
+            crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg})));
+            return Outcome::Failed(msg);
         }
     };
 
@@ -43,7 +53,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
             "warning": "未识别到语音内容",
         }));
         crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": "", "llm_used": false, "delivered": "none", "warning": "未识别到语音内容"})));
-        return;
+        return Outcome::NoSpeech;
     }
 
     // pcm 随会话流入: 异步落盘+清理(停止路径不再同步写盘, Handy spawn_blocking 等价)
@@ -196,8 +206,12 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     });
     let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
     crate::hud_set(|h| { h.status.clear(); h.finished = Some(fin_payload); });
-    // 转写态收尾: 托盘复位(三态: 默认/红=录音/黄=转写)
-    crate::tray_events::set_tray_transcribing(&app, false);
+    // 托盘复位交给队列统一处理(队列里可能还有别的段在排队/转写)
+    if delivered == "failed" {
+        Outcome::Failed(warning.clone().unwrap_or_else(|| "交付失败".into()))
+    } else {
+        Outcome::Delivered
+    }
 }
 
 

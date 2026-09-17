@@ -58,53 +58,22 @@ pub fn spawn_session(
             let (tag, payload) = match ev {
                 doubao::AsrEvent::Partial(t) => ("asr-partial", t),
                 doubao::AsrEvent::Result(t) => {
-                    // C36: 交付管线是同步阻塞工作(AX/CGEvent/文件IO), 放到专用线程执行;
-                    // FinishGuard 等价: panic 时也兜底发 asr-final, HUD 不会一直停在等待态(Handy actions.rs:36-48)
+                    // 分段队列(用户定则): 结果不在这里直接跑后处理, 而是入队, 由队列的单
+                    // worker 串行执行 —— 交付顺序恒等于录音顺序; 同时避免并行段互相结算
+                    // 全局单槽的粘贴事务(paste_tx::PENDING)导致前一段只进剪贴板。
                     let ho = handoff.lock().unwrap().take();
-                    let app2 = app.clone();
-                    let t2 = t.clone();
-                    std::thread::spawn(move || {
-                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            crate::pipeline::post_process(app2.clone(), t2.clone(), ho)
-                        }));
-                        if let Err(p) = r {
-                            let msg = p
-                                .downcast_ref::<&str>()
-                                .map(|s| s.to_string())
-                                .or_else(|| p.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "未知 panic".into());
-                            crate::log::elog(&format!("[pipeline] panic: {msg}"));
-                            let _ = crate::emit_both(&app2, "asr-final", serde_json::json!({
-                                "raw": t2, "final": "", "llm_used": false,
-                                "warning": format!("内部错误: {msg}")
-                            }));
-                        }
-                    });
+                    let id = crate::segment_queue::enqueue(&app, t.clone(), ho);
+                    crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::segment_queue::busy()));
                     ("asr-result", t)
                 }
                 doubao::AsrEvent::Error(t) => {
-                    // 失败也入历史(空文本+warning+音频路径): 重试链闭合(Handy actions.rs:858)
+                    // ASR 阶段失败: 该段以 Failed 状态入队(先落盘音频 + 写历史, 保证能重试),
+                    // 浮窗按"只剩失败 → 2.5s 后收起"的规则提示, 后续段不受影响
+                    let ho = handoff.lock().unwrap().take();
                     let app2 = app.clone();
                     let msg = t.clone();
-                    std::thread::spawn(move || {
-                        use tauri::Manager;
-                        let audio_path = app2
-                            .state::<std::sync::Mutex<crate::AppState>>()
-                            .lock().unwrap().last_audio.clone().unwrap_or_default();
-                        let rec = crate::history::HistoryRecord {
-                            ts: crate::pipeline::now_local_pub(),
-                            engine: String::new(),
-                            raw: String::new(),
-                            final_text: String::new(),
-                            llm_used: false,
-                            delivered: "none".into(),
-                            audio_path,
-                            warning: Some(msg),
-                            duration_ms: 0,
-                llm_thinking: None,
-                        };
-                        crate::history::append(&app2, &rec);
-                    });
+                    let id = crate::segment_queue::enqueue_asr_failed(&app2, msg, ho);
+                    crate::log::elog(&format!("[queue] asr-error 失败段入队 id={id}"));
                     ("asr-error", t)
                 }
             };

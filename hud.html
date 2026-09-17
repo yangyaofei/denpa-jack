@@ -7,10 +7,11 @@
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { background: transparent; overflow: hidden; }
       body { font-family: -apple-system, "PingFang SC", sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
+      /* 浮窗布局(分段队列方案 D, 用户定稿):
+         单栏 480px(只有当前段) ↔ 出现队列时 664px(左=当前 / 右=队列)。
+         右栏只在真的排队时才出现, 队列空了就收回 480 —— 不默认占地方。 */
       .hud {
         width: 480px;
-        min-height: 92px;
-        max-height: 196px;
         padding: 12px 16px 14px;
         border-radius: 14px;
         background: rgba(24, 24, 28, 0.94);
@@ -18,25 +19,38 @@
         color: #f2f2f7;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
         display: flex; flex-direction: column;
+        transition: width 0.18s ease;
       }
+      .hud.hasqueue { width: 664px; }
       .status { font-size: 12px; color: #98989f; display: flex; align-items: center; gap: 7px; letter-spacing: 0.2px; flex: none; }
       .dot { width: 7px; height: 7px; border-radius: 50%; background: #ff453a; animation: pulse 1.1s infinite; flex: none; }
       .dot.idle { background: #ffd60a; animation: none; }
       .dot.ok { background: #34c759; animation: none; }
       .dot.err { background: #ff453a; animation: none; }
-      .hint { margin-left: auto; font-size: 11px; color: #636366; }
-      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-      .text {
-        margin-top: 8px;
-        min-height: 22px;
-        max-height: 110px;
-        overflow-y: auto;
-        font-size: 15px; line-height: 1.45; color: #f2f2f7; word-break: break-all;
-        flex: 0 1 auto;
-      }
-      .text:empty::before { content: "…"; color: #636366; }
-      .text::-webkit-scrollbar { width: 3px; }
-      .text::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+      .hint { margin-left: auto; font-size: 11px; color: #636366; display: flex; align-items: center; gap: 8px; }
+      /* 「清空」只在队列里有排队段时出现; 两步确认(点一下变"确认清空？"), 防误触(用户定则) */
+      .hint button { font-size: 10px; padding: 2px 7px; border-radius: 5px; cursor: pointer; color: #8e8e93;
+                     border: 1px solid rgba(255, 255, 255, 0.16); background: transparent; display: none; }
+      .hint button.show { display: inline-block; }
+      .hint button.confirm { color: #ff9f0a; border-color: #ff9f0a; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+      .body { display: flex; margin-top: 8px; min-height: 22px; }
+      /* 左栏: 当前段。正在录音的内容必须能换行、多行显示(用户定则), 最多 8 行后框内滚动 */
+      .cur { flex: 1; min-width: 0; }
+      .cur-text { font-size: 15px; line-height: 1.45; color: #f2f2f7; word-break: break-all;
+                  max-height: 174px; overflow-y: auto; }
+      .cur-text:empty::before { content: "…"; color: #636366; }
+      .cur-text::-webkit-scrollbar { width: 3px; }
+      .cur-text::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 2px; }
+      /* 右栏: 队列。一行一段, 单行截断; 只有状态图标+文字, 不带段号/不带"已交付"字样(用户定则) */
+      .queue { display: none; width: 250px; flex: none; margin-left: 16px; padding-left: 14px;
+               border-left: 0.5px solid rgba(255, 255, 255, 0.14); }
+      .hud.hasqueue .queue { display: block; }
+      .qlist { display: flex; flex-direction: column; gap: 6px; max-height: 118px; overflow: hidden; }
+      .qrow { display: flex; gap: 7px; font-size: 13px; line-height: 1.35; color: #8e8e93; }
+      .qrow .b { flex: none; width: 13px; text-align: center; color: #636366; }
+      .qrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .qrow.failed .b, .qrow.failed .t { color: #ff6961; }
       .bar { margin-top: 9px; height: 3px; border-radius: 1.5px; background: rgba(255, 255, 255, 0.1); overflow: hidden; flex: none; }
       .bar .fill { height: 100%; width: 0; background: linear-gradient(90deg, #0a84ff, #64d2ff); border-radius: 1.5px; transition: width 0.08s; }
       .bar .fill.hot { background: linear-gradient(90deg, #ff9f0a, #ffd60a); }
@@ -44,26 +58,31 @@
       .fail-actions.show { display: flex; }
       .fail-actions .msg { font-size: 12px; color: #ff6961; flex: 1; }
       .fail-actions button {
-        font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);
-        background: rgba(255,255,255,0.08); color: #f2f2f7; cursor: pointer;
+        font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.08); color: #f2f2f7; cursor: pointer;
       }
       .fail-actions button.primary { background: #0a84ff; border-color: #0a84ff; }
       .fail-actions button:disabled { opacity: 0.4; cursor: default; }
     </style>
   </head>
   <body>
-    <div class="hud">
+    <div class="hud" id="hud">
       <div class="status">
         <span class="dot" id="dot"></span>
         <span id="status">● 录音中</span>
-        <span class="hint" id="hint"></span>
+        <span class="hint" id="hint">
+          <button id="clearBtn">清空</button>
+        </span>
       </div>
-      <div class="text" id="text"></div>
+      <div class="body">
+        <div class="cur"><div class="cur-text" id="curText"></div></div>
+        <div class="queue" id="queue"><div class="qlist" id="qlist"></div></div>
+      </div>
       <div class="bar"><div class="fill" id="fill"></div></div>
       <div class="fail-actions" id="failActions">
         <span class="msg" id="failMsg"></span>
-        <button id="retryBtn" class="primary" onclick="window.__retry()">重试</button>
-        <button onclick="window.__close()">关闭</button>
+        <button id="retryBtn" class="primary">重试</button>
+        <button id="closeBtn">关闭</button>
       </div>
     </div>
     <script type="module" src="/src/hud.ts"></script>

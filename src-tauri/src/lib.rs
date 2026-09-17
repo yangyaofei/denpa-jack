@@ -18,6 +18,7 @@ mod permissions;
 mod pipeline;
 mod recording;
 pub mod screen_context;
+mod segment_queue;
 mod update;
 pub mod settings;
 mod shortcut;
@@ -71,11 +72,18 @@ pub struct HudSnapshot {
     pub msg: String,      // 一次性提示(显示后清)
     pub finished: Option<serde_json::Value>, // asr-final 载荷(一次性, 取后清)
     pub err: Option<String>,
+    /// 左栏: 当前段(录音中=实时文字; 否则=正在转写的那段)——分段队列定则, 见 segment_queue.rs
+    pub seg_current: Option<crate::segment_queue::SegView>,
+    /// 右栏: 队列里其余段(空 = 右栏不显示, 浮窗保持单栏宽度)
+    pub seg_queue: Vec<crate::segment_queue::SegView>,
+    /// 是否有未处理的失败段(浮窗存活规则: 只剩失败时 2.5s 后收起)
+    pub seg_failed: bool,
 }
 
 pub static HUD: std::sync::Mutex<HudSnapshot> = std::sync::Mutex::new(HudSnapshot {
     version: 0, status: String::new(), partial: String::new(), level: 0,
     msg: String::new(), finished: None, err: None,
+    seg_current: None, seg_queue: Vec::new(), seg_failed: false,
 });
 
 pub fn hud_set(f: impl FnOnce(&mut HudSnapshot)) {
@@ -133,6 +141,9 @@ pub fn run() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
             }
             tray_events::spawn_tray(app.handle()).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            // 分段转写队列 worker: 松开热键后的后处理全部进队列串行执行
+            // (规则与理由见 segment_queue.rs 顶部注释: 顺序保证 + 不丢段 + 失败不阻塞)
+            segment_queue::start(app.handle().clone());
             // 权限总检查: 一次性查清全部必需权限(麦克风 + 辅助功能)
             // 缺项 → 落日志 + 推给前端 + 把主窗拉出来, 让用户第一眼就看到"缺什么、会怎样"
             let h = app.handle().clone();
@@ -241,6 +252,7 @@ pub fn run() {
             commands::clear_history, commands::copy_text, commands::get_hotwords,
             recording::recording_start, recording::recording_stop,
             recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::dev_nav, commands::app_version,
+            commands::queue_retry, commands::queue_clear, commands::queue_dismiss,
             update::update_check, update::update_install,
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,

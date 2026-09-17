@@ -169,21 +169,25 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
         return;
     };
 
-    // 窗口尺寸 480x200; 屏内水平居中, 垂直按配置(NS y 向上: 底部=minY+60)
+    // 窗口尺寸取实际值: 单栏 480 / 出现队列时 664(分段队列定则), 高度随内容(92..400)。
+    // 不能再写死 480x200 —— hud_resize 之后要按新尺寸保持"水平居中/垂直按配置"
+    let size = nsw.frame().size;
+    let (ww, wh) = (size.width, size.height);
+    // 屏内水平居中, 垂直按配置(NS y 向上: 底部=minY+60)
     let p = NsPoint::in_screen(
         f,
-        (f.size.width - 480.0) / 2.0,
+        (f.size.width - ww) / 2.0,
         match pos_mode {
-            "top" => f.size.height - 200.0 - 60.0,
-            "center" => (f.size.height - 200.0) / 2.0,
+            "top" => f.size.height - wh - 60.0,
+            "center" => (f.size.height - wh) / 2.0,
             _ => 60.0,
         },
     );
-    // 守卫: in_screen 构造保证了屏内性, 此处复核窗口整体落屏(尺寸 480x200)
+    // 守卫: in_screen 构造保证了屏内性, 此处复核窗口整体落屏
     if p.x < f.origin.x - 1.0
-        || p.x + 480.0 > f.origin.x + f.size.width + 1.0
+        || p.x + ww > f.origin.x + f.size.width + 1.0
         || p.y < f.origin.y - 1.0
-        || p.y + 200.0 > f.origin.y + f.size.height + 1.0
+        || p.y + wh > f.origin.y + f.size.height + 1.0
     {
         log::elog(&format!(
             "[hud] 定位越界被拒: 目标=({:.0},{:.0}) 屏=({:.0},{:.0})x({:.0}x{:.0})",

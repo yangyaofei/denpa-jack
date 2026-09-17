@@ -253,10 +253,13 @@ pub fn autostart_status(app: tauri::AppHandle) -> bool {
 
 // 浮窗高度自适应: 文本变多时调档(长文本看全)
 #[tauri::command]
-pub fn hud_resize(app: tauri::AppHandle, height: f64) {
+pub fn hud_resize(app: tauri::AppHandle, width: f64, height: f64) {
     use tauri::Manager;
     if let Some(w) = app.get_webview_window("hud") {
-        let _ = w.set_size(tauri::LogicalSize::new(480.0, height.clamp(170.0, 400.0)));
+        // 宽度: 480(单栏) / 664(出现队列时的左右两栏); 高度: 92..400(多行当前文字 + 队列)
+        let _ = w.set_size(tauri::LogicalSize::new(width.clamp(480.0, 720.0), height.clamp(92.0, 400.0)));
+        // 尺寸变了要按新尺寸重新贴屏(水平居中/垂直按配置), 否则会偏
+        crate::overlay::position_hud_at_cursor(&app);
     }
 }
 
@@ -514,12 +517,53 @@ pub fn remove_binding(app: tauri::AppHandle, combo: String) -> Result<(), String
 #[tauri::command]
 pub fn hud_poll() -> crate::HudSnapshot {
     let mut g = crate::HUD.lock().unwrap();
+    // 分段队列视图(规则见 segment_queue.rs 顶部与 src/hud.ts):
+    //   左栏(seg_current) = 录音中的实时文字; 没在录音时 = 正在转写的那段
+    //   右栏(seg_queue)   = 队列里其余段(录音时, 正在转写的那段退到右栏)
+    //   两者都只在需要时由前端显示——队列为空时右栏不出现(用户定则: 不多写一个字)
+    let (cur, mut queue) = crate::segment_queue::views();
+    let recording = g.status == "recording";
+    g.seg_current = if recording {
+        Some(crate::segment_queue::SegView { state: "recording".into(), text: g.partial.clone() })
+    } else {
+        cur
+    };
+    g.seg_queue = if recording {
+        if let Some(c) = crate::segment_queue::views().0 {
+            queue.insert(0, c);
+        }
+        queue
+    } else {
+        queue
+    };
+    g.seg_failed = crate::segment_queue::has_failed();
     let snap = g.clone();
     // 一次性字段取后清(前端拿到即消费)
     g.finished = None;
     g.err = None;
     g.msg = String::new();
     snap
+}
+
+/// 重试队列里最早的一段失败段(浮窗「重试」按钮)
+#[tauri::command]
+pub fn queue_retry(app: tauri::AppHandle) -> Result<(), String> {
+    let id = crate::segment_queue::first_failed_id().ok_or("没有失败段")?;
+    crate::segment_queue::retry(&app, id)
+}
+
+/// 清空队列(浮窗「清空」按钮; 前端两步确认后调用)
+/// 语义: 不转写 ≠ 丢数据 —— 排队段的音频与原文先进历史(delivered="cancelled")
+#[tauri::command]
+pub fn queue_clear(app: tauri::AppHandle) -> usize {
+    crate::segment_queue::clear(&app)
+}
+
+/// 关闭失败提示(浮窗「关闭」按钮)
+/// 语义: 只是不再提示; 失败段的音频与原文已在历史里(delivered="failed"), 可去主窗重跑
+#[tauri::command]
+pub fn queue_dismiss(app: tauri::AppHandle) -> usize {
+    crate::segment_queue::dismiss_failed(&app)
 }
 
 #[derive(serde::Serialize)]

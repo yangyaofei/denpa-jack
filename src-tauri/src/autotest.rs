@@ -31,6 +31,11 @@ pub fn maybe_spawn(app: &AppHandle) {
         std::thread::spawn(move || run_update_chain(app2));
         return;
     }
+    if let Ok(list) = std::env::var("VOICEMAC_AUTOTEST_FILES") {
+        let app2 = app.clone();
+        let paths: Vec<String> = list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        std::thread::spawn(move || run_files(app2, paths));
+    }
     if let Ok(wavpath) = std::env::var("VOICEMAC_AUTOTEST_FILE") {
         let app2 = app.clone();
         std::thread::spawn(move || run_file(app2, wavpath));
@@ -39,6 +44,100 @@ pub fn maybe_spawn(app: &AppHandle) {
         let app2 = app.clone();
         std::thread::spawn(move || run_e2e(app2));
     }
+}
+
+/// 多文件回放: 把多个 wav 当作"连续按下又松开"依次注入(每段一个独立会话),
+/// 段间隔只有 400ms —— 故意让后一段在前一段还在转写时进来, 用来端到端验证分段队列:
+/// 队列状态(排队/转写中)、FIFO 交付顺序、不丢段、失败不阻塞、浮窗多段显示。
+///
+/// 用法: VOICEMAC_AUTOTEST=file VOICEMAC_AUTOTEST_FILES=a.wav,b.wav,c.wav
+fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    log::log(&app, &format!("AUTOTEST-FILES: begin 共 {} 段", paths.len()));
+    // 喂入节奏: 默认按真实语速(190ms/包); 设 0 = 尽快喂完 —— 多段会在极短时间内
+    // 全部离开发送端, 后处理必然重叠, 用来制造"队列里有多段"的场景
+    let feed_ms: u64 = std::env::var("VOICEMAC_AUTOTEST_FEED_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(190);
+    log::log(&app, &format!("AUTOTEST-FILES: 喂入节奏 {feed_ms}ms/包"));
+    use tauri::Manager;
+    for (idx, path) in paths.iter().enumerate() {
+        let raw = match std::fs::read(path) {
+            Ok(r) => r,
+            Err(e) => {
+                log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段读失败 {e}", idx + 1));
+                continue;
+            }
+        };
+        let pcm = wav_data_chunk(&raw).unwrap_or_default();
+        log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段 pcm {}B ({path})", idx + 1, pcm.len()));
+        // 每段一个独立会话(等价于一次"按下→说话→松开"), 自建会话与 ctrl_start 隔离(无双输入)
+        let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+        let (profile, key) = match crate::recording::resolve_asr(&cfg) {
+            Ok(x) => x,
+            Err(e) => {
+                log::log(&app, &format!("AUTOTEST-FILES: resolve 失败: {e}"));
+                app.exit(1);
+                return;
+            }
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel::<doubao::Cmd>(64);
+        let handoff: crate::engines::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
+        crate::engines::spawn_session(
+            app.clone(),
+            profile.provider.clone(),
+            key,
+            crate::recording::budget_hotwords(&cfg.dict),
+            handoff.clone(),
+            rx,
+        );
+        app.state::<std::sync::Mutex<AppState>>().lock().unwrap().engine_mirror = Some(tx.clone());
+        for (i, chunk) in pcm.chunks(6400).enumerate() {
+            log::elog(&format!("[at] 段{} feed #{}", idx + 1, i + 1));
+            let _ = tx.try_send(doubao::Cmd::Feed(chunk.to_vec()));
+            if feed_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(feed_ms));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let _ = tx.try_send(doubao::Cmd::Finish);
+        log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段 fed+finish", idx + 1));
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    // 观察窗: 每秒把队列状态写进日志(排队/转写中/失败 + 文本前缀),
+    // 让"顺序、不丢段、失败不阻塞"可以在日志里逐秒核对
+    for t in 0..40 {
+        let (cur, q) = crate::segment_queue::views();
+        let cur_s = cur
+            .as_ref()
+            .map(|c| format!("{}«{}»", c.state, short(&c.text)))
+            .unwrap_or_else(|| "-".to_string());
+        let q_s: Vec<String> = q.iter().map(|r| format!("{}«{}»", r.state, short(&r.text))).collect();
+        log::log(
+            &app,
+            &format!(
+                "AUTOTEST-FILES: t={}s busy={} 当前={} 队列=[{}]",
+                t,
+                crate::segment_queue::busy(),
+                cur_s,
+                q_s.join(", ")
+            ),
+        );
+        if t >= 3 && !crate::segment_queue::busy() && !crate::segment_queue::has_failed() {
+            log::log(&app, "AUTOTEST-FILES: 队列已跑空");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    log::log(&app, "AUTOTEST-FILES: done");
+    app.exit(0);
+}
+
+/// 日志用的短文本(前 12 字, 去掉换行)
+fn short(t: &str) -> String {
+    t.chars().filter(|c| *c != '\n').take(12).collect()
 }
 
 /// 文件回放: 录音会话 → 按真实节奏喂 wav PCM → Finish → 等交付
