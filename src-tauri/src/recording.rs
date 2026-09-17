@@ -330,10 +330,11 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             match crate::screen_context::capture_and_prune(&dir, "ctx") {
                 Ok(shot) => {
                     log::elog(&format!(
-                        "[ctx] 截图已采集 path={} bytes={} ms={}",
+                        "[ctx] 截图已采集 path={} bytes={} ms={} display={:?}",
                         shot.path.display(),
                         shot.bytes,
-                        shot.elapsed_ms
+                        shot.elapsed_ms,
+                        shot.display
                     ));
                     *slot.lock().unwrap() = Some(shot.path);
                 }

@@ -25,6 +25,8 @@ pub struct Shot {
     pub path: PathBuf,
     pub bytes: usize,
     pub elapsed_ms: u128,
+    /// 采集目标显示器; None = 未能判定, 由 screencapture 用默认(主显示器)
+    pub display: Option<crate::overlay::DisplayTarget>,
 }
 
 /// 是否已获屏幕录制权限（不弹窗、不触发系统引导）
@@ -38,13 +40,26 @@ pub fn request() -> bool {
     unsafe { CGRequestScreenCaptureAccess() }
 }
 
-/// 采集屏幕到 `dir`（每次新文件），返回文件路径与大小
+/// screencapture 参数(纯函数, 便于单测)。
+/// 有显示器编号时带 `-D`: 不指定的话 screencapture 抓主显示器, 多显示器下会与用户正在看的屏不一致。
+fn capture_args(display: Option<crate::overlay::DisplayTarget>) -> Vec<String> {
+    let mut a: Vec<String> = ["-x", "-o", "-t", "png"].iter().map(|s| (*s).to_string()).collect();
+    if let Some(t) = display {
+        a.push("-D".to_string());
+        a.push(t.index.to_string());
+    }
+    a
+}
+
+/// 采集屏幕到 `dir`（每次新文件），返回文件路径与大小。
+/// 采集目标 = 光标所在显示器（与 hud 浮窗同一目标屏）。
 pub fn capture(dir: &Path, tag: &str) -> Result<Shot, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("建截图目录失败: {e}"))?;
     let path = dir.join(format!("screen-{}-{tag}.png", now_ms()));
     let t0 = std::time::Instant::now();
+    let display = crate::overlay::display_target_at_cursor();
     let out = std::process::Command::new("/usr/sbin/screencapture")
-        .args(["-x", "-o", "-t", "png"])
+        .args(capture_args(display))
         .arg(&path)
         .output()
         .map_err(|e| format!("screencapture 启动失败: {e}"))?;
@@ -63,6 +78,7 @@ pub fn capture(dir: &Path, tag: &str) -> Result<Shot, String> {
         path,
         bytes,
         elapsed_ms: t0.elapsed().as_millis(),
+        display,
     })
 }
 
@@ -166,5 +182,14 @@ mod tests {
         // 目录不可创建时返回 Err 而不是 panic（调用方据此退回纯文本）
         let r = capture(Path::new("/dev/null/nope"), "t");
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn capture_args_targets_cursor_display() {
+        let base = capture_args(None);
+        assert_eq!(base, vec!["-x", "-o", "-t", "png"]);
+        let t = crate::overlay::DisplayTarget { index: 2, origin: (1728.0, 0.0), size: (2560.0, 1440.0) };
+        let with = capture_args(Some(t));
+        assert_eq!(with, vec!["-x", "-o", "-t", "png", "-D", "2"]);
     }
 }

@@ -6,6 +6,91 @@ use tauri::{Emitter, Manager};
 
 use crate::log;
 
+/// 全局显示空间(y 向下, 原点在主显示器左上)的点 —— 与 NSScreen(y 向上)是两套坐标系
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgPoint {
+    x: f64,
+    y: f64,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CgPoint;
+    fn CGGetDisplaysWithPoint(
+        point: CgPoint,
+        max_displays: u32,
+        displays: *mut u32,
+        count: *mut u32,
+    ) -> i32;
+    fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayBounds(display: u32) -> CgRect;
+    // 与 deliver.rs 保持同一签名（否则 clashing_extern_declarations）
+    fn CFRelease(cf: *mut std::ffi::c_void);
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgRect {
+    origin: CgPoint,
+    size: CgSize,
+}
+
+/// 光标所在显示器（截图目标屏）
+///
+/// `index` 是 `screencapture -D` 使用的编号（1 = 主显示器）；`origin`/`size` 是全局显示空间
+/// （点为单位，y 向下，原点在主显示器左上）的位置与尺寸，用于日志核对与后续裁剪。
+#[derive(Debug, Clone, Copy)]
+pub struct DisplayTarget {
+    pub index: usize,
+    pub origin: (f64, f64),
+    pub size: (f64, f64),
+}
+
+/// 取光标所在显示器。
+///
+/// 用途：截图默认抓主显示器，多显示器下与用户实际看的屏不一致（用户实测反馈）。
+/// 与 hud 定位同源——都以"光标所在屏"为目标屏。
+/// 实现只用 CoreGraphics（全局显示空间，线程安全）：截图跑在后台线程，不能依赖主线程的 NSScreen。
+/// 编号取自 CGGetActiveDisplayList 的下标 +1（与 screencapture 的编号规则一致，主显示器排第一；
+/// 已实测：本机 1 = 内建屏 3456x2160，2 = 外接屏 5120x2880）。
+pub fn display_target_at_cursor() -> Option<DisplayTarget> {
+    unsafe {
+        let ev = CGEventCreate(std::ptr::null());
+        if ev.is_null() {
+            return None;
+        }
+        let p = CGEventGetLocation(ev);
+        CFRelease(ev);
+        let mut hit = [0u32; 8];
+        let mut hit_n = 0u32;
+        if CGGetDisplaysWithPoint(p, hit.len() as u32, hit.as_mut_ptr(), &mut hit_n) != 0 || hit_n == 0
+        {
+            return None;
+        }
+        let mut list = [0u32; 16];
+        let mut list_n = 0u32;
+        if CGGetActiveDisplayList(list.len() as u32, list.as_mut_ptr(), &mut list_n) != 0 {
+            return None;
+        }
+        let idx = (0..list_n as usize).find(|i| list[*i] == hit[0])?;
+        let b = CGDisplayBounds(list[idx]);
+        Some(DisplayTarget {
+            index: idx + 1,
+            origin: (b.origin.x, b.origin.y),
+            size: (b.size.width, b.size.height),
+        })
+    }
+}
+
 pub fn position_hud_at_cursor(app: &tauri::AppHandle) {
     let Some(w) = app.get_webview_window("hud") else {
         log::log(app, "hud 窗口不存在!");
@@ -152,5 +237,38 @@ pub fn show_hud_msg(app: &tauri::AppHandle, msg: &str) {
 pub fn hide_hud(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("hud") {
         let _ = w.hide();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 验证：返回的显示器确实包含光标点（任何显示器数量下都成立）。
+    /// 无光标/无显示器时返回 None → 跳过（CI 机器也适用）。
+    #[test]
+    fn display_target_matches_cursor_location() {
+        unsafe {
+            let Some(t) = display_target_at_cursor() else {
+                return;
+            };
+            let ev = CGEventCreate(std::ptr::null());
+            assert!(!ev.is_null());
+            let p = CGEventGetLocation(ev);
+            CFRelease(ev);
+            println!(
+                "编号 {} 的显示器: origin=({:.0},{:.0}) size={:.0}x{:.0} | 光标=({:.0},{:.0})",
+                t.index, t.origin.0, t.origin.1, t.size.0, t.size.1, p.x, p.y
+            );
+            let inside = p.x >= t.origin.0
+                && p.x < t.origin.0 + t.size.0
+                && p.y >= t.origin.1
+                && p.y < t.origin.1 + t.size.1;
+            assert!(
+                inside,
+                "光标 ({:.0},{:.0}) 不在返回的显示器 {} 范围内",
+                p.x, p.y, t.index
+            );
+        }
     }
 }

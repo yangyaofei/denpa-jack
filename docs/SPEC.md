@@ -247,6 +247,7 @@
 开关式功能（`screenshot_context`，默认关），定位是"提升专有名词准确率"，不改变 ASR 本身。
 
 - 采集（`screen_context.rs`）：`screencapture -x -o -t png` 存 `<数据目录>/screen_context/screen-{millis}-ctx.png`；**在录音开始的后台线程执行**，不占录音启动时间；保留最近 200 张。
+- 采集目标屏 = **光标所在显示器**（与 hud 浮窗同一目标屏）。`screencapture` 不指定 `-D` 时抓主显示器，多显示器下会抓到用户没在看的那块；目标屏由 `overlay.rs::display_target_at_cursor()` 判定（纯 CoreGraphics，线程安全；坐标类 API 按契约只允许出现在 overlay.rs），编号规则与 `screencapture -D` 一致（1 = 主显示器，实测 1 = 内建屏 / 2 = 外接屏）。
 - 注入（`llm.rs`）：user 消息变成 `[图片, 文本]` 内容块数组（带图时文本前缀"参考随附截图中的上下文，修正下面这段转写："）。图片走 base64 内联 data URL，每次新截图；**不带图时 user 消息仍是纯字符串，行为与加功能前完全一致**。
 - 权限：需要"屏幕录制"（TCC）。开关打开时前端调 `request_screen_permission` 触发系统引导；缺权限时采集失败 → `[ctx]` 日志 + 本次退回纯文本纠错，**不阻塞交付**。权限状态在开关打开后进入 `check_permissions` 列表（开关关闭时不检查、不打扰）。
 - 失败降级：截图失败 / 图片读取失败 / 模型不支持图片，都只记日志并继续纯文本纠错。
