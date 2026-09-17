@@ -103,6 +103,10 @@ jobs:
           esac
 
       - name: Package artifacts
+        env:
+          # 打包更新产物要用同一把 minisign 密钥签名（脚本会校验）
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           V="${RELEASE_TAG#v}"
           APP="src-tauri/target/release/bundle/macos/Denpa Jack.app"
