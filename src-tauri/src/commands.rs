@@ -125,6 +125,8 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
         duration_ms: 0,
         engine: profile.provider.clone(),
         gen: 0,
+        // 重跑历史音频时不采集屏幕: 截图应当属于"当时那次录音"，事后重跑拿到的是现在的屏幕，会误导纠错
+        screenshot: None,
     })));
     engines::spawn_session(app.clone(), profile.provider.clone(), key, budget_hotwords(&cfg.dict), handoff, rx);
     use tauri::Manager;
@@ -175,12 +177,33 @@ pub fn resume_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
 /// 权限总检查: 返回全部必需权限(麦克风/辅助功能)的当前状态, 缺项时同时推事件给前端
 #[tauri::command]
 pub fn check_permissions(app: tauri::AppHandle) -> Vec<crate::permissions::PermState> {
-    let list = crate::permissions::all();
+    let mut list = crate::permissions::all();
+    // 屏幕录制是开关式需求: 只有开启了「截图作为纠错上下文」才列入检查(否则不打扰用户)
+    let on = crate::settings::get_config(app.clone())
+        .map(|c| c.screenshot_context)
+        .unwrap_or(false);
+    if on {
+        list.push(crate::permissions::screen_recording_state());
+    }
     if list.iter().any(|p| !p.granted) {
         let _ = Emitter::emit_to(&app, "main", "permission-ax", false);
     }
     let _ = Emitter::emit_to(&app, "main", "permissions", &list);
     list
+}
+
+/// 主动请求屏幕录制权限(开关打开时调用; 首次会触发系统引导)
+#[tauri::command]
+pub fn request_screen_permission() -> bool {
+    crate::screen_context::request()
+}
+
+/// 打开截图归档目录(事后判读/复现用)
+#[tauri::command]
+pub fn open_screen_context_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = crate::settings::data_dir(&app).join(crate::screen_context::DIR_NAME);
+    let _ = std::fs::create_dir_all(&dir);
+    tauri_plugin_opener::open_path(dir.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
 
 /// 主动请求麦克风权限(未决定时弹系统框; 已拒绝不会弹, 需去系统设置)
@@ -376,7 +399,7 @@ pub async fn llm_selftest(
     let terms: Vec<String> = cfg.dict.iter().map(|d| d.term.clone()).collect();
     let input = dict_text.clone();
     let t0 = std::time::Instant::now();
-    let llm_out = crate::llm::polish(&input, &terms, &opts)
+    let llm_out = crate::llm::polish(&input, &terms, &opts, None)
         .await
         .map_err(|e| format!("LLM 调用失败: {e}"))?;
     let llm_text = llm_out.text;

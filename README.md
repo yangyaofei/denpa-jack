@@ -23,6 +23,10 @@ and a level meter.
   guarded so it cannot rewrite something already correct
 - **LLM polish** — multiple profiles, **forced tool call for structured output** (never raw
   text), thinking switch and effort level, editable prompt with Markdown preview
+- **Screenshot as correction context** (off by default) — captures the screen when recording
+  starts and sends it with the transcript so the model can fix proper nouns; requires Screen
+  Recording permission, screenshots are archived under `screen_context/` for later inspection,
+  and any failure falls back to text-only correction
 - **Delivery** — accessibility write into the focused app first, `Cmd+V` as fallback;
   clipboard can either keep the transcript or restore what was there before
 - **History** — JSONL records plus retained audio (play / re-transcribe / copy / reveal),

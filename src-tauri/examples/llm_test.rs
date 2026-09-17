@@ -15,7 +15,7 @@ async fn main() {
     };
     let input = "那个，Phase one 阶段，我们需要把那个...那个 user ID，不对，是 user name，传给后端。然后那个...然后那个 sequel 报错的话，就重试一下。";
     let t0 = std::time::Instant::now();
-    match polish(input, &["SQL".into(), "谢克数学".into()], &opts).await {
+    match polish(input, &["SQL".into(), "谢克数学".into()], &opts, None).await {
         Ok(out) => println!("PASS ({:.2}s)\nIN : {}\nOUT: {}", t0.elapsed().as_secs_f64(), input, out.text),
         Err(e) => println!("FAIL: {e}"),
     }

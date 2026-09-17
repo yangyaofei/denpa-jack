@@ -64,6 +64,20 @@ pub fn request_mic() {
     unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(media, &block) };
 }
 
+/// 屏幕录制权限状态（开关式功能：只有"截图作为纠错上下文"开启时才需要）
+pub fn screen_recording_state() -> PermState {
+    let granted = crate::screen_context::preflight();
+    PermState {
+        key: "screen_recording",
+        label: "屏幕录制",
+        granted,
+        status: if granted { "authorized" } else { "denied" }.to_string(),
+        purpose: "把当前屏幕截图作为纠错上下文(仅在「截图作为纠错上下文」开关开启时需要)",
+        impact: "缺少它时截图采集失败：转写仍正常，只是不带屏幕上下文",
+        settings_url: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    }
+}
+
 /// 全部必需权限的当前状态(供前端一次性展示)
 pub fn all() -> Vec<PermState> {
     let ax = crate::deliver::ax_trusted(false);

@@ -13,6 +13,8 @@ pub struct SessionHandoff {
     pub engine: String,
     /// 会话代: 交付前与 CANCELLED_GEN 比对, 被取消的会话跳过粘贴只入历史
     pub gen: u64,
+    /// 屏幕上下文截图（开关开启时由录音开始的后台线程采集；未开启/采集失败为 None）
+    pub screenshot: Option<std::path::PathBuf>,
 }
 
 /// 转写中取消: abort 时写入被放弃的会话代, 交付前校验(Handy cancel_generation 等价)
@@ -111,7 +113,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
                     r.block_on(async {
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(60),
-                            crate::llm::polish(&dict_text, &terms, &opts),
+                            crate::llm::polish(&dict_text, &terms, &opts, ho.screenshot.as_deref()),
                         )
                         .await
                         {

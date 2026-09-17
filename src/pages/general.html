@@ -93,6 +93,30 @@
           </div>
           <div class="row">
             <div>
+              <div class="row-title">截图作为纠错上下文</div>
+              <div class="row-hint">录音时截取当前屏幕, 连同转写文本一起发给纠错模型, 提升专有名词准确率。需要「屏幕录制」权限；截图保存在数据目录 screen_context/（便于事后核对），不上传到除所选模型之外的任何地方</div>
+            </div>
+            <input type="checkbox" class="switch" x-model="cfg.screenshot_context" @change="toggleScreenshotContext()" />
+          </div>
+          <div class="row" x-show="cfg.screenshot_context">
+            <div>
+              <div class="row-title">屏幕录制权限</div>
+              <div class="row-hint">
+                <template x-if="(perms || []).find(p => p.key === 'screen_recording')?.granted">
+                  <span>已授权。截图会在每次录音开始时采集一张</span>
+                </template>
+                <template x-if="!(perms || []).find(p => p.key === 'screen_recording')?.granted">
+                  <span>未授权 → 截图采集会失败（转写仍正常，只是不带屏幕上下文）。授权后通常需要重启应用</span>
+                </template>
+              </div>
+            </div>
+            <div class="btns">
+              <button class="mini" @click="openScreenContextDir()">打开截图目录</button>
+              <button class="mini" @click="openPermSettings((perms || []).find(p => p.key === 'screen_recording')?.settings_url || 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')">打开系统设置</button>
+            </div>
+          </div>
+          <div class="row">
+            <div>
               <div class="row-title">提示音</div>
               <div class="row-hint">开始录音 / 结束 / 出错 时各响一声</div>
             </div>

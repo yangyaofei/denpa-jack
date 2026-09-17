@@ -77,7 +77,25 @@ pub struct LlmOut {
     pub thinking: Option<String>,
 }
 
-pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<LlmOut, String> {
+/// 构造 user 消息内容。
+/// 带截图时为 [图片, 文本] 数组——官方限制图片只能出现在 user 消息里（放 system/assistant 会 400）；
+/// 不带截图时保持纯字符串，与开关关闭前的行为完全一致。
+fn build_user_content(text: &str, image_data_url: Option<String>) -> Value {
+    match image_data_url {
+        Some(url) => json!([
+            {"type": "image_url", "image_url": {"url": url}},
+            {"type": "text", "text": format!("参考随附截图中的上下文，修正下面这段转写：\n{text}")}
+        ]),
+        None => json!(text),
+    }
+}
+
+pub async fn polish(
+    text: &str,
+    dict_terms: &[String],
+    o: &LlmOpts,
+    screenshot: Option<&std::path::Path>,
+) -> Result<LlmOut, String> {
     let base = if o.base_url.is_empty() {
         default_base_url(&o.provider).to_string()
     } else {
@@ -90,12 +108,28 @@ pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<Ll
         o.prompt,
         dict_terms.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
     );
+    // 屏幕上下文：截图 base64 内联进 user 消息；读图失败只记日志并退回纯文本纠错（不阻塞交付）
+    let mut shot_note: Option<String> = None;
+    let image_url = match screenshot {
+        Some(p) => match crate::screen_context::to_data_url(p) {
+            Ok(u) => {
+                let mb = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) as f64 / 1024.0 / 1024.0;
+                shot_note = Some(format!("<截图内联: {} ({mb:.2} MB)>", p.display()));
+                Some(u)
+            }
+            Err(e) => {
+                crate::log::elog(&format!("[llm] 截图读取失败, 退回纯文本纠错: {e}"));
+                None
+            }
+        },
+        None => None,
+    };
     let mut payload = json!({
         "model": o.model,
         "temperature": 0.1,
         "messages": [
             {"role": "system", "content": sys},
-            {"role": "user", "content": text}
+            {"role": "user", "content": build_user_content(text, image_url)}
         ],
         "tools": [{
             "type": "function",
@@ -137,10 +171,19 @@ pub async fn polish(text: &str, dict_terms: &[String], o: &LlmOpts) -> Result<Ll
         .map_err(|e| format!("LLM 请求失败: {e}"))?;
     let status = resp.status();
     let raw = resp.text().await.map_err(|e| format!("LLM 响应读取失败: {e}"))?;
+    // 落盘前把 base64 换成文件引用：请求里是完整内联数据，日志里只留路径与大小（截图本体已存 screen_context/）
+    let mut dump_payload = payload.clone();
+    if let Some(note) = &shot_note {
+        if let Some(arr) = dump_payload["messages"][1]["content"].as_array_mut() {
+            if let Some(first) = arr.first_mut() {
+                first["image_url"]["url"] = json!(note);
+            }
+        }
+    }
     dump_call(
         &format!("{}-{}ms", &o.provider, t0.elapsed().as_millis()),
         &url,
-        &payload,
+        &dump_payload,
         &raw,
     );
     let body: Value = serde_json::from_str(&raw).map_err(|e| format!("LLM 响应解析失败: {e}"))?;
@@ -183,6 +226,24 @@ fn extract_text(body: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn user_content_without_image_is_plain_text() {
+        // 开关关闭时的行为必须与加功能前一致：纯字符串
+        let c = build_user_content("原始文本", None);
+        assert_eq!(c, json!("原始文本"));
+    }
+
+    #[test]
+    fn user_content_with_image_puts_image_first_and_keeps_text() {
+        let c = build_user_content("原始文本", Some("data:image/png;base64,AAA".to_string()));
+        let arr = c.as_array().expect("带图时应为内容块数组");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "image_url");
+        assert_eq!(arr[0]["image_url"]["url"], "data:image/png;base64,AAA");
+        assert_eq!(arr[1]["type"], "text");
+        assert!(arr[1]["text"].as_str().unwrap().contains("原始文本"));
+    }
 
     #[test]
     fn extract_from_tool_call() {

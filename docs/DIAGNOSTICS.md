@@ -26,6 +26,8 @@
 | `[crash] killed by signal N (SIGxxx)` | 收到致命信号（SIGSEGV/SIGBUS/SIGABRT/SIGILL/SIGFPE/SIGTRAP）。写完这行后交还系统默认处理，因此仍会生成 `.ips` |
 | `[crash] 发现系统崩溃报告 <文件名>` + `[crash]   "exception": …` | 启动时扫描到本应用的新 `.ips`，并把关键字段搬进日志 |
 | `[hb] uptime=…s rss=…MB threads=…` | 每分钟一次心跳 |
+| `[ctx] 截图已采集 path=… bytes=… ms=…` | 屏幕上下文开关开启时，每次录音开始采集一张截图 |
+| `[ctx] 截图跳过: 未授予屏幕录制权限…` / `[ctx] 截图失败, 本次不带图纠错: …` | 采集未成功，本次退回纯文本纠错（不阻塞交付） |
 
 ## 怎么判读一次静默退出
 

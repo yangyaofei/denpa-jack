@@ -30,6 +30,8 @@ pub struct RecordingSession {
     gen: u64,
     /// 交接箱: stop 写入, 引擎 Result 到达时 take——会话数据随会话管道流动
     handoff: Arc<Mutex<Option<pipeline::SessionHandoff>>>,
+    /// 屏幕上下文截图（开关开启时由录音开始的后台线程写入；采集未完成/失败为 None）
+    screenshot: Arc<Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl RecordingSession {
@@ -59,6 +61,7 @@ impl RecordingSession {
                 duration_ms,
                 engine: engine.to_string(),
                 gen: self.gen,
+                screenshot: self.screenshot.lock().unwrap().clone(),
             },
             self.cmd_tx,
             self.handoff,
@@ -313,6 +316,31 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     let cancel = rec.cancel.clone();
     let level = rec.level_handle();
     let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    // 屏幕上下文: 录音开始时后台采集一张截图(不阻塞录音启动; 开关关闭则完全不动作)
+    let shot_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
+    if cfg.screenshot_context {
+        let app_shot = app.clone();
+        let slot = shot_slot.clone();
+        std::thread::spawn(move || {
+            if !crate::screen_context::preflight() {
+                log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
+                return;
+            }
+            let dir = crate::settings::data_dir(&app_shot);
+            match crate::screen_context::capture_and_prune(&dir, "ctx") {
+                Ok(shot) => {
+                    log::elog(&format!(
+                        "[ctx] 截图已采集 path={} bytes={} ms={}",
+                        shot.path.display(),
+                        shot.bytes,
+                        shot.elapsed_ms
+                    ));
+                    *slot.lock().unwrap() = Some(shot.path);
+                }
+                Err(e) => log::elog(&format!("[ctx] 截图失败, 本次不带图纠错: {e}")),
+            }
+        });
+    }
     {
         let mut st = state.lock().unwrap();
         st.engine_mirror = Some(tx.clone());
@@ -323,6 +351,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             focus,
             gen,
             handoff,
+            screenshot: shot_slot,
         });
     }
     register_esc(&app);

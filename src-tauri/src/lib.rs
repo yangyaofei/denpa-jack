@@ -17,6 +17,7 @@ mod paste_tx;
 mod permissions;
 mod pipeline;
 mod recording;
+pub mod screen_context;
 pub mod settings;
 mod shortcut;
 #[allow(unused_unsafe)]
@@ -228,6 +229,7 @@ pub fn run() {
             commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,
             commands::capture_begin, commands::capture_poll, commands::capture_end,
             commands::check_permissions, commands::request_microphone, commands::open_system_settings,
+            commands::request_screen_permission, commands::open_screen_context_dir,
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
             settings::get_config, settings::save_config,
         ])

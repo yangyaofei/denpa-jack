@@ -181,6 +181,10 @@ pub struct Config {
     pub use_llm_correction: bool,
     #[serde(default)]
     pub clipboard_only: bool,
+    /// 屏幕上下文开关：录音开始时采集一张截图，随转写文本一起发给纠错模型
+    /// （需要屏幕录制权限；截图存 `<数据目录>/screen_context/`，默认关）
+    #[serde(default)]
+    pub screenshot_context: bool,
     #[serde(default = "d_max_rec")]
     pub max_recording_seconds: u32, // 1800
     #[serde(default = "d_min_rec")]

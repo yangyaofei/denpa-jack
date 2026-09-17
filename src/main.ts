@@ -34,6 +34,7 @@ export interface Config {
   active_llm_id: string; active_asr_id: string;
   bindings: Record<string, BindingSet>;
   use_llm_correction: boolean; clipboard_only: boolean;
+  screenshot_context: boolean;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
   keep_in_clipboard: boolean; auto_submit: boolean;
   overlay_position: string; history_limit: number;
@@ -594,6 +595,19 @@ function describeCombo(s: string): string {
   },
   async openDataDir() {
     try { await invoke("open_data_dir"); } catch (e) { console.error(e); }
+  },
+
+  // 屏幕上下文开关: 保存后若为开启, 主动申请屏幕录制权限并刷新权限列表(缺权限时卡片会给出提示)
+  async toggleScreenshotContext() {
+    await this.saveCfg();
+    if (this.cfg.screenshot_context) {
+      try { await invoke("request_screen_permission"); } catch (e) { console.warn("request_screen_permission 失败", e); }
+    }
+    await this.checkPerms();
+  },
+
+  async openScreenContextDir() {
+    try { await invoke("open_screen_context_dir"); } catch (e) { console.error(e); }
   },
 
   // headless 自测 mock: 无 Tauri 环境时提供示例数据

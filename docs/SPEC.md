@@ -241,6 +241,17 @@
   - 显式传两个独立参数：`thinking: {type: enabled|disabled}`（思维链开关）与 `reasoning_effort`（low/high/max，选项是什么发什么，不映射不降级，错误由服务端返回）。
   - 每次调用全量落盘 `llm_logs/{millis}-{provider}-{耗时}ms.json`（url/request/response_raw）。
   - `list_models`：GET `{base}/models`（10s 超时），取 data[].id 排序返回。
+
+#### 3.5.1 屏幕上下文（`screen_context.rs` + `llm.rs` 的带图路径）
+
+开关式功能（`screenshot_context`，默认关），定位是"提升专有名词准确率"，不改变 ASR 本身。
+
+- 采集（`screen_context.rs`）：`screencapture -x -o -t png` 存 `<数据目录>/screen_context/screen-{millis}-ctx.png`；**在录音开始的后台线程执行**，不占录音启动时间；保留最近 200 张。
+- 注入（`llm.rs`）：user 消息变成 `[图片, 文本]` 内容块数组（带图时文本前缀"参考随附截图中的上下文，修正下面这段转写："）。图片走 base64 内联 data URL，每次新截图；**不带图时 user 消息仍是纯字符串，行为与加功能前完全一致**。
+- 权限：需要"屏幕录制"（TCC）。开关打开时前端调 `request_screen_permission` 触发系统引导；缺权限时采集失败 → `[ctx]` 日志 + 本次退回纯文本纠错，**不阻塞交付**。权限状态在开关打开后进入 `check_permissions` 列表（开关关闭时不检查、不打扰）。
+- 失败降级：截图失败 / 图片读取失败 / 模型不支持图片，都只记日志并继续纯文本纠错。
+- 落盘留档：截图本体存 `screen_context/`；`llm_logs/*.json` 里把 base64 换成 `<截图内联: <路径> (N MB)>` 占位（避免日志里重复存 MB 级 base64）。
+- 实测依据（模型选择、token 成本、effort 档位、失败模式）：`research-plan/voice-mac-app/day-07-context/report.md`。要点：DeepSeek Flash 与 GLM 5.3 Flash 均支持图片；带图 vs 不带图的专名命中实测 1/5 → 5/5；观察到的失败模式是"思考把 max_tokens 吃满导致 content 为空"，靠 `max_tokens` 预算与既有降级兜底处理。
 - `deliver.rs`（交付原语，155 行，移植自 Swift OutputAndHistory）：
   - `ax_insert`：systemWide → `AXFocusedUIElement` → 读选区 before → 写 `AXSelectedText` → 读回 after 对比，防"报成功但 app 静默忽略"。
   - `ax_trusted(prompt)`：AXIsProcessTrustedWithOptions，quiet=仅查询，否则弹系统授权窗。
@@ -335,6 +346,7 @@
   - `hotkey`：key(默认 f5) / ctrl / alt / cmd / shift；保存时键名归一化为 keyboard_types Code 格式（F5/KeyA/Space/Digit1/Comma/ArrowUp…）。
   - 行为开关与数值：
     - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`auto_submit`（false）。
+    - `screenshot_context`（默认 false）：把当前屏幕截图作为纠错上下文。详见 §3.5.1。
     - `overlay_position`（"bottom"）、`history_limit`（200，0 不限）、`keep_audio_count`（50）。
     - `max_recording_seconds`（1800）、`min_recording_seconds`（0.3）、`extra_tail_ms`（0，≤2000）。
     - `mic_device_uid`、`mic_priority`（CoreAudio DeviceUID 序列）。
@@ -343,6 +355,7 @@
 - **recordings/**（同目录）：`rec_{unix_millis}.wav`，16k mono i16le；keep_audio_count 裁剪最旧。
 - **llm_logs/**（同目录）：每次 LLM 调用 `{millis}-{provider}-{耗时}ms.json`，含 url / request / response_raw 全文（本地明文；key 不写入）。
 - **app.log**（同目录）：关键链路诊断日志（setup/hotkey/doubao 帧诊断/pipeline/paste-tx/autotest 断言）。
+- **screen_context/**（同目录）：屏幕上下文截图归档，`screen-{millis}-ctx.png`，保留最近 200 张（超出删最早）。仅当 `screenshot_context=true` 时产生；用途是事后核对"当时屏幕上是什么、模型看到的是不是这个"。
 
 ## 5. 构建与签名
 
