@@ -72,7 +72,11 @@ function renderQueue(rows: any[]) {
   qlist.innerHTML = rows
     .map((r) => {
       const icon = r.state === "failed" ? "✕" : r.state === "transcribing" ? "⟳" : "•";
-      const text = (r.text || "").replace(/[<>&]/g, (c: string) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
+      // 失败段可能没有文本(ASR 阶段就失败, 没有原文) → 给一个可读短标签,
+      // 否则那一行只剩一个 ✕, 用户看不出发生了什么(issue #3)
+      const raw = String(r.text || "");
+      const label = raw || (r.state === "failed" ? "识别失败" : "");
+      const text = label.replace(/[<>&]/g, (c: string) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
       return `<div class="qrow ${r.state}"><span class="b">${icon}</span><span class="t">${text}</span></div>`;
     })
     .join("");
@@ -142,15 +146,16 @@ async function pollOnce() {
     if (s.version === pollVer) return;
     pollVer = s.version;
 
-    // 电平条
+    // 电平条: 只有录音中才显示电平; 其它时候归零
+    // (bug 修复: 原来只在录音分支里写 0, 非录音态会保留上一次的宽度, 看起来像还在录音——issue #3)
+    const recording = s.status === "recording";
     const lv = Math.min(1, (s.level / 1000) * 6);
-    fill.style.width = `${Math.max(4, lv * 100)}%`;
-    fill.className = lv > 0.9 ? "fill hot" : "fill";
+    fill.style.width = recording ? `${Math.max(4, lv * 100)}%` : "0";
+    fill.className = recording && lv > 0.9 ? "fill hot" : "fill";
 
     // 状态行
-    if (s.status === "recording") {
+    if (recording) {
       setState("", "● 录音中", false);
-      fill.style.width = "0";
     } else if (s.status === "transcribing") {
       setState("idle", "… 转写中");
     } else if (s.status === "busy") {
@@ -184,20 +189,25 @@ async function pollOnce() {
       showFail(true);
       scheduleHide(2500);
     }
+    // 存活规则(用户定稿):
+    //   busy 只算"真的有活在跑"(录音中/转写中/排队中) —— 失败段不算"活",
+    //   只剩失败时按规则 3 计 2.5s 后收起(issue #3: 原来把 failed 也算进 busy, 于是永不收起)
     const queueBusy = q.some((r) => r.state === "queued" || r.state === "transcribing");
-    const busy = s.status === "recording" || s.status === "transcribing" || (cur && cur.state === "transcribing") || queueBusy || failed;
-    if (busy) cancelHide(); // 规则 1/4: 有活或只剩失败 → 不自动收
-    else if (s.finished) {
-      // 规则 2: 全部交付完成 → 350ms 收起
+    const busy = s.status === "recording" || s.status === "transcribing" || (cur && cur.state === "transcribing") || queueBusy;
+    if (busy) {
+      cancelHide(); // 规则 1/4: 还有段在排队或转写 → 不自动收
+    } else if (s.finished) {
+      // 规则 2: 全部交付完成 → 正常完成 350ms 收起;
+      //         带 warning(含"未识别到语音内容")要留 2.5s, 否则一闪而过看不见(issue #4)
       const d = s.finished;
       const sig = JSON.stringify(d);
       if (sig !== lastFinal) {
         lastFinal = sig;
-        setState("ok", d.warning ? `⚠️ ${String(d.warning).slice(0, 40)}` : `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"}`);
-        scheduleHide(350);
+        setState(d.warning ? "idle" : "ok", d.warning ? `⚠️ ${String(d.warning).slice(0, 40)}` : `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"}`);
+        scheduleHide(d.warning ? 2500 : 350);
       }
     } else if (s.version !== 0) {
-      // 规则 2/3: 没活可干了 → 失败段保留 2.5s, 否则 350ms 收起
+      // 规则 3: 只剩失败段 → 2.5s 提示后收起(与"录音太短已丢弃"同长)
       scheduleHide(failed ? 2500 : 350);
     }
 

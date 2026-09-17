@@ -63,7 +63,11 @@ const htmlAll = ["index.html", "hud.html", ...pageFiles.map((f) => `src/pages/${
 check("无 toggleRec 残留(统一 toggleRecording)", !/\btoggleRec\b/.test(src) && !/\btoggleRec\b/.test(htmlAll));
 check("无 saveKeys 残留(统一 saveCfg)", !/\bsaveKeys\b/.test(src) && !/\bsaveKeys\b/.test(htmlAll));
 check("试音按钮调用 toggleRecording()", /@click="toggleRecording\(\)"/.test(htmlAll));
-check("Key 池 textarea 绑定 saveCfg()", /@change="saveCfg\(\)"/.test(readFileSync("src/pages/asr.html", "utf8")));
+// Key 池卡片已删除(issue #5): 页面上不再有"Key 池"字样, 也不再有 keysText 绑定
+check(
+  "ASR 页已无 Key 池卡片(issue #5)",
+  !/Key 池/.test(readFileSync("src/pages/asr.html", "utf8")) && !/\bkeysText\b/.test(src),
+);
 
 // 2.7) hud 重试失败文案指向主窗历史(独立设置窗已废除, 历史在主窗侧栏)
 const hudSrc = readFileSync("src/hud.ts", "utf8");
@@ -128,7 +132,14 @@ check(
 );
 check("hud.html 队列按需展开(hasqueue 才 664px)", /\.hud\.hasqueue\s*\{\s*width:\s*664px/.test(hudHtml));
 check("hud.html 当前文字可多行且有滚动上限", /max-height:\s*174px/.test(hudHtml) && /cur-text/.test(hudHtml));
-check("hud.ts 存活规则: 完成 350ms / 只剩失败 2500ms", /scheduleHide\(350\)/.test(hudTs) && /scheduleHide\(failed \? 2500 : 350\)/.test(hudTs));
+// 存活规则(issue #3/#4): 正常完成 350ms 收起; 带警告或只剩失败 2500ms;
+// failed 不得进入 busy 判定(否则永不收起)
+check(
+  "hud.ts 存活规则: 完成 350ms / 警告与只剩失败 2500ms",
+  /scheduleHide\(d\.warning \? 2500 : 350\)/.test(hudTs) &&
+    /scheduleHide\(failed \? 2500 : 350\)/.test(hudTs) &&
+    !/\|\| failed/.test(hudTs),
+);
 check("hud.ts 尺寸上报 hud_resize(width,height)", /hud_resize",\s*\{\s*width/.test(hudTs));
 check("segment_queue.rs 在 lib.rs 启动 worker", /segment_queue::start\(/.test(lib));
 check(

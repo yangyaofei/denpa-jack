@@ -1,10 +1,5 @@
       <section x-show="section === 'asr'" class="page">
         <h1>语音识别</h1>
-        <div class="card">
-          <div class="row-title">Key 池</div>
-          <div class="row-hint">每行一个; 档案 Key 留空时按序取第一个</div>
-          <textarea class="inp" rows="3" x-model="keysText" @change="saveCfg()" placeholder="sk-..."></textarea>
-        </div>
         <template x-for="p in cfg?.asr_profiles ?? []" :key="p.id">
           <div class="card" :class="{active: cfg?.active_asr_id === p.id}" style="margin-bottom: 8px">
             <div class="row">
@@ -14,7 +9,7 @@
                   <span class="tag" x-text="p.provider"></span>
                   <span class="tag" x-show="cfg?.active_asr_id === p.id">使用中</span>
                 </div>
-                <div class="row-hint" x-text="'Key: ' + (p.api_key ? p.api_key.slice(0, 8) + '…' : '用 Key 池') + (p.hotwords_enabled ? ' · 热词开' : '')"></div>
+                <div class="row-hint" x-text="'Key: ' + (p.api_key ? p.api_key.slice(0, 8) + '…' : '未设置') + (p.hotwords_enabled ? ' · 热词开' : '')"></div>
               </div>
               <div style="display: flex; gap: 6px">
                 <button class="mini" @click="useAsr(p)" x-show="cfg?.active_asr_id !== p.id">使用</button>
@@ -26,9 +21,12 @@
         </template>
         <button class="add-btn" @click="newAsr()">+ 添加引擎档案</button>
         <div class="card">
-          <div class="row-title">热词直传预览</div>
-          <div class="row-hint">来自词典(按权重排序取前 100 token), 改词典即时生效</div>
-          <div style="margin-top: 6px">
+          <div class="row-title">
+            热词直传预览
+            <span class="tag" x-text="(hotwordsPreview?.length ?? 0) + ' 个'"></span>
+          </div>
+          <div class="row-hint">来自词典(按权重排序取前 100 token), 改词典即时生效; 该列表实时直传给引擎</div>
+          <div class="chips-box" style="margin-top: 8px">
             <template x-for="w in hotwordsPreview" :key="w"><span class="chip accent" x-text="w"></span></template>
             <span class="dim" x-show="!hotwordsPreview.length">无热词(词典为空或权重为 0)</span>
           </div>
@@ -68,7 +66,7 @@
                 <option value="volcengine">火山引擎 (豆包流式)</option>
               </select>
             </label>
-            <label>API Key<span class="row-hint">(留空用 Key 池)</span>
+            <label>API Key<span class="row-hint">(该引擎档案的密钥)</span>
               <input class="inp" type="password" x-model="asrEdit.api_key" />
             </label>
             <div class="row">

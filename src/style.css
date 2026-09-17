@@ -146,6 +146,10 @@ body {
 .mini-row:hover { background: #f0f0f2; }
 .mini-row.sel { background: #eef4ff; color: var(--accent); font-weight: 600; }
 .chip.accent { background: #e8f1ff; color: #0a5ac8; }
+/* 热词直传预览: 词多时不撑破卡片, 限高后框内滚动(issue #5) */
+.chips-box { max-height: 132px; overflow-y: auto; padding-right: 4px; line-height: 1.9; }
+.chips-box::-webkit-scrollbar { width: 6px; }
+.chips-box::-webkit-scrollbar-thumb { background: rgba(120,120,128,0.35); border-radius: 3px; }
 .dim { color: var(--text-2); }
 
 .md-preview { overflow-y: auto; background: rgba(120,120,128,0.06); }

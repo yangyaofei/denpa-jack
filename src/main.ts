@@ -113,7 +113,6 @@ function describeCombo(s: string): string {
   llmIsNew: false,
   dictEdit: null as any,
   dictIsNew: false,
-  keysText: "",
     hotwordsPreview: [] as string[],
   dictSearch: "",
   hotkeyHint: "",
@@ -226,13 +225,11 @@ function describeCombo(s: string): string {
   async loadCfg() {
     try {
       this.cfg = await invoke("get_config");
-      this.keysText = this.cfg.keys.join("\n");
       if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
   },
   async saveCfg() {
     if (!this.cfg) return;
-    this.cfg.keys = this.keysText.split("\n").map((s: string) => s.trim()).filter(Boolean);
     try { await invoke("save_config", { config: this.cfg });
     try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {} }
     catch (e) { this.error = String(e); }
@@ -766,7 +763,6 @@ function describeCombo(s: string): string {
       bindings: { transcribe: { current: ["f5"] } },
     };
     this.autostartOn = false;
-    this.keysText = "sk-demo";
     this.history = [
       { ts: "2026-09-02 13:00:01", engine: "volcengine", raw: "歇课数学很厉害", final_text: "谢克数学很厉害", llm_used: true, delivered: "clipboard+paste", audio_path: "" },
       { ts: "2026-09-02 12:58:10", engine: "volcengine", raw: "我们在腾讯营上部署", final_text: "我们在腾讯云上部署", llm_used: false, delivered: "clipboard", audio_path: "" },
