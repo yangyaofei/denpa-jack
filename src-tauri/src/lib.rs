@@ -93,22 +93,23 @@ pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value
 pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 
 pub fn run() {
+    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     // 自测模式跳过单实例插件：单实例的判重基于应用名（不是 bundle id），
     // 会让"独立 bundle id 的测试副本"在正式实例运行时被转发参数后立刻退出，导致自测无法进行。
     // （见 docs/SPEC.md 自测通道一节：VOICEMAC_AUTOTEST=update 用副本验证更新链路）
-    let autotest = std::env::var("VOICEMAC_AUTOTEST").is_ok();
-    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
-    #[cfg(not(test))]
-    let builder = if autotest {
-        builder
-    } else {
-        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 二次启动: 唤出主窗
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-        }))
+    let builder = {
+        let autotest = std::env::var("VOICEMAC_AUTOTEST").is_ok();
+        if autotest {
+            builder
+        } else {
+            builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                // 二次启动: 唤出主窗
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }))
+        }
     };
     builder
         .plugin(tauri_plugin_clipboard_manager::init())
