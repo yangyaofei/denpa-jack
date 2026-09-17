@@ -177,15 +177,9 @@ pub fn resume_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
 /// 权限总检查: 返回全部必需权限(麦克风/辅助功能)的当前状态, 缺项时同时推事件给前端
 #[tauri::command]
 pub fn check_permissions(app: tauri::AppHandle) -> Vec<crate::permissions::PermState> {
-    let mut list = crate::permissions::all();
-    // 屏幕录制是开关式需求: 只有开启了「截图作为纠错上下文」才列入检查(否则不打扰用户)
-    let on = crate::settings::get_config(app.clone())
-        .map(|c| c.screenshot_context)
-        .unwrap_or(false);
-    if on {
-        list.push(crate::permissions::screen_recording_state());
-    }
-    if list.iter().any(|p| !p.granted) {
+    // 列表含必需项与可选项(屏幕录制), 前端按 required 区分展示; 提示只看必需项
+    let list = crate::permissions::all();
+    if !crate::permissions::missing().is_empty() {
         let _ = Emitter::emit_to(&app, "main", "permission-ax", false);
     }
     let _ = Emitter::emit_to(&app, "main", "permissions", &list);

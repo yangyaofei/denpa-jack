@@ -14,8 +14,9 @@
 - 常驻方式：`ActivationPolicy::Accessory`（菜单栏常驻，不占 Dock）；关窗=隐藏（CloseRequested 拦截）；真正退出走托盘菜单。
 - 单实例：tauri-plugin-single-instance，二次启动唤出并聚焦主窗。
 - 系统权限：
-  - 麦克风（TCC），Info.plist 声明 `NSMicrophoneUsageDescription`。
-  - 辅助功能（AX），AX 直写与粘贴依赖，启动时检测并广播 `permission-ax`。
+  - 麦克风（TCC），Info.plist 声明 `NSMicrophoneUsageDescription`。**必需**。
+  - 辅助功能（AX），AX 直写与粘贴依赖，启动时检测并广播 `permission-ax`。**必需**。
+  - 屏幕录制（TCC）。**可选**：仅「截图作为纠错上下文」开关开启时需要。三项都在同一张「权限」卡里展示状态、用途、影响与跳转按钮（`permissions.rs::all()`，`PermState.required` 区分必需/可选；`missing()` 只算必需项）。
   - Info.plist 另声明 `NSAppleEventsUsageDescription`（粘贴到当前应用）。
 
 ## 2. 需求清单（用户视角）
@@ -249,7 +250,7 @@
 - 采集（`screen_context.rs`）：`screencapture -x -o -t png` 存 `<数据目录>/screen_context/screen-{millis}-ctx.png`；**在录音开始的后台线程执行**，不占录音启动时间；保留最近 200 张。
 - 采集目标屏 = **光标所在显示器**（与 hud 浮窗同一目标屏）。`screencapture` 不指定 `-D` 时抓主显示器，多显示器下会抓到用户没在看的那块；目标屏由 `overlay.rs::display_target_at_cursor()` 判定（纯 CoreGraphics，线程安全；坐标类 API 按契约只允许出现在 overlay.rs），编号规则与 `screencapture -D` 一致（1 = 主显示器，实测 1 = 内建屏 / 2 = 外接屏）。
 - 注入（`llm.rs`）：user 消息变成 `[图片, 文本]` 内容块数组（带图时文本前缀"参考随附截图中的上下文，修正下面这段转写："）。图片走 base64 内联 data URL，每次新截图；**不带图时 user 消息仍是纯字符串，行为与加功能前完全一致**。
-- 权限：需要"屏幕录制"（TCC）。开关打开时前端调 `request_screen_permission` 触发系统引导；缺权限时采集失败 → `[ctx]` 日志 + 本次退回纯文本纠错，**不阻塞交付**。权限状态在开关打开后进入 `check_permissions` 列表（开关关闭时不检查、不打扰）。
+- 权限：需要"屏幕录制"（TCC）。**常驻在「权限」卡里展示**（标"可选"，与麦克风/辅助功能同一处检测与跳转），开关打开时前端还可调 `request_screen_permission` 触发系统引导；缺权限时采集失败 → `[ctx]` 日志 + 本次退回纯文本纠错，**不阻塞交付**。可选项不计入 `permissions::missing()`（不影响启动提示与录音拦截）。
 - 失败降级：截图失败 / 图片读取失败 / 模型不支持图片，都只记日志并继续纯文本纠错。
 - 落盘留档：截图本体存 `screen_context/`；`llm_logs/*.json` 里把 base64 换成 `<截图内联: <路径> (N MB)>` 占位（避免日志里重复存 MB 级 base64）。
 - 实测依据（模型选择、token 成本、effort 档位、失败模式）：`research-plan/voice-mac-app/day-07-context/report.md`。要点：DeepSeek Flash 与 GLM 5.3 Flash 均支持图片；带图 vs 不带图的专名命中实测 1/5 → 5/5；观察到的失败模式是"思考把 max_tokens 吃满导致 content 为空"，靠 `max_tokens` 预算与既有降级兜底处理。

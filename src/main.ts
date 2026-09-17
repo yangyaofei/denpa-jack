@@ -634,9 +634,10 @@ function describeCombo(s: string): string {
     }
   },
 
-  // ==== 权限总检查(麦克风 + 辅助功能) ====
+  // ==== 权限总检查(必需: 麦克风 + 辅助功能; 可选: 屏幕录制) ====
+  // 只把必需项缺失当作问题(顶部横幅/启动提示只看这个)
   missingPerms(): any[] {
-    return this.perms.filter((p: any) => !p.granted);
+    return this.perms.filter((p: any) => p.required !== false && !p.granted);
   },
   permStatusText(p: any): string {
     if (p.granted) return "已授权";
@@ -653,6 +654,10 @@ function describeCombo(s: string): string {
   },
   async requestMic() {
     try { await invoke("request_microphone"); } catch (e) { console.warn(e); }
+    setTimeout(() => this.checkPerms(), 900);
+  },
+  async requestScreenPerm() {
+    try { await invoke("request_screen_permission"); } catch (e) { console.warn(e); }
     setTimeout(() => this.checkPerms(), 900);
   },
   async openPermSettings(p: any) {

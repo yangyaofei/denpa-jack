@@ -4,7 +4,7 @@
           <div class="row">
             <div>
               <div class="row-title">权限</div>
-              <div class="row-hint">两项都必须有；缺任一项都会影响使用（启动时自动检查，授权后无需重启）</div>
+              <div class="row-hint">必需两项：麦克风、辅助功能（缺任一项都会影响使用）。屏幕录制为可选，只在开启「截图作为纠错上下文」时需要。启动时自动检查，授权后无需重启</div>
             </div>
             <button class="mini" @click="checkPerms()">重新检测</button>
           </div>
@@ -13,10 +13,13 @@
               <div class="perm-row">
                 <span class="perm-dot" :class="p.granted ? 'ok' : 'bad'"></span>
                 <span class="perm-name" x-text="p.label"></span>
+                <span class="perm-opt" x-show="!p.required">可选</span>
                 <span class="perm-state" :class="p.granted ? '' : 'bad'" x-text="permStatusText(p)"></span>
                 <span class="perm-actions">
                   <button class="mini" x-show="!p.granted && p.key === 'microphone' && p.status === 'not_determined'"
                           @click="requestMic()">请求授权</button>
+                  <button class="mini" x-show="!p.granted && p.key === 'screen_recording'"
+                          @click="requestScreenPerm()">请求授权</button>
                   <button class="mini" x-show="!p.granted" @click="openPermSettings(p)">打开系统设置</button>
                 </span>
               </div>
@@ -106,13 +109,14 @@
                   <span>已授权。截图会在每次录音开始时采集一张</span>
                 </template>
                 <template x-if="!(perms || []).find(p => p.key === 'screen_recording')?.granted">
-                  <span>未授权 → 截图采集会失败（转写仍正常，只是不带屏幕上下文）。授权后通常需要重启应用</span>
+                  <span>未授权 → 截图采集会失败（转写仍正常，只是不带屏幕上下文）。可在上方「权限」卡里点「请求授权」，授权后通常需要重启应用</span>
                 </template>
               </div>
             </div>
             <div class="btns">
               <button class="mini" @click="openScreenContextDir()">打开截图目录</button>
-              <button class="mini" @click="openPermSettings((perms || []).find(p => p.key === 'screen_recording')?.settings_url || 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')">打开系统设置</button>
+              <button class="mini" @click="requestScreenPerm()">请求授权</button>
+              <button class="mini" @click="openPermSettings((perms || []).find(p => p.key === 'screen_recording'))">打开系统设置</button>
             </div>
           </div>
           <div class="row">
