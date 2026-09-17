@@ -18,7 +18,6 @@ use crate::overlay::{hide_hud, show_hud};
 use crate::pipeline;
 use crate::settings::{self, Config};
 use crate::shortcut::{register_esc, unregister_esc};
-use crate::tray_events::TRAY;
 use crate::{log, AppState};
 
 /// 一次录音会话的完整状态——生命周期与按住-松开严格一致
@@ -205,15 +204,35 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
 /// 会话清理: stop/abort 共用——注销 esc/托盘复位/提示音, 一个不漏
 fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cue>) {
     unregister_esc(app);
-    if let Some(t) = TRAY.lock().unwrap().as_ref() {
-        t.set_recording(false);
-    }
+    crate::tray_events::set_tray_recording(app, false);
     if let Some(cue) = cue {
         let _ = settings::get_config(app.clone()).map(|c| {
             if c.audio_feedback {
                 crate::audio_feedback::play_on_main(app, cue);
             }
         });
+    }
+}
+
+/// 录音开始的可见反馈: 浮窗 + 托盘图标染红。
+///
+/// 开启「截图作为纠错上下文」时由采集线程在截图完成后调用——**先拍画面, 再显示我们自己的 UI**,
+/// 否则截图里会带上"录音中"浮窗（用户实测反馈）。托盘染红同样延后, 避免菜单栏状态被拍进去。
+fn show_recording_ui(app: &tauri::AppHandle) {
+    show_hud(app);
+    crate::tray_events::set_tray_recording(app, true);
+}
+
+/// 采集线程用: 会话已结束（用户已松开）就不再补显示, 避免迟到的浮窗。
+fn show_recording_ui_if_active(app: &tauri::AppHandle) {
+    let active = app
+        .state::<std::sync::Mutex<AppState>>()
+        .lock()
+        .unwrap()
+        .session
+        .is_some();
+    if active {
+        show_recording_ui(app);
     }
 }
 
@@ -317,29 +336,33 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     let level = rec.level_handle();
     let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     // 屏幕上下文: 录音开始时后台采集一张截图(不阻塞录音启动; 开关关闭则完全不动作)
+    // 开启时: 可见反馈(浮窗/托盘染红)延后到截图完成之后, 避免把"录音中"浮窗拍进上下文截图
+    let show_ui_after_capture = cfg.screenshot_context;
     let shot_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
-    if cfg.screenshot_context {
+    if show_ui_after_capture {
         let app_shot = app.clone();
         let slot = shot_slot.clone();
         std::thread::spawn(move || {
             if !crate::screen_context::preflight() {
                 log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
-                return;
-            }
-            let dir = crate::settings::data_dir(&app_shot);
-            match crate::screen_context::capture_and_prune(&dir, "ctx") {
-                Ok(shot) => {
-                    log::elog(&format!(
-                        "[ctx] 截图已采集 path={} bytes={} ms={} display={:?}",
-                        shot.path.display(),
-                        shot.bytes,
-                        shot.elapsed_ms,
-                        shot.display
-                    ));
-                    *slot.lock().unwrap() = Some(shot.path);
+            } else {
+                let dir = crate::settings::data_dir(&app_shot);
+                match crate::screen_context::capture_and_prune(&dir, "ctx") {
+                    Ok(shot) => {
+                        log::elog(&format!(
+                            "[ctx] 截图已采集 path={} bytes={} ms={} display={:?}",
+                            shot.path.display(),
+                            shot.bytes,
+                            shot.elapsed_ms,
+                            shot.display
+                        ));
+                        *slot.lock().unwrap() = Some(shot.path);
+                    }
+                    Err(e) => log::elog(&format!("[ctx] 截图失败, 本次不带图纠错: {e}")),
                 }
-                Err(e) => log::elog(&format!("[ctx] 截图失败, 本次不带图纠错: {e}")),
             }
+            // 截图完成后再显示浮窗/托盘染红(会话已结束则不显示)
+            show_recording_ui_if_active(&app_shot);
         });
     }
     {
@@ -356,7 +379,10 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         });
     }
     register_esc(&app);
-    show_hud(&app);
+    // 未开启截图时立即显示; 开启时由采集线程在截图完成后显示(见上)
+    if !show_ui_after_capture {
+        show_recording_ui(&app);
+    }
     spawn_level_loop(app.clone(), cancel.clone(), level);
     if cfg.max_recording_seconds > 0 {
         spawn_max_timer(app.clone(), cfg.max_recording_seconds, cancel);
@@ -423,9 +449,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     crate::hud_set(|h| h.status = "transcribing".into());
         let _ = w.show();
     }
-    if let Some(t) = TRAY.lock().unwrap().as_ref() {
-        t.set_transcribing(true);
-    }
+    crate::tray_events::set_tray_transcribing(&app, true);
     Ok(())
 }
 

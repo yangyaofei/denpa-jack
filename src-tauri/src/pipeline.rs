@@ -194,9 +194,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: Option<SessionHandof
     let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
     crate::hud_set(|h| { h.status.clear(); h.finished = Some(fin_payload); });
     // 转写态收尾: 托盘复位(三态: 默认/红=录音/黄=转写)
-    if let Some(t) = crate::tray_events::TRAY.lock().unwrap().as_ref() {
-        t.set_transcribing(false);
-    }
+    crate::tray_events::set_tray_transcribing(&app, false);
 }
 
 
