@@ -116,7 +116,13 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
                     })
                     .collect();
                 let _ = Emitter::emit_to(&app, "hud", "hud-busy", "✦ AI 润色中…");
-                crate::hud_set(|h| h.status = "busy".into());
+                // 只有在没录音时才改状态行: 用户可能已经在录下一段了, 此时浮窗该显示"录音中",
+                // 不能被后处理的状态覆盖(用户实测: 会打断正在录的回显, 看起来像"清空重来")
+                crate::hud_set(|h| {
+                    if h.status != "recording" {
+                        h.status = "busy".into();
+                    }
+                });
                 let mut llm_thinking: Option<String> = None;
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -205,7 +211,14 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         "delivered": delivered, "warning": warning,
     });
     let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
-    crate::hud_set(|h| { h.status.clear(); h.finished = Some(fin_payload); });
+    // 交付/收尾绝不能动"录音中"的状态与实时文字(那是新一段的录音会话, 与这段无关)。
+    // 用户实测 bug: 这里无条件 status.clear() 会把正在录的回显清掉, 表现为"内容消失又重新出现"。
+    crate::hud_set(|h| {
+        if h.status != "recording" {
+            h.status.clear();
+        }
+        h.finished = Some(fin_payload);
+    });
     // 托盘复位交给队列统一处理(队列里可能还有别的段在排队/转写)
     if delivered == "failed" {
         Outcome::Failed(warning.clone().unwrap_or_else(|| "交付失败".into()))
@@ -230,27 +243,28 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
         return Ok("copied-self".into());
     }
-    // 1) AX 直写光标(不碰剪贴板; 焦点校验通过才尝试, B10)
+    // 1) 先无条件写剪贴板 —— 用户定则: 不管走哪条交付路径, 这段文本都必须能拿得到。
+    //    修 bug: 以前 AX 直写成功就 return, 剪贴板里什么都没有, 用户事后拿不回转写结果。
+    app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
+    // 2) AX 直写光标(点不碰剪贴板式插入; 焦点校验通过才尝试, B10)
     if !clipboard_only && focus_ok {
         match crate::deliver::ax_insert(text) {
             Ok(()) => return Ok("pasted-ax".into()),
             Err(e) => crate::log::elog(&format!("[deliver] ax_insert 失败: {e}")),
         }
     }
-    // 2) paste_tx 需要的配置
+    // 3) paste_tx 需要的配置
     let cfg_h: crate::settings::Config = crate::settings::get_config(app.clone()).unwrap_or_default();
     let app2_h = app.clone();
     if clipboard_only {
-        // 审计#1(对齐 Handy clipboard.rs:74): 只复制模式也必须真写剪贴板
-        use tauri_plugin_clipboard_manager::ClipboardExt;
-        app.clipboard().write_text(text.to_string()).map_err(|e| format!("写剪贴板失败: {e}"))?;
+        // 只复制模式: 上一步已经真写过剪贴板(审计#1 对齐 Handy clipboard.rs:74)
         return Ok("copied".into());
     }
-    // 3) 焦点已变 → 不粘贴, 防止把文本贴到其它应用(B10)
+    // 4) 焦点已变 → 不粘贴, 防止把文本贴到其它应用(B10); 文本已在剪贴板, 用户可手动粘贴
     if !focus.still_valid() {
         return Ok("focus-changed-copied-only".into());
     }
-    // 4) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
+    // 5) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
     let text2 = text.to_string();
     let r = app.run_on_main_thread(move || {
         let _ = crate::paste_tx::reliable_paste(&text2, &app2_h, &cfg_h);
