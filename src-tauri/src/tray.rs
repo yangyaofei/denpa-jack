@@ -8,7 +8,7 @@ use objc2::runtime::NSObject;
 use objc2::define_class;
 use objc2::{sel, AnyThread, DefinedClass, MainThreadMarker};
 use objc2_app_kit::{
-    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem,
+    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem,
     NSStatusBar, NSStatusItem,
 };
 use objc2_foundation::{NSData, NSString};
@@ -29,9 +29,10 @@ define_class!(
     }
 );
 
-/// 托盘图标三态。**状态用烘焙好的彩色位图表达, 不依赖系统染色**(contentTintColor)。
-/// 原因(用户实测): 桌面壁纸是深红 + 菜单栏半透明时, "template 位图 + 红色染色"几乎看不出,
-/// 表现为"录音时图标消失/变黑"。彩色位图把颜色写进像素, 再加一圈白色描边保证任何底色上都可辨。
+/// 托盘图标三态。**状态用细线 template 位图 + 系统染色表达**（回到队列化之前的效果）。
+/// 历史：C41 首次实现就是这样（`menubar.png` 细线字形，录音/转写只改染色）；
+/// 之后我把三态做成"烘焙彩色位图 + 加粗字形"，那是另起一套设计、叠加在原来的逻辑上，
+/// 用户明确否掉并给出规则：修 bug 回到原逻辑里改，不要在旧逻辑上再摞一层。
 #[derive(Clone, Copy, PartialEq)]
 pub enum TrayIcon {
     Idle,
@@ -39,26 +40,38 @@ pub enum TrayIcon {
     Transcribing,
 }
 
-/// 唯一的状态→图标映射(创建时与三态切换都走这里, 保证一致)
+/// 唯一的状态→图标映射（创建时与三态切换都走这里）。
+///
+/// 与原实现的三处差异（都是原来那套逻辑里的缺陷，不是新设计）：
+/// 1. 原来 `set_recording` 设红色染色、`set_transcribing(false)` 把染色清成 `None`——
+///    两组动作各自改同一个染色通道，转写结束会把录音态的染色一起清掉（残留状态）。
+///    现在每次状态变化都按"当前状态"重算位图与染色，不留残留。
+/// 2. 原来两处各自 `setTemplate`/`setSize`/`setImage`，创建处第三处再写一遍；
+///    现在只有这一个函数做这件事。
+/// 3. `transcribing` 仍不改位图（与原实现一致：只把染色换成黄），位图保持待命细线字形。
 fn set_status_icon(item: &NSStatusItem, state: TrayIcon) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let Some(btn) = item.button(mtm) else { return };
-    let (png, template): (&[u8], bool) = match state {
-        // 待命: 黑色 template(随浅/深色菜单栏自动反色)
-        TrayIcon::Idle => (include_bytes!("../icons/menubar.png"), true),
-        // 录音: 红 + 白描边(非 template, 颜色写死)
-        TrayIcon::Recording => (include_bytes!("../icons/menubar-rec-red.png"), false),
-        // 转写: 琥珀 + 白描边
-        TrayIcon::Transcribing => (include_bytes!("../icons/menubar-trans-amber.png"), false),
+    // (位图, 染色)
+    let (png, tint): (&[u8], Option<Retained<NSColor>>) = match state {
+        TrayIcon::Idle => (include_bytes!("../icons/menubar.png"), None),
+        TrayIcon::Recording => (
+            include_bytes!("../icons/menubar-rec.png"),
+            Some(unsafe { NSColor::systemRedColor() }),
+        ),
+        TrayIcon::Transcribing => (
+            include_bytes!("../icons/menubar.png"),
+            Some(unsafe { NSColor::systemYellowColor() }),
+        ),
     };
     let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
     let Some(icon) = (unsafe { NSImage::initWithData(NSImage::alloc(), &data) }) else { return };
     unsafe {
-        icon.setTemplate(template);
+        // 全为 template：字形按菜单栏明暗自动反色，染色只负责改颜色本身
+        icon.setTemplate(true);
         icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
         btn.setImage(Some(&icon));
-        // 彩色位图自带颜色: 清掉染色, 避免 template 色遮挡(原来这里染红/黄, 见上)
-        btn.setContentTintColor(None);
+        btn.setContentTintColor(tint.as_deref());
     }
 }
 
