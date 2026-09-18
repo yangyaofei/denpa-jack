@@ -180,5 +180,16 @@ check(
   "录音中不显示失败段与失败条",
   /recording \? qAll\.filter/.test(hudTs) && /showFail\(failed && !recording\)/.test(hudTs),
 );
+// 7) issue #9: 空转写必须结束阶段(否则前端按"转写中"判定为忙 → 永不收起);
+//    静音提醒阈值必须贴着 0(该麦克风正常说话 peak 只有 0.06, 阈值过高会误报);
+//    录音中的一次性提示不参与收窗
+check(
+  "空转写走 no_speech 并结束阶段",
+  /apply_no_speech/.test(readFileSync("src-tauri/src/hud.rs", "utf8")) &&
+    /apply_no_speech\(g, &r\)/.test(readFileSync("src-tauri/src/hud.rs", "utf8")) &&
+    /crate::hud::no_speech\(&app, &payload\)/.test(readFileSync("src-tauri/src/engines.rs", "utf8")),
+);
+check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/recording.rs", "utf8")));
+check("录音中的提示不触发收窗", /if \(!recording\) scheduleHide\(2500\)/.test(hudTs));
 
 process.exit(fail ? 1 : 0);

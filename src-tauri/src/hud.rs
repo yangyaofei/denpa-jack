@@ -139,9 +139,11 @@ fn apply_polishing(g: &mut Snapshot) {
     }
 }
 
-/// 错误: 录音中不打扰(只落日志, 由调用方记), 不写进快照
+/// 错误: 录音中不打扰(只落日志, 由调用方记), 不写进快照; 非录音时错误意味着这一段已结束,
+/// 阶段必须一起收掉——否则"转写中"会常驻, 浮窗永不收起(issue #9 同类问题)。
 fn apply_error(g: &mut Snapshot, reason: &str) {
     if !is_recording(g) {
+        g.status.clear();
         g.err = Some(reason.to_string());
     }
 }
@@ -192,6 +194,23 @@ pub fn notify(app: &tauri::AppHandle, msg: &str) {
 pub fn delivered(app: &tauri::AppHandle, payload: serde_json::Value) {
     let _ = app;
     update(|g| apply_delivered(g, payload));
+}
+
+/// 空转写的状态迁移: 结束阶段 + 一次性提示 + 清掉可能残留的错误
+fn apply_no_speech(g: &mut Snapshot, reason: &str) {
+    g.status.clear();
+    g.err = None;
+    g.msg = reason.to_string();
+}
+
+/// 这一条没有任何内容(没听清 / 全程没声音)。
+/// 事实: 这一段**不会再有交付了** → 必须把阶段一起收掉, 否则 status 停在 "transcribing",
+/// 前端按"转写中"判定为忙 → 永不收起(用户实测: 提示停留特别久, 见 issue #9)。
+/// 顺带发一次性提示; 前端 2.5s 后按存活规则收窗。
+pub fn no_speech(app: &tauri::AppHandle, reason: &str) {
+    let r = reason.to_string();
+    update(|g| apply_no_speech(g, &r));
+    crate::overlay::show_window(app);
 }
 
 /// 出错(引擎/交付级)。录音中只落日志, 不打扰录音。
@@ -327,5 +346,28 @@ mod tests {
         assert!(should_skip_hide(1_000, 800)); // 显示 200ms
         assert!(!should_skip_hide(1_000, 600)); // 显示 400ms
         assert!(!should_skip_hide(1_000, 0)); // 从未显示过
+    }
+
+    // 空转写必须结束"转写中"阶段(否则前端按忙判定 → 永不收起, issue #9)
+    #[test]
+    fn no_speech_ends_transcribing_phase() {
+        let mut g = snap();
+        apply_recording_started(&mut g);
+        apply_recording_ended(&mut g);
+        assert_eq!(g.status, "transcribing");
+        apply_no_speech(&mut g, "没听清(转写为空)");
+        assert!(g.status.is_empty());
+        assert_eq!(g.msg, "没听清(转写为空)");
+    }
+
+    // 错误同样要收掉阶段(非录音时), 否则"转写中"常驻
+    #[test]
+    fn error_ends_transcribing_phase() {
+        let mut g = snap();
+        apply_recording_started(&mut g);
+        apply_recording_ended(&mut g);
+        apply_error(&mut g, "引擎会话异常中断");
+        assert!(g.status.is_empty());
+        assert_eq!(g.err.as_deref(), Some("引擎会话异常中断"));
     }
 }

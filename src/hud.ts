@@ -180,7 +180,9 @@ async function pollOnce() {
     }
     if (s.msg) {
       setState("idle", s.msg, false);
-      scheduleHide(2500); // 一次性提示(如"录音太短已丢弃"): 2.5s
+      // 一次性提示 2.5s(如"录音太短已丢弃"/"没听清(转写为空)")。
+      // 但录音中不参与窗口收起: 静音提醒也走 msg, 而录音还在进行(收窗由阶段决定)。
+      if (!recording) scheduleHide(2500);
     }
 
     // 左栏: 当前段(录音中显示实时文字, 始终滚到最新)

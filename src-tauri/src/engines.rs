@@ -93,7 +93,7 @@ pub fn spawn_session(
             // 旧写法是各层直接改同一份共享快照, 已全部收敛到 hud 模块的接口。
             match tag {
                 "asr-partial" => crate::hud::partial(&app, &payload),
-                "asr-nospeech" => crate::hud::notify(&app, &payload),
+                "asr-nospeech" => crate::hud::no_speech(&app, &payload),
                 "asr-error" => crate::hud::error(&app, &payload),
                 // asr-result: 队列/阶段由 hud 的 poll 现算, 不需要在这里写状态
                 _ => {}
