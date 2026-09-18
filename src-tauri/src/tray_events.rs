@@ -102,20 +102,5 @@ pub fn refresh_tray(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 托盘图标切录音态(红)。必须在主线程改 AppKit 控件, 调用方可能在协调器/采集线程 → 统一走这里调度。
-pub fn set_tray_recording(app: &tauri::AppHandle, on: bool) {
-    let _ = app.run_on_main_thread(move || {
-        if let Some(t) = TRAY.lock().unwrap().as_ref() {
-            t.set_recording(on);
-        }
-    });
-}
-
-/// 托盘图标切转写态(黄)。理由同上。
-pub fn set_tray_transcribing(app: &tauri::AppHandle, on: bool) {
-    let _ = app.run_on_main_thread(move || {
-        if let Some(t) = TRAY.lock().unwrap().as_ref() {
-            t.set_transcribing(on);
-        }
-    });
-}
+// 托盘图标不再随录音/转写切换（恒定一张细线图，历史见 tray.rs 的 MacTray 注释）：
+// 原先这里的 set_tray_recording / set_tray_transcribing 两个主线程调度函数已删除。

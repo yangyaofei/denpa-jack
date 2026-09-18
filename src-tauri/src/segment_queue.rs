@@ -102,7 +102,6 @@ pub fn start(app: tauri::AppHandle) {
             }
         };
         let (id, raw, ho, asr_failed) = run;
-        crate::tray_events::set_tray_transcribing(&app, true);
 
         // 2) 执行(不持锁): ASR 阶段失败过的段不再跑后处理, 直接判失败
         let outcome = if asr_failed {
@@ -138,8 +137,6 @@ pub fn start(app: tauri::AppHandle) {
             let p = record_failed(&app, &raw, &ho, &reason);
             log_debug(&format!("后处理失败已入历史 audio={:?}", p));
         }
-        // 托盘: 还有排队/转写中的段 → 保持黄色; 没有 → 复位
-        crate::tray_events::set_tray_transcribing(&app, busy());
         log_debug("队列状态变化");
     });
 }
@@ -325,7 +322,6 @@ pub fn clear(app: &tauri::AppHandle) -> usize {
         };
         crate::history::append(app, &rec);
     }
-    crate::tray_events::set_tray_transcribing(app, busy());
     log_debug("清空队列");
     n
 }
@@ -335,14 +331,13 @@ pub fn clear(app: &tauri::AppHandle) -> usize {
 /// 语义 = 只停止提示, 不丢数据 —— 失败段的音频与原文在失败当时就已写进历史
 /// (`delivered="failed"`), 之后仍可在主窗「历史」里重跑。
 /// 已交付/正在转写的段不受影响。
-pub fn dismiss_failed(app: &tauri::AppHandle) -> usize {
+pub fn dismiss_failed() -> usize {
     let n = {
         let mut g = Q.lock().unwrap();
         let before = g.items.len();
         g.items.retain(|s| s.state != SegState::Failed);
         before - g.items.len()
     };
-    crate::tray_events::set_tray_transcribing(app, busy());
     log_debug("失败段已关闭提示");
     n
 }

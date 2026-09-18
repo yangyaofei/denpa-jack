@@ -16,7 +16,7 @@
 8. cpal err_fn 仅 eprintln(audio.rs:107), Handy 有 stream_error+needs_reopen 自愈(recorder.rs:456)
 9. 采样格式仅 F32/I16(audio.rs:134), Handy 支持 U8/I8/I16/I32/F32
 10. 极简协调器无防抖(键抖动极快连按多启停; macOS auto-repeat 已阻止, 残余风险低)
-11. 主线程调度失败兜底 paste_cmd_v 未先写文本(pipeline.rs:233); hud.ts partial 监听注册两次(49,110 诊断残留); 托盘 set_recording(true) 无调用(录音不变红)
+11. 主线程调度失败兜底 paste_cmd_v 未先写文本(pipeline.rs:233); hud.ts partial 监听注册两次(49,110 诊断残留); 托盘曾设计成随录音染红(`set_recording(true)` 无调用)——2026-09-18 用户裁决改为图标恒定不变，相关调用点与调度函数已删（见 SPEC §3.7）
 
 ## Top 5 修复(风险×成本)
 1→5 全部本轮修: ①clipboard_only 补写剪贴板 ②桥线程阻塞 send+Finish 失败 emit Error ③flush_pending 同步化 ④Esc 转写中写 CANCELLED_GEN ⑤超时 3s→30s

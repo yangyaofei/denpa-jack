@@ -523,8 +523,8 @@ pub fn queue_clear(app: tauri::AppHandle) -> usize {
 /// 关闭失败提示(浮窗「关闭」按钮)
 /// 语义: 只是不再提示; 失败段的音频与原文已在历史里(delivered="failed"), 可去主窗重跑
 #[tauri::command]
-pub fn queue_dismiss(app: tauri::AppHandle) -> usize {
-    crate::segment_queue::dismiss_failed(&app)
+pub fn queue_dismiss() -> usize {
+    crate::segment_queue::dismiss_failed()
 }
 
 #[derive(serde::Serialize)]

@@ -218,10 +218,9 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
     });
 }
 
-/// 会话清理: stop/abort 共用——注销 esc/托盘复位/提示音, 一个不漏
+/// 会话清理: stop/abort 共用——注销 esc/提示音, 一个不漏
 fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cue>) {
     unregister_esc(app);
-    crate::tray_events::set_tray_recording(app, false);
     if let Some(cue) = cue {
         let _ = settings::get_config(app.clone()).map(|c| {
             if c.audio_feedback {
@@ -231,13 +230,12 @@ fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cu
     }
 }
 
-/// 录音开始的可见反馈: 浮窗 + 托盘图标染红。
+/// 录音开始的可见反馈: 显示浮窗。
 ///
 /// 开启「截图作为纠错上下文」时由采集线程在截图完成后调用——**先拍画面, 再显示我们自己的 UI**,
-/// 否则截图里会带上"录音中"浮窗（用户实测反馈）。托盘染红同样延后, 避免菜单栏状态被拍进去。
+/// 否则截图里会带上"录音中"浮窗（用户实测反馈）。
 fn show_recording_ui(app: &tauri::AppHandle) {
     crate::hud::recording_started(app);
-    crate::tray_events::set_tray_recording(app, true);
 }
 
 /// 采集线程用: 会话已结束（用户已松开）就不再补显示, 避免迟到的浮窗。
@@ -469,7 +467,6 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 松手 = 告诉 HUD 一个事实:"这一条录完了"。阶段/文案/延时全部由 HUD 自己决定;
     // 这里不再直接改快照, 也不再重复 show 窗口(重复 show 就是用户看到的"瞬间消失再出现")。
     crate::hud::recording_ended(&app);
-    crate::tray_events::set_tray_transcribing(&app, true);
     Ok(())
 }
 

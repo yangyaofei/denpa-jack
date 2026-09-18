@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "denpa-jack"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "base64 0.23.1",
  "block2",

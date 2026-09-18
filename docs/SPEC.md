@@ -334,11 +334,10 @@
 ### 3.7 托盘（tray.rs 159 行 + tray_events.rs 100 行）
 
 - objc2 手写 NSStatusItem（tauri tray API 在本环境不显示，3 轮失败后弃用）；`mic.fill` 模板图标 18x18，tooltip"Denpa Jack"。
-- 三态图标：**细线 template 位图 + 系统染色**（队列化之前的效果）。
-  - 待命 `menubar.png`（template，随浅/深菜单栏自动反色，无染色）；录音 `menubar-rec.png` + `systemRedColor`；转写保持待命位图 + `systemYellowColor`。
-  - 映射只有一处 `set_status_icon(item, TrayIcon)`，创建与切换共用；状态优先级 转写 > 录音 > 待命。
-  - 修的是原逻辑里的一处残留：原来 `set_recording` 设红色、`set_transcribing(false)` 清成 `None`，两个动作改同一染色通道，转写结束会把录音染色一起清掉。
-  - 背景：2026-09-18 我曾把三态改成"烘焙彩色位图 + 加粗字形"，属另起一套设计（用户否掉，见 `AGENTS.md` 铁律 10）。
+- 图标：**恒定一张细线 template 图**（`src-tauri/icons/menubar.png`，随浅/深菜单栏自动反色），**不随录音/转写切换**。
+  - 状态反馈由浮窗负责（`● 录音中` / `… 转写中` / `✦ AI 润色中`），菜单栏图标不参与状态表达。
+  - 历史：C41 定义了 `set_recording`/`set_transcribing`（改 `systemRed`/`systemYellow` 染色），但 `set_recording(true)` 从未被调用、其余调用在非主线程静默失效 → **实际效果恒定不变**；`d4989f3`（"托盘三态修复"）补上主线程调度与四处调用点后图标开始变色；`affa729` 又把三态改成"烘焙彩色位图 + 加粗字形"（叠加设计）；`d28f555` 回到细线字形但仍在变色。
+  - 2026-09-18 用户裁决：回到"图标不变"（"以前图标是不变的，为什么它一定要变？"），删除 `set_tray_recording` / `set_tray_transcribing` 两个调度函数与全部调用点（`recording.rs` 3 处、`segment_queue.rs` 4 处）。
 - 菜单（tag → 事件）：状态行（禁用，"状态: 待命 (按住 {hotkey} 说话)"/"状态: 录音中…"）｜"录音 (松开转写)"(6)｜"LLM 纠错(慢速高保真)"(1，带勾选态)｜"仅复制不粘贴"(2，带勾选态)｜"打开数据目录"(3)｜"打开词典配置"(7)｜"设置…"(4)｜"退出"(5)。
 - 行为：
   - 6：发协调器信号 `send_ctrl(!busy)`（点按式切换，与快捷键同源单一真源）。
