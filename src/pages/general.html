@@ -96,14 +96,10 @@
           </div>
           <div class="row">
             <div>
-              <div class="row-title">输出后追加回车</div>
-              <div class="row-hint">每段话粘贴完再补发回车：1 = 换行一次，2 = 空一行……。仅在目标输入框确实读到了内容后才发（避免提交旧内容）；关闭则不发</div>
+              <div class="row-title">输出后追加换行</div>
+              <div class="row-hint">在交付文本末尾附加换行数：0 = 不追加，1 = 换行一次，2 = 空一行…。只改输出的文本本身，不发送回车键（不会替你提交/发送消息）</div>
             </div>
-            <div class="btns">
-              <input class="inp num" type="number" min="1" max="10" x-model.number="cfg.auto_submit_count"
-                     :disabled="!cfg.auto_submit" @change="saveCfg()" />
-              <input type="checkbox" class="switch" x-model="cfg.auto_submit" @change="saveCfg()" />
-            </div>
+            <input class="inp num" type="number" min="0" max="10" x-model.number="cfg.trailing_newlines" @change="saveCfg()" />
           </div>
           <div class="row">
             <div>

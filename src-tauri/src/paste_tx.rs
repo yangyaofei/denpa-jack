@@ -159,9 +159,6 @@ struct Pending {
     saved_image: Option<tauri::image::Image<'static>>,
     change_count: NSInteger,
     provider: Option<Retained<PasteProvider>>,
-    auto_submit: bool,
-    /// 追加回车次数(1..=10); 仅 auto_submit 为真时有效
-    auto_submit_count: u32,
     /// restore_clipboard=false → 保留转写文本为普通文本(剪贴板管理器可记录)
     preserve_transcript: bool,
     transcript: String,
@@ -186,15 +183,8 @@ fn settle(pending: &Arc<Mutex<Pending>>, app_handle: &AppHandle) {
         Err(_) => (false, true),
     };
 
-    // Enter 只在目标确实读到后发(防止提交旧内容); 次数由配置决定(1=换行, 2=空一行…)
-    let enters = enter_count(p.auto_submit, p.auto_submit_count);
-    if enters > 0 && receipt_seen {
-        let _ = app_handle.run_on_main_thread(move || {
-            for _ in 0..enters {
-                let _ = crate::deliver::cg_key_tap(0x24, 0); // kVK_Return 无修饰
-            }
-        });
-    }
+    // 不再发回车键：曾有过 auto_submit（回执后补发 Return），但那等于替用户"提交/发送"内容，
+    // 用户明确否掉。要"末尾换行"应该改交付文本本身（见 pipeline::trailing_newlines_text）。
 
     let still_ours = !ownership_lost
         && NSPasteboard::generalPasteboard().changeCount() == p.change_count;
@@ -328,8 +318,6 @@ pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Resul
         saved_image,
         change_count,
         provider: Some(provider),
-        auto_submit: cfg_auto_submit(cfg),
-        auto_submit_count: cfg.auto_submit_count,
         preserve_transcript: !cfg.restore_clipboard,
         transcript: text.to_string(),
         settled: false,
@@ -339,35 +327,4 @@ pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Resul
     }
     spawn_waiter(pending, app_handle.clone());
     Ok(())
-}
-
-fn cfg_auto_submit(cfg: &Config) -> bool {
-    cfg.auto_submit
-}
-
-/// 追加回车的次数：开关关闭 → 0（不追加）；开启 → 数量夹到 1..=10。
-///
-/// 上限 10 的理由：这是"每说一句就补 N 次回车"的全局行为，误配成很大的值会在每个输入框里刷屏；
-/// 下限 1 的理由：开关已表达"不要回车"，开启状态下 0 与 1 同义，取 1 避免"开了却没反应"。
-fn enter_count(enabled: bool, count: u32) -> u32 {
-    if enabled {
-        count.clamp(1, 10)
-    } else {
-        0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::enter_count;
-
-    #[test]
-    fn enter_count_rules() {
-        assert_eq!(enter_count(false, 3), 0, "关闭时一律不追加");
-        assert_eq!(enter_count(false, 0), 0);
-        assert_eq!(enter_count(true, 0), 1, "开启时 0 与 1 同义");
-        assert_eq!(enter_count(true, 1), 1);
-        assert_eq!(enter_count(true, 2), 2);
-        assert_eq!(enter_count(true, 99), 10, "上限 10");
-    }
 }

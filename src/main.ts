@@ -38,7 +38,7 @@ export interface Config {
   auto_check_update: boolean;
   llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
-  keep_in_clipboard: boolean; auto_submit: boolean; auto_submit_count: number;
+  keep_in_clipboard: boolean; trailing_newlines: number;
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
   extra_tail_ms: number; mic_device_uid: string; mic_priority: string[];
@@ -753,7 +753,7 @@ function describeCombo(s: string): string {
       ], normalizations: [], active_llm_id: "l1", active_asr_id: "a1",
       use_llm_correction: false, clipboard_only: false,
       activation: "hold", audio_feedback: true, restore_clipboard: true,
-      keep_in_clipboard: false, auto_submit: false, auto_submit_count: 1,
+      keep_in_clipboard: false, trailing_newlines: 0,
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
       llm_timeout_secs: 30, llm_max_tokens: 0, llm_retries: 2,

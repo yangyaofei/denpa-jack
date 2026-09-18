@@ -166,13 +166,16 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     }
 
     // 3) 交付: 剪贴板(+粘贴)
+    //    `trailing_newlines` 只改"交付出去的文本"(末尾补换行), 不改历史里的原文——
+    //    因为它是"输出形态"而不是"识别结果"。发真回车键是另一回事(会把内容直接提交出去), 不做。
+    let out_text = trailing_newlines_text(&final_text, cfg.trailing_newlines);
     crate::log::elog(&format!("[pipeline] deliver begin clip_only={}", cfg.clipboard_only));
     let cancelled = ho.gen != 0 && ho.gen == CANCELLED_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let delivered = if cancelled {
         crate::log::elog("[pipeline] 会话已被取消(esc): 只入历史不粘贴");
         "cancelled".to_string()
     } else {
-        match deliver(&app, &final_text, cfg.clipboard_only, ho.focus.clone()) {
+        match deliver(&app, &out_text, cfg.clipboard_only, ho.focus.clone()) {
         Ok(d) => d,
         Err(e) => {
             warning = Some(match warning.take() {
@@ -300,4 +303,33 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// 交付文本 = 识别结果 + 末尾 N 个换行（配置 `trailing_newlines`）。
+///
+/// 只在交付这一步生效：换行是"输出形态"，不是"识别结果"，所以历史记录仍存原文，
+/// 从历史重跑时会按当时的配置重新拼一次。
+/// 上限 10：每句话都会追加，误配过大会把输入框撑满空行。
+fn trailing_newlines_text(text: &str, n: u32) -> String {
+    match n.min(10) {
+        0 => text.to_string(),
+        k => format!("{text}{}", "\n".repeat(k as usize)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trailing_newlines_text;
+
+    #[test]
+    fn trailing_newlines_rules() {
+        assert_eq!(trailing_newlines_text("你好", 0), "你好", "0 = 不追加");
+        assert_eq!(trailing_newlines_text("你好", 1), "你好\n", "1 = 换行一次");
+        assert_eq!(trailing_newlines_text("你好", 2), "你好\n\n", "2 = 空一行");
+        assert_eq!(
+            trailing_newlines_text("你好", 99),
+            "你好\n\n\n\n\n\n\n\n\n\n",
+            "上限 10"
+        );
+    }
 }

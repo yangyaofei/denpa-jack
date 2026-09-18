@@ -54,7 +54,7 @@
      - 末次回执后 200ms 安静期才恢复原剪贴板；`changeCount`/ownership 守卫绝不覆盖用户新复制。
      - 恢复硬上限 8s（转写文本最多多留一会，绝不贴旧内容）；chord 注入失败 500ms 快速恢复。
      - 主线程调度失败兜底：裸 CGEvent CmdV。
-  - `restore_clipboard=false` → 转写文本保留为普通剪贴板内容；`auto_submit=true` → 确认目标已读取后补发回车，次数由 `auto_submit_count`（1..=10）决定（1=换行，2=空一行…）。
+  - `restore_clipboard=false` → 转写文本保留为普通剪贴板内容；`trailing_newlines`（0–10）→ 交给交付的文本末尾追加这么多个换行（只改文本，不发回车键——不会替用户提交/发送消息）。
 
 ### 2.2 主界面（index.html）
 
@@ -264,7 +264,7 @@
   - PasteProvider 自定义类：`pasteboard:provideDataForType:` 供数据并记录回执；`pasteboardChangedOwner:` 标记 ownership 丢失。
   - `reliable_paste`（主线程调用）：flush 旧事务 → 备份原剪贴板（文本/图片）→ 发布延迟供数据（public.utf8-plain-text + 3 种隐藏类型，记 changeCount）→ 注入 CmdV chord → 注册 Pending + 起 waiter。
   - waiter 15ms 轮询 evaluate：ownership 丢失/取消→Finish；末次回执（≥注入时刻）后 200ms 安静期→Finish；超时（注入失败 500ms / 常规 8s）→Finish。
-  - settle（恰好一次，主线程）：auto_submit 且确认回执 → 按 `auto_submit_count` 发 N 次无修饰 Return（kVK_Return，防提交旧内容）；changeCount 仍 ours 且 restore_clipboard → 恢复原剪贴板（文本/图片/清空）；restore_clipboard=false → 转写文本保留为普通文本。
+  - settle（恰好一次，主线程）：changeCount 仍 ours 且 restore_clipboard → 恢复原剪贴板（文本/图片/清空）；restore_clipboard=false → 转写文本保留为普通文本。不发任何按键（历史上的 auto_submit 补发 Return 已删，见 §2.1）。
 - `history.rs`（137 行）：
   - `HistoryRecord`：ts/engine/raw/final_text/llm_used/delivered/audio_path/duration_ms/warning。
   - append（JSONL 追加）/ recent（倒序截取）/ enforce_limit（0=不限，保留尾部 N 条）。
@@ -394,7 +394,7 @@
   - `normalizations`：pattern / replacement（正则规范化规则）。
   - `hotkey`：key(默认 f5) / ctrl / alt / cmd / shift；保存时键名归一化为 keyboard_types Code 格式（F5/KeyA/Space/Digit1/Comma/ArrowUp…）。
   - 行为开关与数值：
-    - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`auto_submit`（false）、`auto_submit_count`（默认 1，仅 auto_submit 为真时生效，夹到 1..=10）。
+    - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`trailing_newlines`（默认 0 = 不追加，夹到 0..=10，只改交付文本不改历史原文）。
     - `screenshot_context`（默认 false）：把当前屏幕截图作为纠错上下文。详见 §3.5.1。
     - `llm_timeout_secs`（默认 30）、`llm_max_tokens`（默认 0 = 不传该字段，用服务端默认）、`llm_retries`（默认 2）：LLM 调用参数，大模型页「调用参数」卡可改。详见 §3.5.2。
     - `auto_check_update`（默认 true）：启动时自动检查更新（只报告，不自动安装）。详见 §3.11。
