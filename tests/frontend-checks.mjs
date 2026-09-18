@@ -135,9 +135,10 @@ check("hud.html 当前文字可多行且有滚动上限(110px, 与队列化之�
 // 存活规则(issue #3/#4): 正常完成 350ms 收起; 带警告或只剩失败 2500ms;
 // failed 不得进入 busy 判定(否则永不收起)
 check(
-  "hud.ts 存活规则: 完成 350ms / 警告与只剩失败 2500ms",
-  /scheduleHide\(d\.warning \? 2500 : 350\)/.test(hudTs) &&
-    /scheduleHide\(failed \? 2500 : 350\)/.test(hudTs) &&
+  "hud.ts 存活规则: 完成 350ms / 警告与只剩失败 2500ms(统一排程一次)",
+  /hideAfter = d\.warning \? 2500 : 350/.test(hudTs) &&
+    /hideAfter = failed \? 2500 : 350/.test(hudTs) &&
+    /if \(!busy && hideAfter !== null\) scheduleHide\(hideAfter\)/.test(hudTs) &&
     !/\|\| failed/.test(hudTs),
 );
 check(
@@ -195,6 +196,6 @@ check(
     /crate::hud::no_speech\(&app, &payload\)/.test(readFileSync("src-tauri/src/engines.rs", "utf8")),
 );
 check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/recording.rs", "utf8")));
-check("录音中的提示不触发收窗", /if \(!recording\) scheduleHide\(2500\)/.test(hudTs));
+check("录音中的提示不触发收窗(静音提醒走 msg 但不排程收窗)", /if \(!recording\) hideAfter = 2500/.test(hudTs));
 
 process.exit(fail ? 1 : 0);

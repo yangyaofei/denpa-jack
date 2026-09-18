@@ -168,6 +168,11 @@ async function pollOnce() {
     fill.style.width = recording ? `${Math.max(4, lv * 100)}%` : "0";
     fill.className = recording && lv > 0.9 ? "fill hot" : "fill";
 
+    // 收窗时长由"本轮发生的事实"决定一次(不再各处各自 scheduleHide)。
+    // 原因: 多个分支各自排程会互相覆盖——"没听清"提示的 2.5s 曾被末尾的存活规则覆盖成 350ms,
+    // 提示一闪而过(用户报"没听清一直显示"的另一面: 时长完全不由提示决定)。
+    let hideAfter: number | null = null;
+
     // 状态行
     if (recording) {
       setState("", "● 录音中", false);
@@ -180,9 +185,9 @@ async function pollOnce() {
     }
     if (s.msg) {
       setState("idle", s.msg, false);
-      // 一次性提示 2.5s(如"录音太短已丢弃"/"没听清(转写为空)")。
-      // 但录音中不参与窗口收起: 静音提醒也走 msg, 而录音还在进行(收窗由阶段决定)。
-      if (!recording) scheduleHide(2500);
+      // 一次性提示(如"没听清(转写为空)"/"录音太短已丢弃")留 2.5s;
+      // 录音中不排程(静音提醒也走 msg, 但录音还在进行, 收窗由阶段决定)。
+      if (!recording) hideAfter = 2500;
     }
 
     // 左栏: 当前段(录音中显示实时文字, 始终滚到最新)
@@ -212,7 +217,7 @@ async function pollOnce() {
       // 引擎/交付级错误(asr-error): 同样只在没录音时提示, 2.5s 后自动收走(与失败段同规则)
       setState("err", `⚠️ ${String(s.err).slice(0, 60)}`);
       showFail(!recording);
-      // 2.5s 由 showFail 里的定时器负责; 这里不再额外 scheduleHide(否则可能与收走时序打架)
+      if (!recording) hideAfter = 2500;
     }
     // 存活规则(用户定稿):
     //   busy 只算"真的有活在跑"(录音中/转写中/排队中) —— 失败段不算"活",
@@ -229,12 +234,14 @@ async function pollOnce() {
       if (sig !== lastFinal) {
         lastFinal = sig;
         setState(d.warning ? "idle" : "ok", d.warning ? `⚠️ ${String(d.warning).slice(0, 40)}` : `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"}`);
-        scheduleHide(d.warning ? 2500 : 350);
+        hideAfter = d.warning ? 2500 : 350;
       }
     } else if (s.version !== 0) {
       // 规则 3: 只剩失败段 → 2.5s 提示后收起(与"录音太短已丢弃"同长)
-      scheduleHide(failed ? 2500 : 350);
+      hideAfter = failed ? 2500 : 350;
     }
+    // 统一排程一次(见本轮开头 hideAfter 的说明)
+    if (!busy && hideAfter !== null) scheduleHide(hideAfter);
   } catch {
     // poll 失败静默(窗口隐藏期间)
   }

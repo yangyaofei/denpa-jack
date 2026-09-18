@@ -334,7 +334,11 @@
 ### 3.7 托盘（tray.rs 159 行 + tray_events.rs 100 行）
 
 - objc2 手写 NSStatusItem（tauri tray API 在本环境不显示，3 轮失败后弃用）；`mic.fill` 模板图标 18x18，tooltip"Denpa Jack"。
-- 三态图标：默认（模板色）/ 红=录音（set_recording）/ 黄=转写（set_transcribing），均 setContentTintColor 主线程执行。
+- 三态图标：**烘焙好的彩色位图 + 白色描边**，不用 `setContentTintColor` 染色。
+  - 待命 `menubar.png`（黑，template，随浅/深菜单栏自动反色）；录音 `menubar-rec-red.png`（红）；转写 `menubar-trans-amber.png`（琥珀）。
+  - 两个彩色位图为非 template（颜色写死在像素里）；映射只有一处 `set_status_icon(item, TrayIcon)`，创建与切换共用。
+  - 背景（issue #11）：原来三态靠"template 位图 + 红/黄染色"，桌面壁纸是深红、菜单栏半透明时红色图标几乎看不出（用户报"录音时图标消失/变黑"）。
+  - 状态优先级：转写 > 录音 > 待命（`MacTray.recording/transcribing` 两个标志合成）。
 - 菜单（tag → 事件）：状态行（禁用，"状态: 待命 (按住 {hotkey} 说话)"/"状态: 录音中…"）｜"录音 (松开转写)"(6)｜"LLM 纠错(慢速高保真)"(1，带勾选态)｜"仅复制不粘贴"(2，带勾选态)｜"打开数据目录"(3)｜"打开词典配置"(7)｜"设置…"(4)｜"退出"(5)。
 - 行为：
   - 6：发协调器信号 `send_ctrl(!busy)`（点按式切换，与快捷键同源单一真源）。

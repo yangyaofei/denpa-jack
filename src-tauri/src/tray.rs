@@ -8,7 +8,7 @@ use objc2::runtime::NSObject;
 use objc2::define_class;
 use objc2::{sel, AnyThread, DefinedClass, MainThreadMarker};
 use objc2_app_kit::{
-    NSColor, NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem,
+    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem,
     NSStatusBar, NSStatusItem,
 };
 use objc2_foundation::{NSData, NSString};
@@ -29,48 +29,72 @@ define_class!(
     }
 );
 
+/// 托盘图标三态。**状态用烘焙好的彩色位图表达, 不依赖系统染色**(contentTintColor)。
+/// 原因(用户实测): 桌面壁纸是深红 + 菜单栏半透明时, "template 位图 + 红色染色"几乎看不出,
+/// 表现为"录音时图标消失/变黑"。彩色位图把颜色写进像素, 再加一圈白色描边保证任何底色上都可辨。
+#[derive(Clone, Copy, PartialEq)]
+pub enum TrayIcon {
+    Idle,
+    Recording,
+    Transcribing,
+}
+
+/// 唯一的状态→图标映射(创建时与三态切换都走这里, 保证一致)
+fn set_status_icon(item: &NSStatusItem, state: TrayIcon) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(btn) = item.button(mtm) else { return };
+    let (png, template): (&[u8], bool) = match state {
+        // 待命: 黑色 template(随浅/深色菜单栏自动反色)
+        TrayIcon::Idle => (include_bytes!("../icons/menubar.png"), true),
+        // 录音: 红 + 白描边(非 template, 颜色写死)
+        TrayIcon::Recording => (include_bytes!("../icons/menubar-rec-red.png"), false),
+        // 转写: 琥珀 + 白描边
+        TrayIcon::Transcribing => (include_bytes!("../icons/menubar-trans-amber.png"), false),
+    };
+    let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
+    let Some(icon) = (unsafe { NSImage::initWithData(NSImage::alloc(), &data) }) else { return };
+    unsafe {
+        icon.setTemplate(template);
+        icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
+        btn.setImage(Some(&icon));
+        // 彩色位图自带颜色: 清掉染色, 避免 template 色遮挡(原来这里染红/黄, 见上)
+        btn.setContentTintColor(None);
+    }
+}
+
 pub struct MacTray {
     item: Retained<NSStatusItem>,
     /// 持有 TrayHandler 防止其被释放: 菜单项的 target 是弱引用, 释放后菜单动作失效
     #[allow(dead_code)]
     handler: Retained<TrayHandler>,
+    /// 两个状态标志: 三态图标由二者共同决定(转写优先于录音, 都没有=待命)
+    recording: std::cell::Cell<bool>,
+    transcribing: std::cell::Cell<bool>,
 }
 
 impl MacTray {
-    /// 录音态: 图标染红(与 Swift 版一致)
-    pub fn set_recording(&self, on: bool) {
-        if let Some(mtm) = MainThreadMarker::new() {
-            if let Some(btn) = self.item.button(mtm) {
-                let png: &[u8] = if on {
-                    include_bytes!("../icons/menubar-rec.png")
-                } else {
-                    include_bytes!("../icons/menubar.png")
-                };
-                let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
-                if let Some(icon) = unsafe { NSImage::initWithData(NSImage::alloc(), &data) } {
-                    unsafe {
-                        icon.setTemplate(true);
-                        let _ = icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
-                        btn.setImage(Some(&icon));
-                        let tint = if on { Some(NSColor::systemRedColor()) } else { None };
-                        btn.setContentTintColor(tint.as_deref());
-                    }
-                }
-            }
-        }
+    /// 按当前标志刷新图标(唯一入口)
+    fn refresh_icon(&self) {
+        let state = if self.recording.get() {
+            TrayIcon::Recording
+        } else if self.transcribing.get() {
+            TrayIcon::Transcribing
+        } else {
+            TrayIcon::Idle
+        };
+        set_status_icon(&self.item, state);
     }
 
+    /// 录音态
+    pub fn set_recording(&self, on: bool) {
+        self.recording.set(on);
+        self.refresh_icon();
+    }
+
+    /// 转写态
     pub fn set_transcribing(&self, on: bool) {
-        if let Some(mtm) = MainThreadMarker::new() {
-            if let Some(btn) = self.item.button(mtm) {
-                let tint = if on {
-                    Some(&*NSColor::systemYellowColor())
-                } else {
-                    None
-                };
-                btn.setContentTintColor(tint);
-            }
-        }
+        self.transcribing.set(on);
+        self.refresh_icon();
     }
 }
 // SAFETY: NSStatusItem/TrayHandler 均为主线程对象; 所有创建/销毁都经 run_on_main_thread 保证在主线程
@@ -121,19 +145,10 @@ impl MacTray {
         let handler: Retained<TrayHandler> = unsafe { msg_send![super(alloc.set_ivars(tx)), init] };
         let status_bar = unsafe { NSStatusBar::systemStatusBar() };
         let item = unsafe { status_bar.statusItemWithLength(-1f64) }; // NSVariableStatusItemLength
-        // C41: 菜单栏图标沿用 Swift 版自绘(声波→箭头→文本框), @2x 位图 + template 适配深浅色
-        let png: &[u8] = if recording {
-            include_bytes!("../icons/menubar-rec.png")
-        } else {
-            include_bytes!("../icons/menubar.png")
-        };
-        let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
-        let icon = unsafe { NSImage::initWithData(NSImage::alloc(), &data) }.ok_or("menubar.png 解码失败")?;
-        unsafe {
-            icon.setTemplate(true);
-            icon.setSize(objc2_foundation::NSSize::new(24.5, 16.0));
-            if let Some(btn) = item.button(mtm) {
-                btn.setImage(Some(&icon));
+        // C41: 菜单栏图标沿用 Swift 版自绘(声波→箭头→文本框); 三态映射统一走 set_status_icon
+        set_status_icon(&item, if recording { TrayIcon::Recording } else { TrayIcon::Idle });
+        if let Some(btn) = item.button(mtm) {
+            unsafe {
                 btn.setToolTip(Some(&*NSString::from_str("Denpa Jack")));
             }
         }
@@ -166,6 +181,11 @@ impl MacTray {
         unsafe {
             item.setMenu(Some(&menu));
         }
-        Ok(Self { item, handler })
+        Ok(Self {
+            item,
+            handler,
+            recording: std::cell::Cell::new(recording),
+            transcribing: std::cell::Cell::new(false),
+        })
     }
 }
