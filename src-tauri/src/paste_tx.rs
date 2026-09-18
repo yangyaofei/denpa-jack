@@ -302,7 +302,7 @@ pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Resul
     if change_count <= 0 {
         return Err("declareTypes:owner: failed".to_string());
     }
-    crate::log::elog("[paste-tx] 已发布延迟供数据(lazy promise)(changeCount {change_count})");
+    crate::log::elog(&format!("[paste-tx] 已发布延迟供数据(lazy promise)(changeCount {change_count})"));
 
     if let Ok(mut st) = state.lock() {
         st.injected_at = Some(Instant::now());
