@@ -51,15 +51,15 @@ function setState(cls: string, msg: string, keepText = true) {
   failActions.classList.remove("show");
 }
 
-// 尺寸上报: 面板宽(单栏/两栏)与内容高度都告诉 Rust, 由它设置窗口尺寸并重新贴屏
-let lastSize = "";
-function pushResize() {
+// 宽度切换: 单栏 480 ↔ 出现队列时 664。只上报宽度——
+// 高度固定(窗口 200), 长文本在框内滚动; 位置由"按下时定位一次"决定, 之后再不动。
+// (原版 hud_resize 在队列化之前是死代码、且按高度改窗口会让位置漂, 已删)
+let lastWidth = 0;
+function pushWidth() {
   const w = hud.classList.contains("hasqueue") ? 664 : 480;
-  const h = Math.ceil(hud.getBoundingClientRect().height);
-  const sig = `${w}x${h}`;
-  if (sig === lastSize) return;
-  lastSize = sig;
-  invoke("hud_resize", { width: w, height: h }).catch(() => {});
+  if (w === lastWidth) return;
+  lastWidth = w;
+  invoke("hud_resize", { width: w }).catch(() => {});
 }
 
 // 右栏: 队列列表(只有状态图标 + 文字; 失败行标红)
@@ -202,6 +202,7 @@ async function pollOnce() {
     const q = recording ? qAll.filter((r) => r.state !== "failed") : qAll;
     renderQueue(q);
     hud.classList.toggle("hasqueue", q.length > 0);
+    pushWidth(); // 只改宽度(480↔664); 高度固定, 位置不动
     clearBtn.classList.toggle("show", q.some((r) => r.state === "queued"));
 
     // 失败提示 + 存活规则(录音中不弹失败条, 录完再提示 2.5s 后自动收走)
@@ -234,8 +235,6 @@ async function pollOnce() {
       // 规则 3: 只剩失败段 → 2.5s 提示后收起(与"录音太短已丢弃"同长)
       scheduleHide(failed ? 2500 : 350);
     }
-
-    requestAnimationFrame(pushResize);
   } catch {
     // poll 失败静默(窗口隐藏期间)
   }

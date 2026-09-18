@@ -9,9 +9,13 @@
       body { font-family: -apple-system, "PingFang SC", sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
       /* 浮窗布局(分段队列方案 D, 用户定稿):
          单栏 480px(只有当前段) ↔ 出现队列时 664px(左=当前 / 右=队列)。
-         右栏只在真的排队时才出现, 队列空了就收回 480 —— 不默认占地方。 */
+         右栏只在真的排队时才出现, 队列空了就收回 480 —— 不默认占地方。
+         高度固定(与队列化之前一致): 窗口 480x200 / 664x200, 面板最多 196px,
+         长文本在文本框内滚动(见 .cur-text) —— 不做动态改高, 位置就不会漂。 */
       .hud {
         width: 480px;
+        min-height: 92px;
+        max-height: 196px;
         padding: 12px 16px 14px;
         border-radius: 14px;
         background: rgba(24, 24, 28, 0.94);
@@ -35,10 +39,11 @@
       .hint button.confirm { color: #ff9f0a; border-color: #ff9f0a; }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
       .body { display: flex; margin-top: 8px; min-height: 22px; }
-      /* 左栏: 当前段。正在录音的内容必须能换行、多行显示(用户定则), 最多 8 行后框内滚动 */
+      /* 左栏: 当前段。正在录音的内容必须能换行、多行显示(用户定则), 超出后在框内滚动。
+         max-height 110px 与队列化之前完全一致(那时窗口固定 480x200, 文本区 110px 后滚动)。 */
       .cur { flex: 1; min-width: 0; }
       .cur-text { font-size: 15px; line-height: 1.45; color: #f2f2f7; word-break: break-all;
-                  max-height: 174px; overflow-y: auto; }
+                  max-height: 110px; overflow-y: auto; }
       .cur-text:empty::before { content: "…"; color: #636366; }
       .cur-text::-webkit-scrollbar { width: 3px; }
       .cur-text::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 2px; }

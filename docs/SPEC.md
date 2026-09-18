@@ -313,7 +313,9 @@
   - `show_hud_msg`：内容提示时确保窗口可见（不重新定位）。
   - `hide_hud`：隐藏；调用入口只有前端 `hud_hide`。
 - 最短显示守卫（`overlay::MIN_SHOW_MS = 400ms`）：`hud_hide` 忽略“距上次显示不足 400ms”的隐藏请求。这是为了消灭隐藏定时器与显示之间的竞争（症状：按下不显示、松手才出现——上一次的提示定时器在按下后到期，把刚显示的窗口 hide 掉并清空快照）。
-- 尺寸变化：`hud_resize` 只改尺寸，并保持**水平中心 + 底边**不动（原点在左下，y 不碰；x 补半个宽度差）。绝不重新贴屏——重新定位会把窗口按光标重摆，在“松手 → 结果到达”的几百毫秒里连摆两三次，视觉上就是“瞬间消失再出现、位置也不对”。
+- 尺寸：**固定**。窗口 `inner_size(480, 200)`；出现队列时宽度切到 664（CSS `transition: width`），高度始终 200。
+  - 长文本在文本框内滚动（`.cur-text { max-height: 110px; overflow-y: auto }`）——与队列化之前完全一致（当时窗口也是固定 480x200、文本区 110px 后滚动）。
+  - 不做动态改高：队列化时加的"按内容上报高度→改窗口→重新贴屏"这条链路已删除（`hud_resize` 命令、`overlay::resize_window`、前端的尺寸上报）。它会让窗口在"松手 → 结果到达"的几百毫秒里连改两三次位置/高度，正是用户报的"位置跟原来不完全一样"。
 - 位置：按下时 `position_hud_at_cursor` 定位一次。定位链全 NS 坐标系（光标 → 光标所在 NSScreen → 屏内水平居中、垂直按配置 bottom/top/center），越界拒绝放置并记日志；定位必须主线程。
 - 内容与存活（`src/hud.ts`，150ms 轮询 `hud_poll`，version 去重）：
   - 录音中：状态行“● 录音中” + 实时文字（逐字滚动）+ 电平条（仅在 `status==="recording"` 时显示，其余归零）。
@@ -368,7 +370,7 @@
   - 录音：`recording_start` / `recording_stop` / `recording_abort`（统一发协调器信号）。
   - LLM：`list_llm_models` / `llm_selftest` / `get_default_prompt`。
   - 历史：`get_history` / `clear_history` / `copy_text` / `rerun_history`（后台线程重放）/ `retry_last`（AppState.last_audio，兜底历史最新音频）。
-  - HUD：`hud_hide` / `hud_resize`。
+  - HUD：`hud_hide` / `hud_poll`（尺寸固定，无 resize 命令）。
   - 窗口/配置：`open_settings_window` / `reapply_hotkey` / `get_config` / `save_config` / `open_config_file` / `open_data_dir` / `dev_nav`（hash 导航）/ `check_permissions`。
   - 自启动：`autostart_enable` / `autostart_disable` / `autostart_status`。
   - 其他：`ping` / `get_hotwords`（预算后热词）/ `ui_log`。

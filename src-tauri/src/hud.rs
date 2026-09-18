@@ -245,9 +245,10 @@ pub fn hide(app: &tauri::AppHandle) {
     crate::overlay::hide_window(app);
 }
 
-/// 前端上报内容尺寸(只改尺寸, 保持水平中心与底边; 见 `overlay::resize_window`)
-pub fn resize(app: &tauri::AppHandle, width: f64, height: f64) {
-    crate::overlay::resize_window(app, width.clamp(480.0, 720.0), height.clamp(92.0, 400.0));
+/// 前端上报浮窗宽度(单栏 480 / 两栏 664)。**只改宽度, 高度固定**:
+/// 高度固定后窗口位置在"按下定位一次"之后就再也不动(用户报过"位置跟原来不完全一样")。
+pub fn resize_width(app: &tauri::AppHandle, width: f64) {
+    crate::overlay::resize_width(app, width.clamp(480.0, 720.0));
 }
 
 /// 前端唯一读接口: 取一份快照。一次性字段(msg/err/finished)取后清。

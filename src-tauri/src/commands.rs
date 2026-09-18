@@ -243,11 +243,10 @@ pub fn autostart_status(app: tauri::AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
 }
 
-// 浮窗高度自适应: 文本变多时调档(长文本看全)
+// 浮窗宽度切换(单栏 480 ↔ 两栏 664)。只改宽度: 高度由窗口固定, 长文本在框内滚动
 #[tauri::command]
-pub fn hud_resize(app: tauri::AppHandle, width: f64, height: f64) {
-    // 尺寸策略(夹取范围 + 保持水平中心/底边, 不重新定位)在 hud/overlay 层
-    crate::hud::resize(&app, width, height);
+pub fn hud_resize(app: tauri::AppHandle, width: f64) {
+    crate::hud::resize_width(&app, width);
 }
 
 /// 当前将使用/已使用的输入设备(uid+name)——设置页"当前输入设备"显示这个。

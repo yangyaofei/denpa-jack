@@ -131,7 +131,7 @@ check(
     !/第\s*\$\{/.test(stripComments(hudTs)),
 );
 check("hud.html 队列按需展开(hasqueue 才 664px)", /\.hud\.hasqueue\s*\{\s*width:\s*664px/.test(hudHtml));
-check("hud.html 当前文字可多行且有滚动上限", /max-height:\s*174px/.test(hudHtml) && /cur-text/.test(hudHtml));
+check("hud.html 当前文字可多行且有滚动上限(110px, 与队列化之前一致)", /max-height:\s*110px/.test(hudHtml) && /cur-text/.test(hudHtml));
 // 存活规则(issue #3/#4): 正常完成 350ms 收起; 带警告或只剩失败 2500ms;
 // failed 不得进入 busy 判定(否则永不收起)
 check(
@@ -140,7 +140,12 @@ check(
     /scheduleHide\(failed \? 2500 : 350\)/.test(hudTs) &&
     !/\|\| failed/.test(hudTs),
 );
-check("hud.ts 尺寸上报 hud_resize(width,height)", /hud_resize",\s*\{\s*width/.test(hudTs));
+check(
+  "浮窗只改宽度(480↔664), 不按内容改高",
+  /invoke\("hud_resize", \{ width: w \}\)/.test(stripComments(hudTs)) &&
+    !/getBoundingClientRect/.test(stripComments(hudTs)) &&
+    !/resize_window/.test(readFileSync("src-tauri/src/overlay.rs", "utf8")),
+);
 check("segment_queue.rs 在 lib.rs 启动 worker", /segment_queue::start\(/.test(lib));
 check(
   "队列不丢段: 失败/清空都先写历史",

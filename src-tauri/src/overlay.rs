@@ -169,8 +169,8 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
         return;
     };
 
-    // 窗口尺寸取实际值: 单栏 480 / 出现队列时 664(分段队列定则), 高度随内容(92..400)。
-    // 不能再写死 480x200 —— hud_resize 之后要按新尺寸保持"水平居中/垂直按配置"
+    // 窗口尺寸取实际值: 单栏 480 / 出现队列时 664(分段队列定则), 高度固定 200。
+    // 高度不做动态调整(见 hud.html 顶部注释): 长文本在框内滚动, 窗口位置就不会漂。
     let size = nsw.frame().size;
     let (ww, wh) = (size.width, size.height);
     // 屏内水平居中, 垂直按配置(NS y 向上: 底部=minY+60)
@@ -235,26 +235,22 @@ pub fn hide_window(app: &tauri::AppHandle) {
     }
 }
 
-/// 改浮窗尺寸(内容变化时上传)。保持"水平中心 + 底边"不动:
-/// 窗口原点在左下, y 不碰即底边不动; x 补半个宽度差。绝不重新定位——
-/// 重新贴屏会在"松手 → 结果到达"的几百毫秒里按光标重摆两三次,
-/// 视觉上就是"瞬间消失再出现、位置也不对"(用户反馈)。
-pub fn resize_window(app: &tauri::AppHandle, w_new: f64, h_new: f64) {
+/// 只改浮窗**宽度**(单栏 480 ↔ 两栏 664)。高度永远不动——位置就不会漂。
+/// 宽度变化时补半个宽度差, 让面板保持水平居中(用户报过"位置跟原来不完全一样")。
+pub fn resize_width(app: &tauri::AppHandle, w_new: f64) {
     if let Some(w) = app.get_webview_window("hud") {
         let scale = w.scale_factor().unwrap_or(1.0);
-        let (old_w_phys, old_h_phys) = w
-            .outer_size()
-            .map(|s| (s.width as f64, s.height as f64))
-            .unwrap_or((w_new * scale, h_new * scale));
+        let Some(old) = w.outer_size().ok() else { return };
+        let old_w_phys = old.width as f64;
         let new_w_phys = w_new * scale;
-        let new_h_phys = h_new * scale;
-        if (new_w_phys - old_w_phys).abs() > 0.5 || (new_h_phys - old_h_phys).abs() > 0.5 {
-            let pos = w.outer_position().ok();
-            let _ = w.set_size(tauri::LogicalSize::new(w_new, h_new));
-            if let Some(pos) = pos {
-                let dx = (old_w_phys - new_w_phys) / 2.0;
-                let _ = w.set_position(tauri::PhysicalPosition::new(pos.x as f64 + dx, pos.y as f64));
-            }
+        if (new_w_phys - old_w_phys).abs() <= 0.5 {
+            return;
+        }
+        let pos = w.outer_position().ok();
+        let _ = w.set_size(tauri::LogicalSize::new(w_new, old.height as f64 / scale));
+        if let Some(pos) = pos {
+            let dx = (old_w_phys - new_w_phys) / 2.0;
+            let _ = w.set_position(tauri::PhysicalPosition::new(pos.x as f64 + dx, pos.y as f64));
         }
     }
 }
