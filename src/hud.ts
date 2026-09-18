@@ -184,9 +184,14 @@ async function pollOnce() {
     }
 
     // 左栏: 当前段(录音中显示实时文字, 始终滚到最新)
+    // 松手瞬间队列里还没有这一段(ASR 结果要几百毫秒后才到), seg_current 会短暂为空——
+    // 此时若把左栏清空, 视觉上就是"回显瞬间消失、结果到了又出现"(用户反馈)。
+    // 规则: 转写中且暂无新文本时, 保留上一份回显; 其余状态(录音重新开始/已结束)才清。
     const cur = s.seg_current;
     const curStr = cur ? String(cur.text || "") : "";
-    if (curText.textContent !== curStr) curText.textContent = curStr;
+    if (curStr || s.status !== "transcribing") {
+      if (curText.textContent !== curStr) curText.textContent = curStr;
+    }
     if (cur && cur.state === "recording") curText.scrollTop = curText.scrollHeight;
 
     // 右栏: 队列(空 → 不显示右栏, 面板收回单栏宽度)

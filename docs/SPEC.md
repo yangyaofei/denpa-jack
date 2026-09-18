@@ -304,21 +304,26 @@
 `day-07-context/artifacts/image-context-usage-findings.md` 用例 5：图里有"基线文档"，输出却是"基座文档"），
 而图里没有的词任何模型都改不对。该节把行为要求写死，并给出正/负两侧的示例。
 
-### 3.6 HUD 浮窗（overlay.rs 141 行 + hud.html + hud.ts）
+### 3.6 HUD 浮窗（overlay.rs + hud.html + hud.ts）
 
-- `overlay.rs`：
-  - `NsPoint` 模块私有类型（NS 坐标系：主屏左下原点，y 向上）——模块外构造不出也消费不了，坐标混用在类型上不可表达（而非靠文档/检测）。
-  - 仅两个构造源：`from_cursor`（NSEvent.mouseLocation）、`in_screen`（屏 frame + 偏移）；`within` 判屏内。
-  - `place`：全仓库唯一的窗口坐标写入点（setFrameOrigin 只准从这里走）。
-  - 定位链全 NS（C41 教训：此前混用 tauri cursor_position 与 monitor.position 跨屏必判错屏）：光标 → 光标所在 NSScreen.frame（miss 回落主屏）→ 屏内水平居中（(宽-480)/2）、垂直按配置（bottom=minY+60 / top=高-200-60 / center=(高-200)/2）。
-  - 运行时越界守卫：复核窗口整体是否落在屏内（±1.0 容差），越界记日志并拒绝放置。
-  - 定位必须主线程（MainThreadMarker + run_on_main_thread 调度）。
-  - `show_hud`：定位 + show + `hud-state=recording`；`show_hud_msg`/`hide_hud`。
-- `hud.ts`（浮窗前端，107 行）：
-  - 生命周期：录音中（逐字滚动+音量条，提示"松开结束 · esc 取消"）→ 松开"… 转写中"→ hud-busy 阶段状态（"✦ AI 润色中…"/"交付中…"）→ asr-final：干净交付立即 `hud_hide`；带 warning → "✓ 已交付 ⚠️ ..." 2.5s 后关。
-  - asr-error：保留浮窗与 partial 文本，显示错误 + 重试按钮（一次，`retried` 标志）+ 关闭按钮。
-  - 音量条：payload/1000×6 倍显示，>0.9 转为橙色。
-- `hud_resize` 命令：按内容调高，480 宽，高 clamp 170-400。
+用户定义的原则（issue #7）：**按下出现、松手按规则延迟消失**。窗口的显隐只由少数几个明确时刻决定，其余一切（文字、队列、尺寸）都只是内容变化。
+
+- 窗口显隐（只三处）：
+  - `overlay::show_hud`（按下）：定位一次 + show + 记录 `LAST_SHOW_MS` + 清空上一次的 partial/finished/err。
+  - `show_hud_msg`：内容提示时确保窗口可见（不重新定位）。
+  - `hide_hud`：隐藏；调用入口只有前端 `hud_hide`。
+- 最短显示守卫（`overlay::MIN_SHOW_MS = 400ms`）：`hud_hide` 忽略“距上次显示不足 400ms”的隐藏请求。这是为了消灭隐藏定时器与显示之间的竞争（症状：按下不显示、松手才出现——上一次的提示定时器在按下后到期，把刚显示的窗口 hide 掉并清空快照）。
+- 尺寸变化：`hud_resize` 只改尺寸，并保持**水平中心 + 底边**不动（原点在左下，y 不碰；x 补半个宽度差）。绝不重新贴屏——重新定位会把窗口按光标重摆，在“松手 → 结果到达”的几百毫秒里连摆两三次，视觉上就是“瞬间消失再出现、位置也不对”。
+- 位置：按下时 `position_hud_at_cursor` 定位一次。定位链全 NS 坐标系（光标 → 光标所在 NSScreen → 屏内水平居中、垂直按配置 bottom/top/center），越界拒绝放置并记日志；定位必须主线程。
+- 内容与存活（`src/hud.ts`，150ms 轮询 `hud_poll`，version 去重）：
+  - 录音中：状态行“● 录音中” + 实时文字（逐字滚动）+ 电平条（仅在 `status==="recording"` 时显示，其余归零）。
+  - 松手后：`status==="transcribing"` 时状态行“… 转写中”；左栏**保留上一份回显**（此时队列里还没这一段，ASR 结果要几百毫秒后才到；清空会造成“回显瞬间消失又出现”）。
+  - 队列总览：出现排队段时切换为左右两栏（480 ↔ 664 宽），左栏当前段、右栏队列（状态图标 + 单行文字；失败行红）。
+  - 存活规则：录音中 / 转写中 / 有排队段 → 不自动收；全部结束 → 350ms 收起；仅剩失败或一次提示（msg、warning）→ 2500ms 收起。
+  - 失败：录音中不显示失败段与失败条；录完提示一次，2500ms 后自动 `queue_dismiss`（音频与原文已在历史，可从历史页重跑）。
+  - 电平条：payload/1000×6 倍显示，>0.9 转橙色。
+- 录音中静音提醒（`recording.rs::spawn_level_loop`）：连续约 2.5s（21 帧 × 120ms）RMS < 10 就提示一次“⚠️ 还没听到声音”；重新出现声音则复位，下一次静音还能再提示。用户要求“没听清不该等松手才说”。
+  - 注意边界：这只能覆盖“没有声音”；“有声音但识别为空”只能在结算时判定（走 `AsrEvent::NoSpeech` → 写历史 + 一次性提示，不进失败队列）。
 
 ### 3.7 托盘（tray.rs 159 行 + tray_events.rs 100 行）
 

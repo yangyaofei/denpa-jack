@@ -168,9 +168,14 @@ pub fn resolve_asr(cfg: &Config) -> Result<(settings::AsrProfile, String), Strin
     Ok((profile, key))
 }
 
-/// 录音中实时音量 → hud 浮窗; 持会话取消令牌, 会话结束后自动退出
+/// 录音中实时音量 → hud 浮窗; 持会话取消令牌, 会话结束后自动退出。
+/// 顺带承担"录音中静音提醒"(用户要求: 没听清不该等松手才说, 过程中就该知道):
+/// level 是 RMS 0-1000 定点; 连续约 2.5s(21 帧 × 120ms)低于阈值就提示一次,
+/// 之后只要重新出现声音就复位(下一次静音还能再提示)。
 fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::AtomicBool>, level: Arc<std::sync::atomic::AtomicU32>) {
     tauri::async_runtime::spawn(async move {
+        let mut silent_frames: u32 = 0;
+        let mut warned = false;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
@@ -179,6 +184,18 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
             let lv = level.load(std::sync::atomic::Ordering::SeqCst);
             crate::hud_set(|h| h.level = lv);
             let _ = Emitter::emit_to(&app, "hud", "asr-level", lv);
+            // 静音阈值: RMS 定点 < 10(浮窗音量条满量程是 167)
+            if lv < 10 {
+                silent_frames += 1;
+                if silent_frames == 21 && !warned {
+                    warned = true;
+                    crate::log::log(&app, "录音中静音提醒: 已连续 2.5s 无输入电平");
+                    crate::overlay::show_hud_msg(&app, "⚠️ 还没听到声音");
+                }
+            } else {
+                silent_frames = 0;
+                warned = false;
+            }
         }
     });
 }
@@ -449,11 +466,10 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     }
     session_cleanup(&app, Some(crate::audio_feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
-    if let Some(w) = app.get_webview_window("hud") {
-        let _ = Emitter::emit_to(&app, "hud", "hud-state", "transcribing");
+    // 松手时不再 show(): 窗口在按下时已定位显示。这里重复 show 会在"内容从回显切到转写中"
+    // 的同一瞬间再刷一次窗口, 视觉上就是"瞬间消失再出现"(用户反馈)。
+    let _ = Emitter::emit_to(&app, "hud", "hud-state", "transcribing");
     crate::hud_set(|h| h.status = "transcribing".into());
-        let _ = w.show();
-    }
     crate::tray_events::set_tray_transcribing(&app, true);
     Ok(())
 }

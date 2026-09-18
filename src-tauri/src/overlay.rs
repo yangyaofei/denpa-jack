@@ -6,6 +6,12 @@ use tauri::{Emitter, Manager};
 
 use crate::log;
 
+/// 浮窗最近一次显示的时刻(毫秒, UNIX_EPOCH)——供 commands::hud_hide 做"最短显示 400ms"守卫
+pub static LAST_SHOW_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 最短显示时长(毫秒): 显示后这段时间内的隐藏请求一律忽略(消灭 hide 定时器与 show 的竞争)
+pub const MIN_SHOW_MS: u64 = 400;
+
 /// 全局显示空间(y 向下, 原点在主显示器左上)的点 —— 与 NSScreen(y 向上)是两套坐标系
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -203,6 +209,16 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
 }
 
 pub fn show_hud(app: &tauri::AppHandle) {
+    // 最短显示守卫的依据: 记录本次显示时刻(毫秒)。前端有多个 hide 定时器来源,
+    // 上一次的定时器可能在"刚按下"之后才到期 → 会把刚显示的窗口又隐藏掉(用户报"按下不显示、松手才出现")。
+    // commands::hud_hide 据此忽略"显示不到 400ms 的隐藏请求"。
+    LAST_SHOW_MS.store(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        std::sync::atomic::Ordering::SeqCst,
+    );
     position_hud_at_cursor(app);
     if let Some(w) = app.get_webview_window("hud") {
         // B42: 根治抢焦点——hud 窗口永不成为 key window(用户实测"抢焦点"后输入光标丢失)
