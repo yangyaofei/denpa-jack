@@ -1,6 +1,6 @@
 [package]
 name = "denpa-jack"
-version = "0.3.7"
+version = "0.3.8"
 description = "Denpa Jack — 未来道具14号机：电波劫持者 (Mirai Gajetto Jūyon-gōki: Denpa Jakku). Push-to-talk dictation for macOS: audio → ASR → dictionary/LLM polish → clipboard."
 authors = ["yangyaofei"]
 edition = "2021"
