@@ -235,6 +235,9 @@ pub struct Config {
     pub extra_tail_ms: u32,
     #[serde(default)]
     pub auto_submit: bool,
+    /// 输出后追加的回车次数（仅当 `auto_submit` 为真时生效，1..=10，超出按边界取值）
+    #[serde(default = "d_auto_submit_count")]
+    pub auto_submit_count: u32,
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
     #[serde(default = "default_history_limit")]
@@ -486,6 +489,8 @@ fn d_min_rec() -> f64 { 0.3 }
 fn d_keep_audio() -> u32 { 50 }
 fn d_llm_timeout() -> u64 { 30 }
 fn d_llm_retries() -> u32 { 2 }
+/// 追加回车次数默认 1（开启开关时"一次换行"，与旧 auto_submit 行为一致）
+fn d_auto_submit_count() -> u32 { 1 }
 pub fn default_config() -> Config {
     Config {
         use_llm_correction: true,
