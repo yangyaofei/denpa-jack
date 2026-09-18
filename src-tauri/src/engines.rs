@@ -2,7 +2,6 @@
 // 交接箱与会话同生命周期: ctrl_start 建, stop 写入, 引擎 Result take——无全局会话状态
 use crate::doubao;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
 
 /// 对当前引擎发命令: 经 AppState 的会话镜像(转写中 abort / 测试通道用)
 pub fn send_current(app: &tauri::AppHandle, cmd: doubao::Cmd) {
@@ -90,20 +89,15 @@ pub fn spawn_session(
                     ("asr-error", t)
                 }
             };
-            // C43: 定向发 hud(全局广播在本机实测不达 webview); 返回值落日志定位投递失败
-            // C43b: 快照轮询源(与 emit 并行, 事件通道失效时由前端拉取)
-            crate::hud_set(|h| match tag {
-                "asr-partial" => h.partial = payload.clone(),
-                "asr-result" => h.status = "transcribing".into(),
-                "asr-nospeech" => h.msg = payload.clone(),
-                "asr-error" => h.err = Some(payload.clone()),
+            // HUD 唯一入口: 这里只报事实(回显/提示/错误), 显示成什么样由 hud.rs 决定。
+            // 旧写法是各层直接改同一份共享快照, 已全部收敛到 hud 模块的接口。
+            match tag {
+                "asr-partial" => crate::hud::partial(&app, &payload),
+                "asr-nospeech" => crate::hud::notify(&app, &payload),
+                "asr-error" => crate::hud::error(&app, &payload),
+                // asr-result: 队列/阶段由 hud 的 poll 现算, 不需要在这里写状态
                 _ => {}
-            });
-            let r = Emitter::emit_to(&app, "hud", &tag, payload);
-            if let Err(e) = &r {
-                crate::log::elog(&format!("[emit] {tag} 投递失败: {e}"));
             }
-            drop(r);
         };
         match provider.as_str() {
             "zhipu" => crate::zhipu_file::run_zhipu_session(api_key, hotwords, rx, emit).await,

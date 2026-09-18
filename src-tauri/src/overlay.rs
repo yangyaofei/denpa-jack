@@ -2,15 +2,9 @@
 // C41: 定位全链路 NS 坐标系(NSEvent.mouseLocation → NSScreen.frame → NSWindow.setFrameOrigin)
 // 此前混用 tauri cursor_position(NS y-up) 与 monitor.position(CG y-down), 跨屏必判错屏。
 use objc2_app_kit::{NSEvent, NSScreen, NSWindow};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use crate::log;
-
-/// 浮窗最近一次显示的时刻(毫秒, UNIX_EPOCH)——供 commands::hud_hide 做"最短显示 400ms"守卫
-pub static LAST_SHOW_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// 最短显示时长(毫秒): 显示后这段时间内的隐藏请求一律忽略(消灭 hide 定时器与 show 的竞争)
-pub const MIN_SHOW_MS: u64 = 400;
 
 /// 全局显示空间(y 向下, 原点在主显示器左上)的点 —— 与 NSScreen(y 向上)是两套坐标系
 #[repr(C)]
@@ -208,23 +202,13 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
     place(nsw, p);
 }
 
-pub fn show_hud(app: &tauri::AppHandle) {
-    // 最短显示守卫的依据: 记录本次显示时刻(毫秒)。前端有多个 hide 定时器来源,
-    // 上一次的定时器可能在"刚按下"之后才到期 → 会把刚显示的窗口又隐藏掉(用户报"按下不显示、松手才出现")。
-    // commands::hud_hide 据此忽略"显示不到 400ms 的隐藏请求"。
-    LAST_SHOW_MS.store(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-        std::sync::atomic::Ordering::SeqCst,
-    );
-    position_hud_at_cursor(app);
+/// 显示浮窗。窗口层的动作: 不定位(定位由 hud.rs 在"按下"时做一次), 不改 HUD 状态(归 hud.rs)。
+/// B42: 根治抢焦点——hud 窗口永不成为 key window(用户实测"抢焦点"后输入光标丢失)
+/// Handy 语义对照(crates/handy/src/macos/overlay.rs:7 FloatingPanel: NSPanel):
+///   nonactivatingPanel ≙ set_focusable(false) ✓
+///   canJoinAllSpaces+fullScreenAuxiliary ≙ visible_on_all_workspaces(全屏 App 上浮窗可见)
+pub fn show_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("hud") {
-        // B42: 根治抢焦点——hud 窗口永不成为 key window(用户实测"抢焦点"后输入光标丢失)
-        // Handy 语义对照(crates/handy/src/macos/overlay.rs:7 FloatingPanel: NSPanel):
-        //   nonactivatingPanel ≙ set_focusable(false) ✓
-        //   canJoinAllSpaces+fullScreenAuxiliary ≙ visible_on_all_workspaces(全屏 App 上浮窗可见)
         let _ = w.set_focusable(false);
         let _ = w.set_visible_on_all_workspaces(true);
         if let Err(e) = w.show() {
@@ -242,21 +226,36 @@ pub fn show_hud(app: &tauri::AppHandle) {
             let focused = w.is_focused().unwrap_or(false);
             log::log(app, &format!("hud show ok visible={vis} focused={focused}"));
         }
-        let _ = Emitter::emit_to(app, "hud", "hud-state", "recording");
-        crate::hud_set(|h| { h.status = "recording".into(); h.partial.clear(); h.finished = None; h.err = None; });
     }
 }
 
-pub fn show_hud_msg(app: &tauri::AppHandle, msg: &str) {
-    if let Some(w) = app.get_webview_window("hud") {
-        let _ = Emitter::emit_to(app, "hud", "hud-msg", msg);
-        let _ = w.show();
-    }
-}
-
-pub fn hide_hud(app: &tauri::AppHandle) {
+pub fn hide_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("hud") {
         let _ = w.hide();
+    }
+}
+
+/// 改浮窗尺寸(内容变化时上传)。保持"水平中心 + 底边"不动:
+/// 窗口原点在左下, y 不碰即底边不动; x 补半个宽度差。绝不重新定位——
+/// 重新贴屏会在"松手 → 结果到达"的几百毫秒里按光标重摆两三次,
+/// 视觉上就是"瞬间消失再出现、位置也不对"(用户反馈)。
+pub fn resize_window(app: &tauri::AppHandle, w_new: f64, h_new: f64) {
+    if let Some(w) = app.get_webview_window("hud") {
+        let scale = w.scale_factor().unwrap_or(1.0);
+        let (old_w_phys, old_h_phys) = w
+            .outer_size()
+            .map(|s| (s.width as f64, s.height as f64))
+            .unwrap_or((w_new * scale, h_new * scale));
+        let new_w_phys = w_new * scale;
+        let new_h_phys = h_new * scale;
+        if (new_w_phys - old_w_phys).abs() > 0.5 || (new_h_phys - old_h_phys).abs() > 0.5 {
+            let pos = w.outer_position().ok();
+            let _ = w.set_size(tauri::LogicalSize::new(w_new, h_new));
+            if let Some(pos) = pos {
+                let dx = (old_w_phys - new_w_phys) / 2.0;
+                let _ = w.set_position(tauri::PhysicalPosition::new(pos.x as f64 + dx, pos.y as f64));
+            }
+        }
     }
 }
 

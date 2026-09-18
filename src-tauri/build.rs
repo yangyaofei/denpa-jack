@@ -20,6 +20,20 @@ fn main() {
                 );
             }
         }
+        // HUD 单一入口契约: 浮窗状态与窗口只允许 hud.rs(状态机/策略)与 overlay.rs(窗口机制)操作,
+        // 其他模块只能调用 hud 模块的接口报"发生了什么事实"。见 docs/CONTRACTS.md 与 src/hud.rs 顶部。
+        let hud_only = ["hud_set", "HudSnapshot", "show_hud(", "hide_hud(", "show_hud_msg("];
+        if name != "hud.rs" && name != "overlay.rs" && name != "build.rs" {
+            for api in hud_only {
+                if content.contains(api) {
+                    panic!(
+                        "契约违规: `{api}` 只允许出现在 hud.rs / overlay.rs——\
+                         HUD 的状态与显隐必须由 hud 模块统一管理, 其他模块只能调用它的接口(见 src/hud.rs 顶部)。\
+                         发现于 {name}。"
+                    );
+                }
+            }
+        }
         // NS 主线程-only API 的调用文件必须同时出现主线程调度标记
         let main_only = ["NSStatusItem", "NSPasteboard", "setFrameOrigin", "NSSound"];
         let uses_main_only = main_only.iter().any(|a| content.contains(a));

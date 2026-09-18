@@ -8,6 +8,7 @@ pub mod dict;
 pub mod doubao;
 mod engines;
 mod history;
+pub mod hud;
 pub mod llm;
 mod log;
 mod mic_watch;
@@ -62,36 +63,7 @@ pub fn send_cancel() {
 
 /// C43: asr-final 类事件双发(main 历史页 + hud 浮窗), 替代全局广播
 /// C43b: Tauri 2 事件通道(Rust→webview)在本机打包版实测不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
-/// HUD 改为前端 150ms 轮询拉取(invoke 通道已证可靠)。写入点: 各层在原 emit 处同步写快照。
-#[derive(Default, Clone, serde::Serialize)]
-pub struct HudSnapshot {
-    pub version: u64,
-    pub status: String,   // recording | transcribing | busy | "" 
-    pub partial: String,
-    pub level: u32,
-    pub msg: String,      // 一次性提示(显示后清)
-    pub finished: Option<serde_json::Value>, // asr-final 载荷(一次性, 取后清)
-    pub err: Option<String>,
-    /// 左栏: 当前段(录音中=实时文字; 否则=正在转写的那段)——分段队列定则, 见 segment_queue.rs
-    pub seg_current: Option<crate::segment_queue::SegView>,
-    /// 右栏: 队列里其余段(空 = 右栏不显示, 浮窗保持单栏宽度)
-    pub seg_queue: Vec<crate::segment_queue::SegView>,
-    /// 是否有未处理的失败段(浮窗存活规则: 只剩失败时 2.5s 后收起)
-    pub seg_failed: bool,
-}
-
-pub static HUD: std::sync::Mutex<HudSnapshot> = std::sync::Mutex::new(HudSnapshot {
-    version: 0, status: String::new(), partial: String::new(), level: 0,
-    msg: String::new(), finished: None, err: None,
-    seg_current: None, seg_queue: Vec::new(), seg_failed: false,
-});
-
-pub fn hud_set(f: impl FnOnce(&mut HudSnapshot)) {
-    let mut g = HUD.lock().unwrap();
-    f(&mut g);
-    g.version += 1;
-}
-
+/// HUD 的唯一读通道是 `hud::poll()`(前端 150ms 轮询, invoke 通道已证可靠)。
 pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value) {
     use tauri::Emitter;
     let _ = Emitter::emit_to(app, "main", event, payload.clone());
@@ -173,7 +145,7 @@ pub fn run() {
                     );
                     use tauri::Emitter;
                     let _ = Emitter::emit_to(&h, "main", "permissions", &crate::permissions::all());
-                    crate::hud_set(|s| s.msg = format!("缺少权限: {}", missing.join("、")));
+                    crate::hud::notify(&h, &format!("缺少权限: {}", missing.join("、")));
                     if let Some(w) = h.get_webview_window("main") {
                         let _ = w.show();
                         let _ = w.set_focus();

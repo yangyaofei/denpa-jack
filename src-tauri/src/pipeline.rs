@@ -1,6 +1,5 @@
 // 后处理链: asr-result → 词典纠错 → 可选 LLM → 剪贴板/粘贴 → 历史 → asr-final
 use crate::settings::Config;
-use tauri::Emitter;
 
 /// 会话交接数据(由 RecordingSession 产生, 随 Result 事件流入)——会话级状态不进全局
 #[derive(Clone, Default)]
@@ -41,18 +40,21 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         Ok(c) => c,
         Err(e) => {
             let msg = format!("配置读取失败: {e}");
-            let _ = crate::emit_both(&app, "asr-final", serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg}));
-            crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg})));
+            let payload = serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg});
+            let _ = crate::emit_both(&app, "asr-final", payload.clone());
+            // 交付完成只"报事实"给 HUD(它自己决定是否采纳——录音中不覆盖当前回显)
+            crate::hud::delivered(&app, payload);
             return Outcome::Failed(msg);
         }
     };
 
     if raw.trim().is_empty() {
-        let _ = crate::emit_both(&app, "asr-final", serde_json::json!({
+        let payload = serde_json::json!({
             "raw": raw, "final": "", "llm_used": false, "delivered": "none",
             "warning": "未识别到语音内容",
-        }));
-        crate::hud_set(|h| h.finished = Some(serde_json::json!({"raw": raw, "final": "", "llm_used": false, "delivered": "none", "warning": "未识别到语音内容"})));
+        });
+        let _ = crate::emit_both(&app, "asr-final", payload.clone());
+        crate::hud::delivered(&app, payload);
         return Outcome::NoSpeech;
     }
 
@@ -115,14 +117,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
                         }
                     })
                     .collect();
-                let _ = Emitter::emit_to(&app, "hud", "hud-busy", "✦ AI 润色中…");
-                // 只有在没录音时才改状态行: 用户可能已经在录下一段了, 此时浮窗该显示"录音中",
-                // 不能被后处理的状态覆盖(用户实测: 会打断正在录的回显, 看起来像"清空重来")
-                crate::hud_set(|h| {
-                    if h.status != "recording" {
-                        h.status = "busy".into();
-                    }
-                });
+                // 告诉 HUD "进入 AI 润色阶段"。用户可能已经在录下一段了——
+                // 这时 HUD 不采纳(它自己持有"录音中"的状态), 不会打断实时回显(issue #2)。
+                crate::hud::polishing(&app);
                 let mut llm_thinking: Option<String> = None;
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -169,7 +166,6 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     }
 
     // 3) 交付: 剪贴板(+粘贴)
-    let _ = Emitter::emit_to(&app, "hud", "hud-busy", "交付中…");
     crate::log::elog(&format!("[pipeline] deliver begin clip_only={}", cfg.clipboard_only));
     let cancelled = ho.gen != 0 && ho.gen == CANCELLED_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let delivered = if cancelled {
@@ -211,14 +207,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         "delivered": delivered, "warning": warning,
     });
     let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
-    // 交付/收尾绝不能动"录音中"的状态与实时文字(那是新一段的录音会话, 与这段无关)。
-    // 用户实测 bug: 这里无条件 status.clear() 会把正在录的回显清掉, 表现为"内容消失又重新出现"。
-    crate::hud_set(|h| {
-        if h.status != "recording" {
-            h.status.clear();
-        }
-        h.finished = Some(fin_payload);
-    });
+    // 交付结束 = 报事实给 HUD: 它会清掉阶段并带上交付载荷; 若此刻正在录新一段,
+    // 它不采纳(不会把新一段的回显清掉——旧实现在这里无条件 clear, 就是用户看到的"内容消失又重新出现")。
+    crate::hud::delivered(&app, fin_payload);
     // 托盘复位交给队列统一处理(队列里可能还有别的段在排队/转写)
     if delivered == "failed" {
         Outcome::Failed(warning.clone().unwrap_or_else(|| "交付失败".into()))

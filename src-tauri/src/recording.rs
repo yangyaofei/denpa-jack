@@ -2,7 +2,7 @@
 // 全部会话状态(采集/命令通道/起点/焦点快照/交接箱)收进 RecordingSession,
 // 会话结束=结构体 drop=取消令牌置位=附属物(定时器/音量循环/桥线程)随之失效。
 // 无会话级全局 static; stop/abort 共用同一清理路径, 不存在"错误分支跳过清理"。
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc as ttx;
@@ -14,7 +14,6 @@ use crate::audio;
 use crate::deliver;
 use crate::doubao;
 use crate::engines;
-use crate::overlay::{hide_hud, show_hud};
 use crate::pipeline;
 use crate::settings::{self, Config};
 use crate::shortcut::{register_esc, unregister_esc};
@@ -182,15 +181,14 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
                 return;
             }
             let lv = level.load(std::sync::atomic::Ordering::SeqCst);
-            crate::hud_set(|h| h.level = lv);
-            let _ = Emitter::emit_to(&app, "hud", "asr-level", lv);
+            crate::hud::level(&app, lv);
             // 静音阈值: RMS 定点 < 10(浮窗音量条满量程是 167)
             if lv < 10 {
                 silent_frames += 1;
                 if silent_frames == 21 && !warned {
                     warned = true;
                     crate::log::log(&app, "录音中静音提醒: 已连续 2.5s 无输入电平");
-                    crate::overlay::show_hud_msg(&app, "⚠️ 还没听到声音");
+                    crate::hud::notify(&app, "⚠️ 还没听到声音");
                 }
             } else {
                 silent_frames = 0;
@@ -213,7 +211,7 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
             log::log(&app, "B5: 录音超长, 自动截断");
             drop(s);
             let _ = ctrl_stop(app.clone(), &st.inner());
-            crate::overlay::show_hud_msg(&app, "⚠️ 录音已达上限, 自动截断");
+            crate::hud::notify(&app, "⚠️ 录音已达上限, 自动截断");
         }
     });
 }
@@ -236,7 +234,7 @@ fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cu
 /// 开启「截图作为纠错上下文」时由采集线程在截图完成后调用——**先拍画面, 再显示我们自己的 UI**,
 /// 否则截图里会带上"录音中"浮窗（用户实测反馈）。托盘染红同样延后, 避免菜单栏状态被拍进去。
 fn show_recording_ui(app: &tauri::AppHandle) {
-    show_hud(app);
+    crate::hud::recording_started(app);
     crate::tray_events::set_tray_recording(app, true);
 }
 
@@ -293,7 +291,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             "[perm] 录音被拒绝: 麦克风未授权({})",
             crate::permissions::mic_status_text()
         ));
-        crate::overlay::show_hud_msg(&app, msg);
+        crate::hud::notify(&app, msg);
         return Err(msg.into());
     }
     let mic = resolve_mic(&app, &mut cfg);
@@ -448,7 +446,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
         let _ = cmd_tx.try_send(doubao::Cmd::Abort);
         session_cleanup(&app, None);
-        hide_hud(&app);
+        crate::hud::hide(&app);
         log::log(&app, &format!("录音太短已丢弃 {}ms", ho.duration_ms));
         return Err("录音太短已丢弃".into());
     }
@@ -462,14 +460,13 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(doubao::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
-        let _ = Emitter::emit_to(&app, "hud", "asr-error", "引擎会话异常中断");
+        crate::hud::error(&app, "引擎会话异常中断");
     }
     session_cleanup(&app, Some(crate::audio_feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
-    // 松手时不再 show(): 窗口在按下时已定位显示。这里重复 show 会在"内容从回显切到转写中"
-    // 的同一瞬间再刷一次窗口, 视觉上就是"瞬间消失再出现"(用户反馈)。
-    let _ = Emitter::emit_to(&app, "hud", "hud-state", "transcribing");
-    crate::hud_set(|h| h.status = "transcribing".into());
+    // 松手 = 告诉 HUD 一个事实:"这一条录完了"。阶段/文案/延时全部由 HUD 自己决定;
+    // 这里不再直接改快照, 也不再重复 show 窗口(重复 show 就是用户看到的"瞬间消失再出现")。
+    crate::hud::recording_ended(&app);
     crate::tray_events::set_tray_transcribing(&app, true);
     Ok(())
 }
@@ -495,7 +492,7 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
         crate::engines::send_current(app, doubao::Cmd::Abort);
     }
     session_cleanup(app, None);
-    hide_hud(app);
+    crate::hud::hide(app);
     log::log(app, "录音取消(esc)");
     Ok(())
 }

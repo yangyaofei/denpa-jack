@@ -6,7 +6,6 @@ use crate::deliver;
 use crate::doubao;
 use crate::engines;
 use crate::history;
-use crate::overlay::{hide_hud, show_hud_msg};
 use crate::pipeline;
 use crate::settings::Config;
 use tokio::sync::mpsc as ttx;
@@ -53,27 +52,8 @@ pub fn get_hotwords(app: tauri::AppHandle) -> Vec<String> {
 
 #[tauri::command]
 pub fn hud_hide(app: tauri::AppHandle) {
-    // 最短显示守卫: 刚显示不到 400ms 的隐藏请求一律忽略。
-    // 原因(用户报"按下不显示、松手才出现"): 前端有多个 hide 定时器来源(提示 2.5s/完成 350ms/失败 2.5s),
-    // 上一次的定时器可能在用户"刚按下"之后才到期, 把刚显示的窗口又 hide 掉并清空快照。
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let shown = crate::overlay::LAST_SHOW_MS.load(std::sync::atomic::Ordering::SeqCst);
-    if shown > 0 && now.saturating_sub(shown) < crate::overlay::MIN_SHOW_MS {
-        crate::log::log(&app, &format!("hud hide 忽略(显示仅 {}ms < {}ms)", now.saturating_sub(shown), crate::overlay::MIN_SHOW_MS));
-        return;
-    }
-    // A 修复: 关闭时清快照——下次 show 不会闪上一次的内容
-    crate::hud_set(|h| {
-        h.partial.clear();
-        h.status.clear();
-        h.finished = None;
-        h.err = None;
-        h.msg.clear();
-    });
-    hide_hud(&app);
+    // 隐藏的唯一入口(hud.rs): 含最短显示守卫与快照清理——策略不在 command 层
+    crate::hud::hide(&app);
 }
 
 #[tauri::command]
@@ -164,7 +144,7 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
         }
         let _ = tx.try_send(doubao::Cmd::Finish);
     });
-    show_hud_msg(&app, "… 重新转写中");
+    crate::hud::notify(&app, "… 重新转写中");
     Ok(())
 }
 
@@ -266,30 +246,8 @@ pub fn autostart_status(app: tauri::AppHandle) -> bool {
 // 浮窗高度自适应: 文本变多时调档(长文本看全)
 #[tauri::command]
 pub fn hud_resize(app: tauri::AppHandle, width: f64, height: f64) {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("hud") {
-        // 宽度: 480(单栏) / 664(出现队列时的左右两栏); 高度: 92..400(多行当前文字 + 队列)
-        let w_new = width.clamp(480.0, 720.0);
-        let h_new = height.clamp(92.0, 400.0);
-        // 用户报"松手后瞬间消失再出现、位置也不对": 尺寸变化绝不能重新贴屏——
-        // 重定位会把窗口按光标重新摆一次(内容/尺寸/光标位置在几百毫秒里连变 2~3 次 → 视觉上是跳)。
-        // 改为: 只改尺寸, 并保持"水平中心 + 底边"不动(原点在左下, y 不动即底边不动; x 补半个宽度差)。
-        let scale = w.scale_factor().unwrap_or(1.0);
-        let (old_w_phys, old_h_phys) = w
-            .outer_size()
-            .map(|s| (s.width as f64, s.height as f64))
-            .unwrap_or((w_new * scale, h_new * scale));
-        let new_w_phys = w_new * scale;
-        let new_h_phys = h_new * scale;
-        if (new_w_phys - old_w_phys).abs() > 0.5 || (new_h_phys - old_h_phys).abs() > 0.5 {
-            let pos = w.outer_position().ok();
-            let _ = w.set_size(tauri::LogicalSize::new(w_new, h_new));
-            if let Some(pos) = pos {
-                let dx = (old_w_phys - new_w_phys) / 2.0;
-                let _ = w.set_position(tauri::PhysicalPosition::new(pos.x as f64 + dx, pos.y as f64));
-            }
-        }
-    }
+    // 尺寸策略(夹取范围 + 保持水平中心/底边, 不重新定位)在 hud/overlay 层
+    crate::hud::resize(&app, width, height);
 }
 
 /// 当前将使用/已使用的输入设备(uid+name)——设置页"当前输入设备"显示这个。
@@ -544,34 +502,9 @@ pub fn remove_binding(app: tauri::AppHandle, combo: String) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn hud_poll() -> crate::HudSnapshot {
-    let mut g = crate::HUD.lock().unwrap();
-    // 分段队列视图(规则见 segment_queue.rs 顶部与 src/hud.ts):
-    //   左栏(seg_current) = 录音中的实时文字; 没在录音时 = 正在转写的那段
-    //   右栏(seg_queue)   = 队列里其余段(录音时, 正在转写的那段退到右栏)
-    //   两者都只在需要时由前端显示——队列为空时右栏不出现(用户定则: 不多写一个字)
-    let (cur, mut queue) = crate::segment_queue::views();
-    let recording = g.status == "recording";
-    g.seg_current = if recording {
-        Some(crate::segment_queue::SegView { state: "recording".into(), text: g.partial.clone() })
-    } else {
-        cur
-    };
-    g.seg_queue = if recording {
-        if let Some(c) = crate::segment_queue::views().0 {
-            queue.insert(0, c);
-        }
-        queue
-    } else {
-        queue
-    };
-    g.seg_failed = crate::segment_queue::has_failed();
-    let snap = g.clone();
-    // 一次性字段取后清(前端拿到即消费)
-    g.finished = None;
-    g.err = None;
-    g.msg = String::new();
-    snap
+pub fn hud_poll() -> crate::hud::Snapshot {
+    // 前端唯一读接口(快照组装 + 队列派生 + 一次性字段的取后清都在 hud.rs)
+    crate::hud::poll()
 }
 
 /// 重试队列里最早的一段失败段(浮窗「重试」按钮)
