@@ -165,4 +165,20 @@ const cargoLockV = readFileSync("src-tauri/Cargo.lock", "utf8").match(/name = "d
 const allV = [pkgV, lockV, lockRootV, cargoV, confV, cargoLockV];
 check(`版本号六处一致(${allV.join("/")})`, allV.every((v) => v && v === allV[0]));
 
+// 6) issue #6: 空转写(没听清)不能当失败常驻
+check(
+  "空转写走 NoSpeech(不进失败队列)",
+  /NoSpeech/.test(readFileSync("src-tauri/src/doubao.rs", "utf8")) &&
+    /AsrEvent::NoSpeech/.test(readFileSync("src-tauri/src/engines.rs", "utf8")) &&
+    /record_no_speech/.test(segQ),
+);
+check(
+  "失败提示 2.5s 后自动收走(queue_dismiss)",
+  /failTimer/.test(hudTs) && /queue_dismiss/.test(hudTs) && /2500\)/.test(hudTs),
+);
+check(
+  "录音中不显示失败段与失败条",
+  /recording \? qAll\.filter/.test(hudTs) && /showFail\(failed && !recording\)/.test(hudTs),
+);
+
 process.exit(fail ? 1 : 0);

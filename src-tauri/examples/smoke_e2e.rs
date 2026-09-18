@@ -55,6 +55,10 @@ async fn main() {
                 raw = t;
                 break;
             }
+            AsrEvent::NoSpeech(e) => {
+                println!("[3] 空转写(没听清): {e}");
+                break;
+            }
             AsrEvent::Error(e) => {
                 println!("[3] 引擎错误: {e}");
                 break;

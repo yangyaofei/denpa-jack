@@ -26,11 +26,11 @@ pub const FINALIZE_TIMEOUT_SECS: u64 = 30;
 /// 豆包收尾等待窗口: Finish 后此秒数内无最终帧则用已收文本结算
 pub const DOUBAO_FINALIZE_TIMEOUT_SECS: u64 = 3;
 
-/// 结算契约(恰好一次): 空文本=没听清错误, 非空=Result。
+/// 结算契约(恰好一次): 空文本=没听清(NoSpeech, 不是失败), 非空=Result。
 /// OpenAI Realtime 收尾调用此处; doubao 因需记录文本长度日志保留本地实现(见 doubao::settle)。
 pub fn settle(emit: &impl Fn(doubao::AsrEvent), text: &str) {
     if text.trim().is_empty() {
-        emit(doubao::AsrEvent::Error("没听清(转写为空)".into()));
+        emit(doubao::AsrEvent::NoSpeech("没听清(转写为空)".into()));
     } else {
         emit(doubao::AsrEvent::Result(text.to_string()));
     }
@@ -66,9 +66,22 @@ pub fn spawn_session(
                     crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::segment_queue::busy()));
                     ("asr-result", t)
                 }
+                doubao::AsrEvent::NoSpeech(t) => {
+                    // 空转写(没听清/全程没声音): 不是失败 —— 只写一条历史 + 浮窗提示 2.5s 后收起,
+                    // 不进队列、不留常驻状态。旧实现(1cbc9d8^ engines.rs:85)就是这个语义；
+                    // 队列化时误把它当失败段, 导致每次空录音都在浮窗留一个"识别失败"永久挂着(issue #6)。
+                    let ho = handoff.lock().unwrap().take();
+                    let app2 = app.clone();
+                    let msg = t.clone();
+                    std::thread::spawn(move || {
+                        let _ = crate::segment_queue::record_no_speech(&app2, ho, &msg);
+                    });
+                    // 提示走 msg 通道(浮窗按一次性提示显示 2.5s), 不走 err(那是失败条)
+                    ("asr-nospeech", t)
+                }
                 doubao::AsrEvent::Error(t) => {
-                    // ASR 阶段失败: 该段以 Failed 状态入队(先落盘音频 + 写历史, 保证能重试),
-                    // 浮窗按"只剩失败 → 2.5s 后收起"的规则提示, 后续段不受影响
+                    // 真失败(连接失败/请求失败/中断): 该段以 Failed 状态入队(先落盘音频 + 写历史,
+                    // 保证能重试)。与 NoSpeech 的区别: 这里可能有已识别的文本需要救, 才值得常驻可重试
                     let ho = handoff.lock().unwrap().take();
                     let app2 = app.clone();
                     let msg = t.clone();
@@ -82,6 +95,7 @@ pub fn spawn_session(
             crate::hud_set(|h| match tag {
                 "asr-partial" => h.partial = payload.clone(),
                 "asr-result" => h.status = "transcribing".into(),
+                "asr-nospeech" => h.msg = payload.clone(),
                 "asr-error" => h.err = Some(payload.clone()),
                 _ => {}
             });

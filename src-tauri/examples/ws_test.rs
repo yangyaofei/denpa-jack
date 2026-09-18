@@ -42,6 +42,7 @@ async fn main() {
             |ev| match ev {
                 doubao::AsrEvent::Partial(t) => println!("[partial] {t}"),
                 doubao::AsrEvent::Result(t) => println!("[result] {t}"),
+                doubao::AsrEvent::NoSpeech(t) => println!("[nospeech] {t}"),
                 doubao::AsrEvent::Error(t) => println!("[error] {t}"),
             },
         ));

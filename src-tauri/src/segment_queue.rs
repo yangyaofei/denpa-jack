@@ -218,6 +218,43 @@ fn record_failed(app: &tauri::AppHandle, raw: &str, ho: &crate::pipeline::Sessio
     audio
 }
 
+/// 空转写留痕(没听清/全程没声音): 只写一条历史(delivered="none"), 不进队列、不留常驻状态。
+///
+/// 与 record_failed 的唯一区别是 `delivered` 值: "none" = 本来就没有内容可交付, 不是失败。
+/// 旧实现(1cbc9d8^ 的 engines.rs:85 Error 分支)就是这个语义, 队列化时误把它并入失败路径(issue #6)。
+pub fn record_no_speech(
+    app: &tauri::AppHandle,
+    ho: Option<crate::pipeline::SessionHandoff>,
+    msg: &str,
+) -> Option<String> {
+    use tauri::Manager;
+    let ho = ho.unwrap_or_default();
+    let mut audio = ho.audio_path.clone();
+    if !ho.pcm.is_empty() {
+        if let Some(p) = crate::history::save_wav(app, &ho.pcm) {
+            app.state::<std::sync::Mutex<crate::AppState>>().lock().unwrap().last_audio = Some(p.clone());
+            audio = Some(p);
+        }
+    }
+    let keep = crate::settings::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
+    crate::history::prune_recordings(app, keep);
+    let rec = crate::history::HistoryRecord {
+        ts: crate::pipeline::now_local_pub(),
+        engine: ho.engine.clone(),
+        raw: String::new(),
+        final_text: String::new(),
+        llm_used: false,
+        delivered: "none".into(),
+        audio_path: audio.clone().unwrap_or_default(),
+        warning: Some(msg.to_string()),
+        duration_ms: ho.duration_ms,
+        llm_thinking: None,
+    };
+    crate::history::append(app, &rec);
+    log_debug("空转写已入历史(不进队列)");
+    audio
+}
+
 /// 重试一段失败(浮窗按钮/历史页调用)
 pub fn retry(app: &tauri::AppHandle, id: u64) -> Result<(), String> {
     let (path, asr_failed) = {

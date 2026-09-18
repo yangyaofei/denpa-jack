@@ -19,6 +19,8 @@ pub enum Cmd {
 pub enum AsrEvent {
     Partial(String),
     Result(String),
+    /// 转写为空(没听清/全程没声音)。不是失败: 只提示 + 写一条历史, 不进队列、不常驻(issue #6)
+    NoSpeech(String),
     Error(String),
 }
 
@@ -62,12 +64,12 @@ fn parse_frame(data: &[u8]) -> Option<(u8, u8, Vec<u8>)> {
     Some((typ, comp, body))
 }
 
-/// 结算契约(恰好一次): 空文本=没听清错误, 非空=Result。
+/// 结算契约(恰好一次): 空文本=没听清(NoSpeech, 不是失败), 非空=Result。
 /// 本地实现(未并入 engines::settle): 额外落一条长度日志, 且空判据为 `is_empty`(不 trim)。
 fn settle(emit: &dyn Fn(AsrEvent), text: &str) {
     crate::log::elog(&format!("[doubao] settle: len={}", text.chars().count()));
     if text.is_empty() {
-        emit(AsrEvent::Error("没听清(转写为空)".into()));
+        emit(AsrEvent::NoSpeech("没听清(转写为空)".into()));
     } else {
         emit(AsrEvent::Result(text.to_string()));
     }
@@ -369,7 +371,7 @@ mod gap_tests {
     }
 
     #[test]
-    fn settle_empty_is_error_nonempty_is_result() {
+    fn settle_empty_is_nospeech_nonempty_is_result() {
         use super::AsrEvent;
         let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let g2 = got.clone();
@@ -377,7 +379,8 @@ mod gap_tests {
         let g2 = got.clone();
         settle(&move |e| g2.lock().unwrap().push(e), "文本");
         let g = got.lock().unwrap();
-        assert!(matches!(g[0], AsrEvent::Error(_)));
+        // 空转写是 NoSpeech(不是错误): 只提示 + 写历史, 不进队列(issue #6)
+        assert!(matches!(g[0], AsrEvent::NoSpeech(_)));
         assert!(matches!(g[1], AsrEvent::Result(_)));
     }
 }

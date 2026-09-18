@@ -83,12 +83,27 @@ function renderQueue(rows: any[]) {
 }
 
 // 失败提示: 一行说明 + 重试/关闭; 文案固定(失败原因在历史与日志里)
+// 失败提示: 显示 2.5s 后自动收起, 并把失败段真正移出队列(音频与原文已在历史里, 仍可从历史页重跑)。
+// 用户定则: 失败只是一次性提示, 不能常驻——录音时更不该出现(issue #6)。
+let failTimer: number | undefined;
 function showFail(show: boolean) {
   if (show) {
     failMsg.textContent = "转写失败（音频已存入历史，可重试）";
     failActions.classList.add("show");
+    if (!failTimer) {
+      failTimer = window.setTimeout(async () => {
+        failTimer = undefined;
+        try {
+          await invoke("queue_dismiss");
+        } catch {}
+      }, 2500);
+    }
   } else {
     failActions.classList.remove("show");
+    if (failTimer) {
+      clearTimeout(failTimer);
+      failTimer = undefined;
+    }
   }
 }
 
@@ -175,19 +190,21 @@ async function pollOnce() {
     if (cur && cur.state === "recording") curText.scrollTop = curText.scrollHeight;
 
     // 右栏: 队列(空 → 不显示右栏, 面板收回单栏宽度)
-    const q: any[] = s.seg_queue || [];
+    // 录音中不展示失败段(用户定则: 录音时不该被上一段的失败打扰; 录完再说)
+    const qAll: any[] = s.seg_queue || [];
+    const q = recording ? qAll.filter((r) => r.state !== "failed") : qAll;
     renderQueue(q);
     hud.classList.toggle("hasqueue", q.length > 0);
     clearBtn.classList.toggle("show", q.some((r) => r.state === "queued"));
 
-    // 失败提示 + 存活规则
+    // 失败提示 + 存活规则(录音中不弹失败条, 录完再提示 2.5s 后自动收走)
     const failed = !!s.seg_failed;
-    showFail(failed);
+    showFail(failed && !recording);
     if (s.err) {
-      // 引擎/交付级错误(asr-error): 同样按"只剩失败 2.5s"处理, 但文案用错误原文
+      // 引擎/交付级错误(asr-error): 同样只在没录音时提示, 2.5s 后自动收走(与失败段同规则)
       setState("err", `⚠️ ${String(s.err).slice(0, 60)}`);
-      showFail(true);
-      scheduleHide(2500);
+      showFail(!recording);
+      // 2.5s 由 showFail 里的定时器负责; 这里不再额外 scheduleHide(否则可能与收走时序打架)
     }
     // 存活规则(用户定稿):
     //   busy 只算"真的有活在跑"(录音中/转写中/排队中) —— 失败段不算"活",
