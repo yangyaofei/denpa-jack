@@ -67,8 +67,8 @@
                 <option value="local">本地服务 (Qwen3-ASR 网关)</option>
               </select>
             </label>
-            <label x-show="asrEdit.provider === 'local'" x-cloak>服务地址<span class="row-hint">(本地网关，默认本机 8300)</span>
-              <input class="inp" placeholder="127.0.0.1:8300" x-model="asrEdit.base_url" />
+            <label x-show="asrEdit.provider === 'local'" x-cloak>服务地址<span class="row-hint">(网关部署在哪台机器就填哪个；留空=本机 8300)</span>
+              <input class="inp" placeholder="127.0.0.1:8300 或 ws://192.168.1.5:8300" x-model="asrEdit.base_url" />
             </label>
             <label x-show="asrEdit.provider !== 'local'" x-cloak>API Key<span class="row-hint">(该引擎档案的密钥)</span>
               <input class="inp" type="password" x-model="asrEdit.api_key" />
