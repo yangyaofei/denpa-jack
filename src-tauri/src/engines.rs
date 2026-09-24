@@ -103,8 +103,9 @@ pub fn spawn_session(
         match provider.as_str() {
             "zhipu" => crate::zhipu_file::run_zhipu_session(api_key, hotwords, rx, emit).await,
             "openai" => crate::openai_realtime::run_openai_session(api_key, hotwords, rx, emit).await,
-            // 本地网关(local-asr/gateway.py): 无鉴权, 走 base_url; 热词改经 context 注入见 P3
-            "local" => crate::local_asr::run_local_session(base_url, rx, emit).await,
+            // 本地网关(local-asr/gateway.py): 无鉴权, 走 base_url;
+            // 热词经首帧 context 注入(网关同时用于流式与二遍全句重解)
+            "local" => crate::local_asr::run_local_session(base_url, hotwords, rx, emit).await,
             _ => doubao::run_session(api_key, hotwords, rx, emit).await,
         }
         });

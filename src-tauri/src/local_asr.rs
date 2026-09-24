@@ -1,11 +1,13 @@
 // 本地 ASR 引擎（local-asr 网关的 WS 客户端）。
-// 网关: research-plan/voice-mac-app/local-asr/gateway.py（mlx-qwen3-asr 滚动解码，
+// 网关: research-plan/voice-mac-app/local-asr/gateway.py（mlx-qwen3-asr，
 //       未来会拆成项目内的独立 package——用户定则：本地 ASR 与 APP 是两个部分）。
 // 协议: OpenAI Realtime 事件面子集 + x-input-transcript.partial 扩展（见网关文件头）。
 // 与 openai_realtime.rs 的三点差异：
 //   1) 音频 16k pcm16 原样直传（网关固定 sample_rate=16000，不需要上采样）；
 //   2) partial 是全量替换语义（滚动解码会回改近期文本，与豆包 partial 一致）；
 //   3) completed.transcript 是整个会话的最终全量（不是按语音段），直接结算。
+// 热词：首帧 append 携带 context（词典 term 顿号连接）——网关把它同时注入
+// 流式解码与松手后的二遍全句重解，等于词典层直接进模型。
 // 连接契约对齐 doubao：断连/收尾必须恰好一次 Result|NoSpeech|Error。
 use crate::doubao::{AsrEvent, Cmd};
 use base64::Engine;
@@ -25,8 +27,19 @@ pub fn normalize_base_url(base: &str) -> String {
     }
 }
 
+/// 词典热词 → 网关 context 文本（偏置提示，模型侧对专有名词起效）
+fn context_from_hotwords(hotwords: &[String]) -> String {
+    let joined: Vec<&str> = hotwords.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if joined.is_empty() {
+        String::new()
+    } else {
+        format!("相关术语：{}", joined.join("、"))
+    }
+}
+
 pub async fn run_local_session(
     base_url: String,
+    hotwords: Vec<String>,
     mut rx: tokio::sync::mpsc::Receiver<Cmd>,
     emit: impl Fn(AsrEvent),
 ) {
@@ -43,6 +56,9 @@ pub async fn run_local_session(
     };
     crate::log::elog("[local-asr] connected");
     let (mut sink, mut stream) = ws.split();
+    // 首帧携带的 context（词典热词）；只发一次
+    let context = context_from_hotwords(&hotwords);
+    let mut first_feed = true;
 
     loop {
         tokio::select! {
@@ -56,7 +72,12 @@ pub async fn run_local_session(
                 }
                 Some(Cmd::Feed(pcm16)) => {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&pcm16);
-                    let msg = json!({"type": "input_audio_buffer.append", "audio": b64});
+                    let msg = if first_feed {
+                        first_feed = false;
+                        json!({"type": "input_audio_buffer.append", "audio": b64, "context": context})
+                    } else {
+                        json!({"type": "input_audio_buffer.append", "audio": b64})
+                    };
                     if sink.send(tokio_tungstenite::tungstenite::Message::Text(msg.to_string().into())).await.is_err() {
                         emit(AsrEvent::Error("本地 ASR 发送失败（连接断开）".into()));
                         break;
@@ -66,7 +87,7 @@ pub async fn run_local_session(
                     crate::log::elog("[local-asr] finish: commit，等最终结果");
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(
                         json!({"type": "input_audio_buffer.commit"}).to_string().into())).await;
-                    // 网关实测 commit→final 0.16–0.3s；30s 是异常兜底（与全引擎统一）
+                    // 网关二遍全句重解：30s 口述约 1-2s；30s 只是异常兜底（与全引擎统一）
                     let deadline = tokio::time::Instant::now() + Duration::from_secs(crate::engines::FINALIZE_TIMEOUT_SECS);
                     while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, stream.next()).await {
                         let Ok(m) = msg else { break };
@@ -130,7 +151,7 @@ pub async fn run_local_session(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_base_url;
+    use super::{context_from_hotwords, normalize_base_url};
 
     #[test]
     fn base_url_rules() {
@@ -139,5 +160,15 @@ mod tests {
         assert_eq!(normalize_base_url("127.0.0.1:9000"), "ws://127.0.0.1:9000");
         assert_eq!(normalize_base_url("ws://a.b/"), "ws://a.b");
         assert_eq!(normalize_base_url("wss://a.b:9/x/"), "wss://a.b:9/x");
+    }
+
+    #[test]
+    fn hotwords_context_rules() {
+        assert_eq!(context_from_hotwords(&[]), "");
+        assert_eq!(context_from_hotwords(&["  ".into()]), "");
+        assert_eq!(
+            context_from_hotwords(&["谢克数学".into(), "腾讯云".into()]),
+            "相关术语：谢克数学、腾讯云"
+        );
     }
 }
