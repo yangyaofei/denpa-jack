@@ -129,7 +129,7 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
         // 重跑历史音频时不采集屏幕: 截图应当属于"当时那次录音"，事后重跑拿到的是现在的屏幕，会误导纠错
         screenshot: None,
     })));
-    engines::spawn_session(app.clone(), profile.provider.clone(), key, budget_hotwords(&cfg.dict), handoff, rx);
+    engines::spawn_session(app.clone(), profile.provider.clone(), key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx);
     use tauri::Manager;
     app.state::<std::sync::Mutex<crate::AppState>>()
         .lock()

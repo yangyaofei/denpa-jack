@@ -42,9 +42,12 @@ pub struct AsrProfile {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub provider: String, // volcengine | zhipu
+    pub provider: String, // volcengine | zhipu | openai | local
     #[serde(default)]
     pub api_key: String,
+    /// 本地服务地址（provider=local 时用；空=ws://127.0.0.1:8300）
+    #[serde(default)]
+    pub base_url: String,
     #[serde(default)]
     pub hotwords_enabled: bool,
 }
@@ -251,6 +254,16 @@ pub struct Config {
 
 /// 默认数据目录（也是 config.json 的固定位置，作为一切路径的锚点）
 pub fn base_dir(app: &tauri::AppHandle) -> PathBuf {
+    // 自测隔离: 测试副本(改 bundle id 无效——tauri 的 identifier 构建时烘焙)用
+    // 环境变量把整个数据目录指到独立位置, 避免读到真实配置/写脏真实历史。
+    // 正常启动不设此变量, 走 app_config_dir。
+    if let Ok(d) = std::env::var("VOICEMAC_DATA_DIR") {
+        if !d.trim().is_empty() {
+            let p = PathBuf::from(d);
+            fs::create_dir_all(&p).ok();
+            return p;
+        }
+    }
     let dir = app
         .path()
         .app_config_dir()
@@ -307,6 +320,14 @@ pub fn data_dir(app: &tauri::AppHandle) -> PathBuf {
 pub fn data_dir_no_app() -> PathBuf {
     if let Some(p) = DATA_ROOT.lock().unwrap().clone() {
         return p;
+    }
+    // 自测隔离与 base_dir 同源(见 base_dir 注释)
+    if let Ok(d) = std::env::var("VOICEMAC_DATA_DIR") {
+        if !d.trim().is_empty() {
+            let p = PathBuf::from(d);
+            fs::create_dir_all(&p).ok();
+            return p;
+        }
     }
     let base = std::env::var("HOME")
         .map(|h| PathBuf::from(h).join("Library/Application Support").join(APP_ID))

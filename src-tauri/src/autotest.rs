@@ -88,6 +88,7 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
             app.clone(),
             profile.provider.clone(),
             key,
+            profile.base_url.clone(),
             crate::recording::budget_hotwords(&cfg.dict),
             handoff.clone(),
             rx,
@@ -159,7 +160,7 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             let (tx, rx) = tokio::sync::mpsc::channel::<doubao::Cmd>(64);
             let handoff: crate::engines::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
             crate::engines::spawn_session(
-                app.clone(), profile.provider.clone(), key,
+                app.clone(), profile.provider.clone(), key, profile.base_url.clone(),
                 crate::recording::budget_hotwords(&cfg.dict), handoff.clone(), rx,
             );
             {

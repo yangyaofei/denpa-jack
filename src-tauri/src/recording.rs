@@ -156,8 +156,12 @@ pub fn resolve_asr(cfg: &Config) -> Result<(settings::AsrProfile, String), Strin
         .cloned()
         .or_else(|| cfg.asr_profiles.first().cloned())
         .ok_or("没有 ASR 档案, 请先在设置中添加")?;
-    if !["volcengine", "zhipu", "openai"].contains(&profile.provider.as_str()) {
+    if !["volcengine", "zhipu", "openai", "local"].contains(&profile.provider.as_str()) {
         return Err(format!("未知引擎: {}", profile.provider));
+    }
+    // 本地网关无鉴权：不需要 Key(空 Key 池也能用)
+    if profile.provider == "local" {
+        return Ok((profile, String::new()));
     }
     let key = if profile.api_key.is_empty() {
         cfg.keys.first().cloned().ok_or("没有 API Key")?
@@ -328,6 +332,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         app.clone(),
         profile.provider.clone(),
         key,
+        profile.base_url.clone(),
         budget_hotwords(&cfg.dict),
         handoff.clone(),
         rx,
@@ -561,7 +566,7 @@ mod tests {
         let mut cfg = crate::settings::default_config();
         cfg.active_asr_id = "x".into();
         cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), hotwords_enabled: true,
+            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(), hotwords_enabled: true,
         }];
         assert!(resolve_asr(&cfg).is_err());
     }
@@ -570,7 +575,7 @@ mod tests {
         let mut cfg = crate::settings::default_config();
         cfg.active_asr_id = "nope".into();
         cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), hotwords_enabled: true,
+            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(), hotwords_enabled: true,
         }];
         let (p, k) = resolve_asr(&cfg).unwrap();
         assert_eq!(p.id, "p1");
@@ -581,7 +586,7 @@ mod tests {
         let mut cfg = crate::settings::default_config();
         cfg.keys = vec!["pool-key".into()];
         cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), hotwords_enabled: true,
+            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(), hotwords_enabled: true,
         }];
         let (_, k) = resolve_asr(&cfg).unwrap();
         assert_eq!(k, "pool-key");
@@ -596,7 +601,7 @@ mod gap_tests {
     #[test]
     fn resolve_asr_rejects_unknown_provider() {
         let mut c = Config::default();
-        c.asr_profiles = vec![AsrProfile { id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), hotwords_enabled: true }];
+        c.asr_profiles = vec![AsrProfile { id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(), hotwords_enabled: true }];
         c.active_asr_id = "x".into();
         assert!(resolve_asr(&c).is_err());
     }
@@ -605,7 +610,7 @@ mod gap_tests {
     fn resolve_asr_empty_key_falls_back_to_pool() {
         let mut c = Config::default();
         c.keys = vec!["pool-key".into()];
-        c.asr_profiles = vec![AsrProfile { id: "a".into(), name: "a".into(), provider: "volcengine".into(), api_key: String::new(), hotwords_enabled: true }];
+        c.asr_profiles = vec![AsrProfile { id: "a".into(), name: "a".into(), provider: "volcengine".into(), api_key: String::new(), base_url: String::new(), hotwords_enabled: true }];
         c.active_asr_id = "a".into();
         let (_, key) = resolve_asr(&c).unwrap();
         assert_eq!(key, "pool-key");

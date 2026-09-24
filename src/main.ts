@@ -17,7 +17,7 @@ export interface LlmProfile {
   api_key: string; prompt: string; thinking: boolean; effort: string;
 }
 export interface AsrProfile {
-  id: string; name: string; provider: string; api_key: string; hotwords_enabled: boolean;
+  id: string; name: string; provider: string; api_key: string; base_url: string; hotwords_enabled: boolean;
 }
 export interface DictEntry {
   term: string; variants: string[]; guard_words: string[]; boost: number;
@@ -452,7 +452,7 @@ function describeCombo(s: string): string {
   // ── ASR 档案 ──
   newAsr() {
     this.asrIsNew = true;
-    this.asrEdit = { id: uid(), name: "新引擎", provider: "volcengine", api_key: "", hotwords_enabled: true };
+    this.asrEdit = { id: uid(), name: "新引擎", provider: "volcengine", api_key: "", base_url: "", hotwords_enabled: true };
   },
   editAsr(p: AsrProfile) { this.asrIsNew = false; this.asrEdit = JSON.parse(JSON.stringify(p)); },
   async delAsr(p: AsrProfile) {

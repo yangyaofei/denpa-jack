@@ -12,6 +12,7 @@ pub mod hud;
 pub mod llm;
 mod log;
 mod mic_watch;
+mod local_asr;
 mod openai_realtime;
 mod overlay;
 mod paste_tx;
@@ -199,8 +200,13 @@ pub fn run() {
             });
             // C51 多热键: 全部注册, 任一触发
             // C54 统一引擎(Handy 同构): handy-keys crate 单通道注册+触发, 无双注册
-            shortcut::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
-                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            // 自测副本不注册真热键: 避免和用户正在运行的实例抢同一组按键
+            // (实测教训: 文件回放测试期间用户真实口述, 副本也收到热键, 两进程
+            //  同时录音——还撞上本地网关的单流限制)
+            if std::env::var("VOICEMAC_AUTOTEST").is_err() {
+                shortcut::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            }
             // 触发模式缓存初始化(hold/toggle)
             {
                 let cfg0 = settings::get_config(app.handle().clone()).unwrap_or_default();

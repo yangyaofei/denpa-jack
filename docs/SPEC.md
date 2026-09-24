@@ -38,10 +38,11 @@
   - Esc 快捷键仅在录音期间动态注册（`register_esc`/`unregister_esc`），不常驻占用。
   - 丢弃录音、标记当前会话代（generation）为取消：在途结果只入历史、不粘贴。
 - **转写中可开新录音**：协调器规则允许转写期间再次按下直接 Start，两段交付互不阻塞。
-- **引擎三选一**（按 ASR 档案 provider）：
+- **引擎四选一**（按 ASR 档案 provider）：
   - 豆包流式（volcengine，主力）：partial 逐字显示。
   - 智谱 GLM-ASR（zhipu，文件式）：无实时 partial，Finish 后整段返回。
   - OpenAI Realtime（openai，备用）。
+  - 本地服务（local）：连本地 ASR 网关（`research-plan/voice-mac-app/local-asr/gateway.py`，mlx-qwen3-asr 滚动解码），WS 走 OpenAI Realtime 事件面子集。档案的 `base_url` 指定网关地址（空=`ws://127.0.0.1:8300`）；无需 API Key；partial 为全量替换语义（网关的滚动解码会回改近期文本）。网关单模型单流：并发会话会被拒绝（Error 入队可重试）。
 - **交付链**（pipeline::deliver 顺序，前一步成功即止）：
   1. 前台应用是本 app → 仅写剪贴板（delivered=`copied-self`，自贴无意义）。
   2. AX 直写光标（写 `AXSelectedText`，前后读回对比防"报成功但 app 静默忽略"；仅 `clipboard_only=false` 且焦点校验通过时尝试；成功=delivered `pasted-ax`，不碰剪贴板）。
@@ -90,7 +91,7 @@
   - 打开数据目录 / 打开词典配置（config.json）。
 - **语音识别**：
   - Key 池：多行文本，每行一个 Key；档案 Key 留空时按序取第一个。
-  - 引擎档案卡片：使用/编辑/删除；显示 provider 标签、"使用中"、Key 前 8 位、热词开关。编辑 sheet 现仅提供 volcengine（火山引擎豆包流式）选项。
+  - 引擎档案卡片：使用/编辑/删除；显示 provider 标签、"使用中"、Key 前 8 位、热词开关。编辑 sheet 提供 volcengine（火山引擎豆包流式）与 local（本地服务，显示服务地址输入、隐藏 Key 输入）选项。
   - 热词直传预览：来自词典（按权重预算），改词典即时生效。
   - 当前输入设备（实际使用，uid+name，录音开始后刷新为运行时事实）。
   - 麦克风优先级列表：按序取第一个在线设备；加入/上移/下移/移除；不在线设备标注"已断开"。
@@ -150,7 +151,7 @@
   - `pcm_all` 全程累积，停止后经 SessionHandoff 交付线程异步写盘。
   - RMS 0-1000 定点音量（AtomicU32）；`cancel: Arc<AtomicBool>`，Recording Drop 时置位。
 - `ctrl_start` 流程：
-  1. `resolve_asr`：active_asr_id 找档案→首个档案兜底；provider 校验（volcengine/zhipu/openai）；Key 取档案 api_key，空则 keys[0]。
+  1. `resolve_asr`：active_asr_id 找档案→首个档案兜底；provider 校验（volcengine/zhipu/openai/local）；Key 取档案 api_key，空则 keys[0]（local 免 Key）。
   2. 已在录音中→报错。
   3. `resolve_mic`：uid 缓存命中直接用（少一次全枚举，省 40-110ms 按键延迟）；miss 时枚举，mic_priority 按序取第一个在线→mic_device_uid→系统默认；旧设备名配置自动迁移为 CoreAudio DeviceUID 并回写。
   4. 采集 open：失败清缓存重试一次；再失败且判定权限拒绝→发 `recording-error`。
@@ -196,7 +197,7 @@
 ### 3.4 引擎层（engines.rs 115 行 + 三实现）
 
 - `engines.rs`：
-  - `spawn_session`：按 provider 分派（zhipu→zhipu_file，openai→openai_realtime，其余→doubao）。
+  - `spawn_session`：按 provider 分派（zhipu→zhipu_file，openai→openai_realtime，local→local_asr，其余→doubao）。
   - 会话跑在**专用 current_thread tokio runtime** 的独立线程（C35：提交到 tauri::async_runtime 的任务会整体静默不被 poll，实测教训）。
   - 统一事件桥 emit：
     - `Partial` → `asr-partial`。
@@ -361,6 +362,7 @@
 ### 3.9 自测通道（autotest.rs 119 行，环境变量显式激活）
 
 - `VOICEMAC_AUTOTEST_FILE=<wav>`：headless 文件回放全链路——启动 1.2s 后 `ctrl_start`，读 wav 的 data chunk，按 190ms/6400B 真实节奏喂引擎，300ms 后 Finish，15s 等交付后 exit(0)。走真实交付路径（源码注释中"强制 clip_only"已过时，日志明确"非 clip_only"）。
+- `VOICEMAC_DATA_DIR=<dir>`：测试隔离——把整个数据目录（config/history/recordings/日志）指到独立位置。测试副本改 bundle id 无效（tauri 的 identifier 构建时烘焙，仍读写真实目录）；设了 `VOICEMAC_AUTOTEST` 的副本同时不注册真热键（不与用户实例抢按键）。
 - `VOICEMAC_AUTOTEST=e2e`：模拟按键 + 定位断言——启动 1.5s 后 `send_ctrl(true)`（与真实热键完全同通道）；600ms 后 hud 定位断言（主线程读回 NSWindow.frame 与光标所在 NS 屏求交，±2px 容差，失败 exit(1)）；按住 8s 后 Released；10s 等交付后 exit(0)。
 - examples/：`dict_test.rs`（词典纠错 5 用例：变体替换/拼音 0.5/护栏/已含正确/新音节不允许，`cargo run --example dict_test`）、`llm_test.rs`、`mic_ids.rs`、`smoke_e2e.rs`、`ws_test.rs`；`src/bin/llm_test2.rs`（list_models 双供应商实测，DS_KEY/ZP_KEY 环境变量）。
 - 前端启动 `uiSelftest`：逐个调用只读命令（ping/get_config/list_mics/get_active_mic/get_history/get_hotwords/list_llm_models），结果经 `ui_log` 落 app.log。
