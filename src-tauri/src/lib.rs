@@ -13,6 +13,7 @@ pub mod llm;
 mod log;
 mod mic_watch;
 mod local_asr;
+mod local_service;
 mod openai_realtime;
 mod overlay;
 mod paste_tx;
@@ -40,10 +41,12 @@ pub struct AppState {
     pub last_audio: Option<String>,
     /// 当前引擎命令镜像(转写中 abort / 测试通道用)——会话产物
     pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::doubao::Cmd>>,
+    /// APP 自己拉起的本地网关子进程 PID(退出时只收自己的; 手动起的不动)
+    pub gateway_pid: Option<u32>,
 }
 impl Default for AppState {
     fn default() -> Self {
-        Self { session: None, last_audio: None, engine_mirror: None }
+        Self { session: None, last_audio: None, engine_mirror: None, gateway_pid: None }
     }
 }
 
@@ -117,6 +120,8 @@ pub fn run() {
             // 分段转写队列 worker: 松开热键后的后处理全部进队列串行执行
             // (规则与理由见 segment_queue.rs 顶部注释: 顺序保证 + 不丢段 + 失败不阻塞)
             segment_queue::start(app.handle().clone());
+            // 方案 B: local 引擎网关自动探活/拉起(异步, 不阻塞启动; 手动 serve 的实例直接复用)
+            local_service::prewarm(app.handle());
             // 权限总检查: 一次性查清全部必需权限(麦克风 + 辅助功能)
             // 缺项 → 落日志 + 推给前端 + 把主窗拉出来, 让用户第一眼就看到"缺什么、会怎样"
             let h = app.handle().clone();
@@ -234,6 +239,7 @@ pub fn run() {
             update::update_check, update::update_install,
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
+            commands::local_service_status, commands::local_service_start, commands::local_service_stop,
             commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,
             commands::capture_begin, commands::capture_poll, commands::capture_end,
             commands::check_permissions, commands::request_microphone, commands::open_system_settings,
@@ -247,6 +253,8 @@ pub fn run() {
             // 退出路径留痕: 没有这行日志时, "应用消失" 就分不清是正常退出还是崩溃
             tauri::RunEvent::ExitRequested { code, .. } => {
                 log::log(app, &format!("ExitRequested code={code:?}"));
+                // 收掉 APP 自己拉起的本地网关子进程(手动起的不动)
+                crate::local_service::stop(app);
             }
             tauri::RunEvent::Exit => {
                 crate::crash_log::end_session(&crate::settings::data_dir(app));

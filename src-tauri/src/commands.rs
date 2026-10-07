@@ -539,6 +539,42 @@ pub fn poll_versions() -> Versions {
     }
 }
 
+// ── 本地网关生命周期(方案 B: APP 拉子进程; 方案 A 手动 serve 与之共存, 探活即复用) ──
+
+#[tauri::command]
+pub fn local_service_status(app: tauri::AppHandle) -> String {
+    // 状态只反映"网关在不在", 不区分谁起的(复用语义)
+    let cfg_base = crate::recording::resolve_asr(&crate::settings::get_config(app).unwrap_or_default())
+        .map(|(p, _)| p.base_url)
+        .unwrap_or_default();
+    if crate::local_service::healthy(&cfg_base) {
+        "running".into()
+    } else {
+        "stopped".into()
+    }
+}
+
+#[tauri::command]
+pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
+    let cfg = crate::settings::get_config(app.clone())?;
+    let (profile, _) = crate::recording::resolve_asr(&cfg).map_err(|e| e)?;
+    if crate::local_service::healthy(&profile.base_url) {
+        return Ok("already-running".into());
+    }
+    let pid = crate::local_service::start(&app, &cfg)?;
+    Ok(format!("started pid={pid}"))
+}
+
+#[tauri::command]
+pub fn local_service_stop(app: tauri::AppHandle) -> Result<String, String> {
+    // 手动按钮停止: 只停我们自己拉起的(与退出语义一致, 不动用户手动起的实例)
+    if crate::local_service::stop(&app) {
+        Ok("stopped".into())
+    } else {
+        Ok("not-ours".into())
+    }
+}
+
 #[cfg(test)]
 mod gap_tests {
     #[test]

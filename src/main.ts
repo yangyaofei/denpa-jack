@@ -38,7 +38,7 @@ export interface Config {
   auto_check_update: boolean;
   llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
-  keep_in_clipboard: boolean; trailing_newlines: number;
+  keep_in_clipboard: boolean; trailing_newlines: number; local_autostart: boolean; local_service_dir: string;
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
   extra_tail_ms: number; mic_device_uid: string; mic_priority: string[];
@@ -108,6 +108,7 @@ function describeCombo(s: string): string {
   history: [] as HistoryRecord[],
   selHist: null as HistoryRecord | null,
   asrEdit: null as AsrProfile | null,
+  localSvc: { state: "unknown" as string, busy: false },
   asrIsNew: false,
   llmEdit: null as LlmProfile | null,
   llmIsNew: false,
@@ -171,6 +172,9 @@ function describeCombo(s: string): string {
     await this.loadCfg();
     await this.refreshHistory();
     await this.refreshMics();
+    // 本地网关状态轮询(语音识别页展示; 5s 一次, 探活开销可忽略)
+    this.pollLocalSvc();
+    setInterval(() => this.pollLocalSvc(), 5000);
     try {
       this.version = await invoke<string>("app_version");
     } catch (e) {
@@ -466,6 +470,29 @@ function describeCombo(s: string): string {
     this.cfg.active_asr_id = p.id;
     await this.saveCfg();
   },
+  // ── 本地网关(方案 B: APP 拉子进程) ──
+  async pollLocalSvc() {
+    try {
+      this.localSvc.state = await invoke<string>("local_service_status");
+    } catch { /* 探活失败按未知处理, 不打扰 */ }
+  },
+  async localSvcAction(act: "start" | "stop") {
+    this.localSvc.busy = true;
+    try {
+      const r = await invoke<string>(act === "start" ? "local_service_start" : "local_service_stop");
+      if (r === "not-ours") alert("这个实例不是 APP 拉起的（手动 serve），请自行停止。");
+      if (act === "start" && r.startsWith("started")) {
+        // 模型加载 ~20-40s, 先标"启动中", 轮询会刷成 running
+        this.localSvc.state = "starting";
+      }
+      await this.pollLocalSvc();
+    } catch (e) {
+      alert(`操作失败: ${e}`);
+    } finally {
+      this.localSvc.busy = false;
+    }
+  },
+
   async saveAsr() {
     if (!this.cfg || !this.asrEdit) return;
     // Key 回写全局池
@@ -753,7 +780,7 @@ function describeCombo(s: string): string {
       ], normalizations: [], active_llm_id: "l1", active_asr_id: "a1",
       use_llm_correction: false, clipboard_only: false,
       activation: "hold", audio_feedback: true, restore_clipboard: true,
-      keep_in_clipboard: false, trailing_newlines: 0,
+      keep_in_clipboard: false, trailing_newlines: 0, local_autostart: true, local_service_dir: "~/workspace/denpa-asr",
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
       llm_timeout_secs: 30, llm_max_tokens: 0, llm_retries: 2,

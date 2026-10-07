@@ -240,6 +240,12 @@ pub struct Config {
     /// 只改交付出去的文本，不改历史里的识别结果。
     #[serde(default)]
     pub trailing_newlines: u32,
+    /// local 引擎网关自动拉起(APP 启动时探活, 不在则起子进程; 退出时只收自己的)
+    #[serde(default = "default_true")]
+    pub local_autostart: bool,
+    /// denpa-asr 项目目录(方案 B 拉子进程用; 方案 A 手动 serve 与之共存, 探活即复用)
+    #[serde(default = "default_local_service_dir")]
+    pub local_service_dir: String,
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
     #[serde(default = "default_history_limit")]
@@ -622,6 +628,10 @@ fn default_shortcut_activation() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_local_service_dir() -> String {
+    "~/workspace/denpa-asr".to_string()
 }
 
 fn default_overlay_position() -> String {
