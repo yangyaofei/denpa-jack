@@ -436,6 +436,23 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
             let _ = fs::write(&p, json);
         }
     }
+    // 内置引擎迁移(2026-10-08): 激活档案是"local 且地址为空"的旧形态 → 切到
+    // 特化的 builtin id(type/name 定死, 随机端口联动); 空地址 local 档案移除
+    // (外部网关档案必须显式填地址)。迁移即落盘。
+    if cfg.active_asr_id != crate::local_service::BUILTIN_ID {
+        let old_id = cfg
+            .asr_profiles
+            .iter()
+            .find(|x| x.id == cfg.active_asr_id && x.provider == "local" && x.base_url.trim().is_empty())
+            .map(|x| x.id.clone());
+        if let Some(old_id) = old_id {
+            cfg.active_asr_id = crate::local_service::BUILTIN_ID.into();
+            cfg.asr_profiles.retain(|x| x.id != old_id);
+            if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+                let _ = fs::write(&p, json);
+            }
+        }
+    }
     Ok(cfg)
 }
 

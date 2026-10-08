@@ -1,5 +1,20 @@
       <section x-show="section === 'asr'" class="page">
         <h1>语音识别</h1>
+        <div class="card" :class="{active: cfg?.active_asr_id === 'builtin'}" style="margin-bottom: 8px">
+          <div class="row">
+            <div>
+              <div class="row-title">
+                <span>内置本地引擎</span>
+                <span class="tag">内置</span>
+                <span class="tag" x-show="cfg?.active_asr_id === 'builtin'">使用中</span>
+              </div>
+              <div class="row-hint">Denpa ASR · 随机端口联动，零配置；生命周期随 APP（下方网关卡可控）</div>
+            </div>
+            <div style="display: flex; gap: 6px">
+              <button class="mini" @click="useAsr({id: 'builtin'})" x-show="cfg?.active_asr_id !== 'builtin'">使用</button>
+            </div>
+          </div>
+        </div>
         <template x-for="p in cfg?.asr_profiles ?? []" :key="p.id">
           <div class="card" :class="{active: cfg?.active_asr_id === p.id}" style="margin-bottom: 8px">
             <div class="row">
@@ -57,15 +72,15 @@
         </div>
 
         <div class="card">
-          <h2>本地网关</h2>
+          <h2>内置网关</h2>
           <div class="row">
-            <span>状态<span class="row-hint" x-show="localSvc.pid" x-text="'pid ' + localSvc.pid"></span></span>
+            <span>状态<span class="row-hint" x-show="localSvc.port" x-text="'127.0.0.1:' + localSvc.port"></span></span>
             <span class="tag"
-                  :class="localSvc.state === 'running' ? 'green' : (localSvc.state === 'starting' ? 'warn' : (localSvc.state === 'failed' ? 'err' : ''))"
+                  :class="localSvc.state === 'running' ? 'green' : (localSvc.state === 'starting' ? 'warn' : ((localSvc.state === 'failed' || localSvc.state === 'crashed') ? 'err' : ''))"
                   x-text="localSvcText"></span>
           </div>
           <div class="row">
-            <span>APP 启动时自动拉起<span class="row-hint">(探活发现已在跑则直接复用)</span></span>
+            <span>APP 启动时自动拉起</span>
             <input type="checkbox" class="switch" x-model="cfg.local_autostart" @change="saveCfg()" />
           </div>
           <label>项目目录<span class="row-hint">(denpa-asr 仓库位置)</span>
@@ -76,11 +91,11 @@
                     :disabled="localSvc.busy || localSvc.state === 'starting' || localSvc.state === 'running'"
                     x-text="localSvc.state === 'starting' ? '启动中…' : '启动'"></button>
             <button class="mini" @click="localSvcAction('stop')"
-                    :disabled="localSvc.busy || !localSvc.pid">停止</button>
+                    :disabled="localSvc.busy || (localSvc.state !== 'running' && localSvc.state !== 'starting')">停止</button>
           </div>
           <pre id="local-svc-log" class="log-box"><template x-for="(l, i) in localSvc.tail" :key="i"><span x-text="l"></span>
 </template><span class="dim" x-show="!localSvc.tail.length">（暂无日志——启动后网关的输出会显示在这里，等效终端）</span></pre>
-          <p class="hint">自动拉起的实例随 APP 退出而停止；手动 <code>denpa-asr serve</code> 起的实例不会被 APP 动。</p>
+          <p class="hint">内置实例随 APP 退出而优雅停止；手动 <code>denpa-asr serve</code> 的外部实例不受 APP 管理（用「外部网关」档案接它）。</p>
         </div>
 
         <!-- ASR 编辑 sheet -->
@@ -91,10 +106,10 @@
             <label>引擎
               <select class="inp" x-model="asrEdit.provider">
                 <option value="volcengine">火山引擎 (豆包流式)</option>
-                <option value="local">本地服务 (Qwen3-ASR 网关)</option>
+                <option value="local">外部网关 (自建 denpa-asr)</option>
               </select>
             </label>
-            <label x-show="asrEdit.provider === 'local'" x-cloak>服务地址<span class="row-hint">(网关部署在哪台机器就填哪个；留空=本机 8300)</span>
+            <label x-show="asrEdit.provider === 'local'" x-cloak>服务地址<span class="row-hint">(外部网关必填，如手动 serve 或远程机器)</span>
               <input class="inp" placeholder="127.0.0.1:8300 或 ws://192.168.1.5:8300" x-model="asrEdit.base_url" />
             </label>
             <label x-show="asrEdit.provider !== 'local'" x-cloak>API Key<span class="row-hint">(该引擎档案的密钥)</span>

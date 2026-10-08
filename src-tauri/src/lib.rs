@@ -41,20 +41,10 @@ pub struct AppState {
     pub last_audio: Option<String>,
     /// 当前引擎命令镜像(转写中 abort / 测试通道用)——会话产物
     pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::doubao::Cmd>>,
-    /// APP 自己拉起的本地网关子进程 PID(退出时只收自己的; 手动起的不动)
-    pub gateway_pid: Option<u32>,
-    /// 网关拉起时刻(starting 状态展示已耗时; 排障判断是否卡死)
-    pub gateway_started_at: Option<std::time::Instant>,
 }
 impl Default for AppState {
     fn default() -> Self {
-        Self {
-            session: None,
-            last_audio: None,
-            engine_mirror: None,
-            gateway_pid: None,
-            gateway_started_at: None,
-        }
+        Self { session: None, last_audio: None, engine_mirror: None }
     }
 }
 
@@ -261,8 +251,8 @@ pub fn run() {
             // 退出路径留痕: 没有这行日志时, "应用消失" 就分不清是正常退出还是崩溃
             tauri::RunEvent::ExitRequested { code, .. } => {
                 log::log(app, &format!("ExitRequested code={code:?}"));
-                // 收掉 APP 自己拉起的本地网关子进程(手动起的不动)
-                crate::local_service::stop(app);
+                // 收掉内置网关子进程(两段式: SIGTERM→5s→SIGKILL; 外部实例不在登记处不受影响)
+                local_service::stop();
             }
             tauri::RunEvent::Exit => {
                 crate::crash_log::end_session(&crate::settings::data_dir(app));

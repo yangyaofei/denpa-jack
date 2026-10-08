@@ -149,6 +149,20 @@ fn start_input_default(online: &[(String, String)]) -> Option<String> {
 }
 
 pub fn resolve_asr(cfg: &Config) -> Result<(settings::AsrProfile, String), String> {
+    // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
+    // 不占档案列表、零配置, 地址来自 local_service 登记的随机端口(联动)
+    if cfg.active_asr_id == crate::local_service::BUILTIN_ID {
+        let base = crate::local_service::builtin_base_url()?;
+        let p = settings::AsrProfile {
+            id: crate::local_service::BUILTIN_ID.into(),
+            name: "内置本地引擎".into(),
+            provider: "local".into(),
+            api_key: String::new(),
+            base_url: base,
+            hotwords_enabled: true,
+        };
+        return Ok((p, String::new()));
+    }
     let profile = cfg
         .asr_profiles
         .iter()
@@ -159,7 +173,7 @@ pub fn resolve_asr(cfg: &Config) -> Result<(settings::AsrProfile, String), Strin
     if !["volcengine", "zhipu", "openai", "local"].contains(&profile.provider.as_str()) {
         return Err(format!("未知引擎: {}", profile.provider));
     }
-    // 本地网关无鉴权：不需要 Key(空 Key 池也能用)
+    // 本地/内置网关无鉴权：不需要 Key(空 Key 池也能用)
     if profile.provider == "local" {
         return Ok((profile, String::new()));
     }

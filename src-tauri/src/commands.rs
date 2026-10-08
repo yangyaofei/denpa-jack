@@ -539,44 +539,55 @@ pub fn poll_versions() -> Versions {
     }
 }
 
-// ── 本地网关生命周期(方案 B: APP 拉子进程; 方案 A 手动 serve 与之共存, 探活即复用) ──
+// ── 内置本地网关(特化 provider: 随机端口联动, 零配置; 外部网关档案不受此管) ──
 
 #[derive(serde::Serialize)]
 pub struct LocalSvcStatus {
-    pub state: String, // stopped | starting | running | failed
-    pub pid: Option<u32>,
+    /// stopped | starting | running | failed(从未就绪即退) | crashed(就绪后退)
+    pub state: String,
+    pub port: u16,
     pub elapsed_secs: Option<u64>,
-    pub tail: Vec<String>, // 网关 stdout/stderr 尾部(等效 shell 输出)
+    pub exit: Option<String>,
+    pub tail: Vec<String>, // 网关 stdout/stderr 尾部(\r/ANSI 已归一, 官方输出全保留)
 }
 
 #[tauri::command]
 pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
-    let s = crate::local_service::status(&app);
-    LocalSvcStatus { state: s.state, pid: s.pid, elapsed_secs: s.elapsed_secs, tail: crate::local_service::log_tail(&app, 60) }
+    let s = crate::local_service::snapshot();
+    let state = if s.healthy {
+        "running".to_string()
+    } else if s.alive {
+        "starting".to_string()
+    } else if s.exit.is_some() {
+        if s.healthy_ever { "crashed" } else { "failed" }.to_string()
+    } else {
+        "stopped".to_string()
+    };
+    LocalSvcStatus {
+        state,
+        port: s.port,
+        elapsed_secs: s.started_at.map(|t| t.elapsed().as_secs()),
+        exit: s.exit.clone(),
+        tail: crate::local_service::log_tail(&app, 80),
+    }
 }
 
 #[tauri::command]
 pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
     let cfg = crate::settings::get_config(app.clone())?;
-    let (profile, _) = crate::recording::resolve_asr(&cfg).map_err(|e| e)?;
-    if crate::local_service::healthy(&profile.base_url) {
-        return Ok("already-running".into());
-    }
-    // start() 里还有双实例守卫: 预热线程已拉起(加载中)时返回 Err("already-starting pid=N")
     match crate::local_service::start(&app, &cfg) {
-        Ok(pid) => Ok(format!("started pid={pid}")),
+        Ok(info) => Ok(info),
         Err(e) if e.starts_with("already-starting") => Ok(e), // 不是失败, 是"已在启动中"
         Err(e) => Err(e),
     }
 }
 
 #[tauri::command]
-pub fn local_service_stop(app: tauri::AppHandle) -> Result<String, String> {
-    // 手动按钮停止: 只停我们自己拉起的(与退出语义一致, 不动用户手动起的实例)
-    if crate::local_service::stop(&app) {
+pub fn local_service_stop() -> Result<String, String> {
+    if crate::local_service::stop() {
         Ok("stopped".into())
     } else {
-        Ok("not-ours".into())
+        Ok("not-ours".into()) // 登记处没有自有子进程(外部手动实例 APP 不动)
     }
 }
 

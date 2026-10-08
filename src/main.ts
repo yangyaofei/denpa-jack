@@ -108,7 +108,7 @@ function describeCombo(s: string): string {
   history: [] as HistoryRecord[],
   selHist: null as HistoryRecord | null,
   asrEdit: null as AsrProfile | null,
-  localSvc: { state: "unknown" as string, pid: null as number | null, elapsed_secs: null as number | null, tail: [] as string[], busy: false },
+  localSvc: { state: "unknown" as string, port: 0 as number, elapsed_secs: null as number | null, exit: null as string | null, tail: [] as string[], busy: false },
   asrIsNew: false,
   llmEdit: null as LlmProfile | null,
   llmIsNew: false,
@@ -465,10 +465,14 @@ function describeCombo(s: string): string {
     if (this.cfg.active_asr_id === p.id) this.cfg.active_asr_id = this.cfg.asr_profiles[0]?.id ?? "";
     await this.saveCfg();
   },
-  async useAsr(p: AsrProfile) {
+  async useAsr(p: AsrProfile | { id: string }) {
     if (!this.cfg) return;
     this.cfg.active_asr_id = p.id;
     await this.saveCfg();
+    // 切到内置引擎且未运行 → 立即拉起(不等下次 APP 启动的预热)
+    if (p.id === "builtin" && this.localSvc.state !== "running" && this.localSvc.state !== "starting") {
+      this.localSvcAction("start");
+    }
   },
   // ── 本地网关(方案 B: APP 拉子进程) ──
   async pollLocalSvc() {
@@ -494,11 +498,11 @@ function describeCombo(s: string): string {
   },
   get localSvcText(): string {
     const s = this.localSvc.state;
-    if (s === "running")
-      return this.localSvc.pid ? "运行中" : "运行中（外部实例，APP 不管它）";
+    if (s === "running") return "运行中";
     if (s === "starting")
       return `启动中… ${this.localSvc.elapsed_secs ?? 0}s（模型加载约 40s，日志见下）`;
-    if (s === "failed") return "启动失败（进程已退出，看下方日志排查）";
+    if (s === "failed") return `启动失败（退出: ${this.localSvc.exit ?? "?"}，看下方日志）`;
+    if (s === "crashed") return `运行中崩溃（退出: ${this.localSvc.exit ?? "?"}，可重新启动）`;
     return "未运行";
   },
 
