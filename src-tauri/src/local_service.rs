@@ -60,8 +60,22 @@ fn expand_home(p: &str) -> String {
 
 /// 拉起网关子进程：{local_service_dir}/.venv/bin/python -m denpa_asr.gateway
 /// 日志重定向到数据目录 local-service.log（卡片里可实时看，等效 shell 输出）；
-/// PID 记入 AppState（退出时只杀自己的）
+/// PID 记入 AppState（退出时只杀自己的）。
+///
+/// 双实例守卫（实测教训：预热已拉 A、用户再按启动又拉 B，B 撞端口 Errno 48 死掉，
+/// 白加载 40s 还把状态搞乱）：
+/// - 端口已健康 → 不拉（复用现有实例）
+/// - 我们已有活着的 pid（正在启动中）→ 不拉，返回 already-starting
 pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<u32, String> {
+    {
+        let state = app.state::<std::sync::Mutex<crate::AppState>>();
+        let st = state.lock().unwrap();
+        if let Some(pid) = st.gateway_pid {
+            if process_alive(pid) {
+                return Err(format!("already-starting pid={pid}"));
+            }
+        }
+    }
     let dir = expand_home(cfg.local_service_dir.trim());
     let python = std::path::Path::new(&dir).join(".venv/bin/python");
     if !python.exists() {
@@ -106,9 +120,16 @@ pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<u32, String> {
 }
 
 /// 卡片用的完整状态（替代过去的布尔探活）：
-/// running=健康检查通过；starting=我们拉起的进程还活着但未就绪(带已耗时)；
-/// failed=进程在就绪前退出(看日志)；stopped=无进程
-pub fn status(app: &tauri::AppHandle) -> (String, Option<u32>, Option<u64>) {
+/// running=健康检查通过（pid 为空表示是外部/手动实例，APP 不管其生命周期）；
+/// starting=我们拉起的进程还活着但未就绪(带已耗时)；failed=进程在就绪前退出；
+/// stopped=无进程。同名裁决见 start() 的双实例守卫。
+pub struct SvcStatus {
+    pub state: String,
+    pub pid: Option<u32>,
+    pub elapsed_secs: Option<u64>,
+}
+
+pub fn status(app: &tauri::AppHandle) -> SvcStatus {
     let (pid, started) = {
         let state = app.state::<std::sync::Mutex<crate::AppState>>();
         let st = state.lock().unwrap();
@@ -118,22 +139,28 @@ pub fn status(app: &tauri::AppHandle) -> (String, Option<u32>, Option<u64>) {
         .map(|(p, _)| p.base_url)
         .unwrap_or_default();
     if healthy(&base) {
-        return ("running".into(), pid, started.map(|t| t.elapsed().as_secs()));
+        // 端口活着的可能不是我们拉的那个(手动 serve / 旧实例): pid 已死就说实话
+        let pid_alive = pid.map(process_alive).unwrap_or(false);
+        return SvcStatus {
+            state: "running".into(),
+            pid: if pid_alive { pid } else { None },
+            elapsed_secs: started.filter(|_| pid_alive).map(|t| t.elapsed().as_secs()),
+        };
     }
     match pid {
-        Some(pid) if process_alive(pid) => (
-            "starting".into(),
-            Some(pid),
-            started.map(|t| t.elapsed().as_secs()),
-        ),
+        Some(pid) if process_alive(pid) => SvcStatus {
+            state: "starting".into(),
+            pid: Some(pid),
+            elapsed_secs: started.map(|t| t.elapsed().as_secs()),
+        },
         Some(pid) => {
             // 进程死了但健康检查也没过 → 启动失败，清掉引用让状态不再误导
             let state = app.state::<std::sync::Mutex<crate::AppState>>();
             state.lock().unwrap().gateway_pid = None;
             crate::log::elog(&format!("[local-svc] 网关进程 pid={pid} 在就绪前退出了(启动失败, 看 local-service.log)"));
-            ("failed".into(), None, None)
+            SvcStatus { state: "failed".into(), pid: None, elapsed_secs: None }
         }
-        None => ("stopped".into(), None, None),
+        None => SvcStatus { state: "stopped".into(), pid: None, elapsed_secs: None },
     }
 }
 

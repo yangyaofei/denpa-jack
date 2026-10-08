@@ -551,8 +551,8 @@ pub struct LocalSvcStatus {
 
 #[tauri::command]
 pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
-    let (state, pid, elapsed_secs) = crate::local_service::status(&app);
-    LocalSvcStatus { state, pid, elapsed_secs, tail: crate::local_service::log_tail(&app, 60) }
+    let s = crate::local_service::status(&app);
+    LocalSvcStatus { state: s.state, pid: s.pid, elapsed_secs: s.elapsed_secs, tail: crate::local_service::log_tail(&app, 60) }
 }
 
 #[tauri::command]
@@ -562,8 +562,12 @@ pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
     if crate::local_service::healthy(&profile.base_url) {
         return Ok("already-running".into());
     }
-    let pid = crate::local_service::start(&app, &cfg)?;
-    Ok(format!("started pid={pid}"))
+    // start() 里还有双实例守卫: 预热线程已拉起(加载中)时返回 Err("already-starting pid=N")
+    match crate::local_service::start(&app, &cfg) {
+        Ok(pid) => Ok(format!("started pid={pid}")),
+        Err(e) if e.starts_with("already-starting") => Ok(e), // 不是失败, 是"已在启动中"
+        Err(e) => Err(e),
+    }
 }
 
 #[tauri::command]

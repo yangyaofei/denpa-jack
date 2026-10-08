@@ -494,7 +494,8 @@ function describeCombo(s: string): string {
   },
   get localSvcText(): string {
     const s = this.localSvc.state;
-    if (s === "running") return "运行中";
+    if (s === "running")
+      return this.localSvc.pid ? "运行中" : "运行中（外部实例，APP 不管它）";
     if (s === "starting")
       return `启动中… ${this.localSvc.elapsed_secs ?? 0}s（模型加载约 40s，日志见下）`;
     if (s === "failed") return "启动失败（进程已退出，看下方日志排查）";
