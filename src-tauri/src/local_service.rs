@@ -154,9 +154,11 @@ pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<String, String> {
     *BUILTIN.lock().unwrap() = Some(gw.clone());
 
     // monitor 线程：探活 + 收尸（try_wait 即 reap；句柄被 stop() 取走或进程退出后线程退出）
+    // 探活降频：就绪前 500ms（尽快翻"运行中"），就绪后 2s（健康是持续事实，省请求省日志）
     std::thread::spawn(move || {
         loop {
-            std::thread::sleep(Duration::from_millis(500));
+            let healthy_ever_now = gw.facts.lock().unwrap().healthy_ever;
+            std::thread::sleep(Duration::from_millis(if healthy_ever_now { 2000 } else { 500 }));
             let mut slot = gw.child.lock().unwrap();
             let Some(child) = slot.as_mut() else { break };
             match child.try_wait() {
