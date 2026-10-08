@@ -129,10 +129,19 @@ pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<String, String> {
         .truncate(true) // 每次启动清空: 日志框只属于当前实例
         .open(&lp)
         .map_err(|e| format!("打不开日志 {lp:?}: {e}"))?;
+    // 内置引擎的启动参数来自 APP 配置(唯一事实源), 按网关的 DENPA_ASR_* 环境变量传入
+    let b = &cfg.builtin_engine;
     let child = Command::new(&python)
         .arg("-m")
         .arg("denpa_asr.gateway")
         .env("DENPA_ASR_PORT", port.to_string())
+        .env("DENPA_ASR_MODEL", &b.model)
+        .env("DENPA_ASR_VAD", &b.vad) // 空串=显式关(网关 make_gate 语义)
+        .env("DENPA_ASR_TWOPASS", if b.twopass { "1" } else { "0" })
+        .env("DENPA_ASR_CHUNK_SEC", b.chunk_size_sec.to_string())
+        .env("DENPA_ASR_MAX_CONTEXT", b.max_context_sec.to_string())
+        .env("DENPA_ASR_ENDPOINTING", &b.endpointing)
+        .env("DENPA_ASR_MAX_SESSIONS", b.max_sessions.to_string())
         .current_dir(&dir)
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log))

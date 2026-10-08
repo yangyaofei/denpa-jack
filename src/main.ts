@@ -39,6 +39,7 @@ export interface Config {
   llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
   keep_in_clipboard: boolean; trailing_newlines: number; local_autostart: boolean; local_service_dir: string;
+  builtin_engine: { model: string; vad: string; twopass: boolean; chunk_size_sec: number; max_context_sec: number; endpointing: string; max_sessions: number };
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
   extra_tail_ms: number; mic_device_uid: string; mic_priority: string[];
@@ -109,6 +110,7 @@ function describeCombo(s: string): string {
   selHist: null as HistoryRecord | null,
   asrEdit: null as AsrProfile | null,
   localSvc: { state: "unknown" as string, port: 0 as number, elapsed_secs: null as number | null, exit: null as string | null, tail: [] as string[], busy: false },
+  builtinDirty: false as boolean,
   asrIsNew: false,
   llmEdit: null as LlmProfile | null,
   llmIsNew: false,
@@ -474,7 +476,27 @@ function describeCombo(s: string): string {
       this.localSvcAction("start");
     }
   },
-  // ── 本地网关(方案 B: APP 拉子进程) ──
+  markBuiltinDirty() {
+    this.builtinDirty = true;
+  },
+  // 配置改动不立即重启(不打断进行中的录音), 用户点"重启生效": 停止→等落定→按新参数拉起
+  async restartBuiltin() {
+    this.localSvc.busy = true;
+    try {
+      await invoke("local_service_stop");
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 300));
+        const s = await invoke<any>("local_service_status");
+        if (s.state === "stopped" || s.state === "failed" || s.state === "crashed") break;
+      }
+      await invoke("local_service_start");
+      this.builtinDirty = false;
+      this.pollLocalSvc();
+    } finally {
+      this.localSvc.busy = false;
+    }
+  },
+  // ── 本地网关(内置引擎子进程) ──
   async pollLocalSvc() {
     try {
       const s = await invoke<any>("local_service_status");
@@ -794,6 +816,7 @@ function describeCombo(s: string): string {
       use_llm_correction: false, clipboard_only: false,
       activation: "hold", audio_feedback: true, restore_clipboard: true,
       keep_in_clipboard: false, trailing_newlines: 0, local_autostart: true, local_service_dir: "~/workspace/denpa-asr",
+      builtin_engine: { model: "Qwen/Qwen3-ASR-1.7B", vad: "ten", twopass: true, chunk_size_sec: 0.5, max_context_sec: 120, endpointing: "energy", max_sessions: 4 },
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
       llm_timeout_secs: 30, llm_max_tokens: 0, llm_retries: 2,

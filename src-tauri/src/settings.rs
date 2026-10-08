@@ -52,6 +52,39 @@ pub struct AsrProfile {
     pub hotwords_enabled: bool,
 }
 
+/// 内置本地引擎的启动参数（2026-10-08 用户定则: 配置长在引擎身上, APP 是唯一
+/// 事实源, 拉起子进程时按此生成 DENPA_ASR_* 环境变量; 改动重启网关后生效）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuiltinEngineConfig {
+    /// 模型: repo id(自动下载到项目 models/)或本地路径
+    pub model: String,
+    /// VAD: ""=关 | silero | ten
+    pub vad: String,
+    /// 松手后全句重解(豆包两段式)
+    pub twopass: bool,
+    /// 流式分块粒度(秒)
+    pub chunk_size_sec: f64,
+    /// 解码窗上限(秒)
+    pub max_context_sec: f64,
+    /// 端点检测: fixed | energy
+    pub endpointing: String,
+    /// 网关并发会话上限
+    pub max_sessions: u32,
+}
+impl Default for BuiltinEngineConfig {
+    fn default() -> Self {
+        Self {
+            model: "Qwen/Qwen3-ASR-1.7B".into(),
+            vad: "ten".into(),
+            twopass: true,
+            chunk_size_sec: 0.5,
+            max_context_sec: 120.0,
+            endpointing: "energy".into(),
+            max_sessions: 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DictEntry {
     pub term: String,            // 标准写法
@@ -243,9 +276,12 @@ pub struct Config {
     /// local 引擎网关自动拉起(APP 启动时探活, 不在则起子进程; 退出时只收自己的)
     #[serde(default = "default_true")]
     pub local_autostart: bool,
-    /// denpa-asr 项目目录(方案 B 拉子进程用; 方案 A 手动 serve 与之共存, 探活即复用)
+    /// denpa-asr 项目目录(内置引擎拉子进程用; 外部网关档案不受此管)
     #[serde(default = "default_local_service_dir")]
     pub local_service_dir: String,
+    /// 内置本地引擎启动参数(模型/VAD/二遍重解/分块/窗口/端点/并发; 重启网关生效)
+    #[serde(default)]
+    pub builtin_engine: BuiltinEngineConfig,
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
     #[serde(default = "default_history_limit")]
