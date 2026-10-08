@@ -56,6 +56,27 @@
           </div>
         </div>
 
+        <div class="card">
+          <h2>本地网关</h2>
+          <div class="row">
+            <span>状态</span>
+            <span class="tag" :class="localSvc.state === 'running' ? 'ok' : ''"
+                  x-text="localSvc.state === 'running' ? '运行中' : (localSvc.state === 'starting' ? '启动中(模型加载 ~40s)' : '未运行')"></span>
+          </div>
+          <div class="row">
+            <span>APP 启动时自动拉起<span class="row-hint">(探活发现已在跑则直接复用)</span></span>
+            <input type="checkbox" class="switch" x-model="cfg.local_autostart" @change="saveCfg()" />
+          </div>
+          <label>项目目录<span class="row-hint">(denpa-asr 仓库位置)</span>
+            <input class="inp" x-model="cfg.local_service_dir" @change="saveCfg()" />
+          </label>
+          <div class="btns end">
+            <button class="mini" @click="localSvcAction('start')" :disabled="localSvc.busy">启动</button>
+            <button class="mini" @click="localSvcAction('stop')" :disabled="localSvc.busy">停止</button>
+          </div>
+          <p class="hint">自动拉起的实例随 APP 退出而停止；手动 <code>denpa-asr serve</code> 起的实例不会被 APP 动。</p>
+        </div>
+
         <!-- ASR 编辑 sheet -->
         <template x-if="asrEdit"><div class="overlay" @click.self="asrEdit = null">
           <div class="sheet">
@@ -85,23 +106,3 @@
         </div></template>
       </section>
 
-      <section class="card">
-        <h2>本地网关</h2>
-        <div class="row">
-          <span>状态</span>
-          <span class="tag" :class="localSvc.state === 'running' ? 'ok' : ''"
-                x-text="localSvc.state === 'running' ? '运行中' : '未运行'"></span>
-        </div>
-        <div class="row">
-          <span>APP 启动时自动拉起<span class="row-hint">(探活发现已在跑则直接复用)</span></span>
-          <input type="checkbox" class="switch" x-model="cfg.local_autostart" @change="saveCfg()" />
-        </div>
-        <label>项目目录<span class="row-hint">(denpa-asr 仓库位置)</span>
-          <input class="inp" x-model="cfg.local_service_dir" @change="saveCfg()" />
-        </label>
-        <div class="btns end">
-          <button class="mini" @click="localSvcAction('start')" :disabled="localSvc.busy">启动</button>
-          <button class="mini" @click="localSvcAction('stop')" :disabled="localSvc.busy">停止</button>
-        </div>
-        <p class="hint">自动拉起的实例随 APP 退出而停止；手动 <code>denpa-asr serve</code> 起的实例不会被 APP 动。</p>
-      </section>
