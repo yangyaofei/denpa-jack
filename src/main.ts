@@ -816,7 +816,7 @@ function describeCombo(s: string): string {
       use_llm_correction: false, clipboard_only: false,
       activation: "hold", audio_feedback: true, restore_clipboard: true,
       keep_in_clipboard: false, trailing_newlines: 0, local_autostart: true, local_service_dir: "~/workspace/denpa-asr",
-      builtin_engine: { model: "Qwen/Qwen3-ASR-1.7B", vad: "ten", twopass: true, chunk_size_sec: 0.5, max_context_sec: 120, endpointing: "energy", max_sessions: 4 },
+      builtin_engine: { model: "Qwen/Qwen3-ASR-1.7B", vad: "", twopass: true, chunk_size_sec: 0.5, max_context_sec: 120, endpointing: "energy", max_sessions: 4 },
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,
       llm_timeout_secs: 30, llm_max_tokens: 0, llm_retries: 2,

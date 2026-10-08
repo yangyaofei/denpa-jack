@@ -31,11 +31,11 @@
             <input class="inp" x-model="cfg.builtin_engine.model" @change="markBuiltinDirty(); saveCfg()" />
           </label>
           <div class="grid-2">
-            <label>VAD<span class="row-hint">(静音门控)</span>
+            <label>VAD<span class="row-hint">(静音门控; 默认关——ten 会吃气声首尾帧,曾致丢字)</span>
               <select class="inp" x-model="cfg.builtin_engine.vad" @change="markBuiltinDirty(); saveCfg()">
-                <option value="ten">ten（默认）</option>
+                <option value="">关（默认）</option>
+                <option value="ten">ten</option>
                 <option value="silero">silero</option>
-                <option value="">关</option>
               </select>
             </label>
             <label>端点检测

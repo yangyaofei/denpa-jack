@@ -58,7 +58,7 @@ pub struct AsrProfile {
 pub struct BuiltinEngineConfig {
     /// 模型: repo id(自动下载到项目 models/)或本地路径
     pub model: String,
-    /// VAD: ""=关 | silero | ten
+    /// VAD: ""=关(默认, 2026-10-08 实测 ten 吃气声口述首尾帧, 丢字>省算力) | silero | ten
     pub vad: String,
     /// 松手后全句重解(豆包两段式)
     pub twopass: bool,
@@ -75,7 +75,7 @@ impl Default for BuiltinEngineConfig {
     fn default() -> Self {
         Self {
             model: "Qwen/Qwen3-ASR-1.7B".into(),
-            vad: "ten".into(),
+            vad: String::new(),
             twopass: true,
             chunk_size_sec: 0.5,
             max_context_sec: 120.0,
@@ -487,6 +487,15 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
             if let Ok(json) = serde_json::to_string_pretty(&cfg) {
                 let _ = fs::write(&p, json);
             }
+        }
+    }
+    // VAD 一次性迁移: 0.3.23 曾把默认 ten 写进配置; 当天实测 ten 吃气声口述首尾帧
+    // (rec_1791445446593/460175, 音频完整模型直读全对而交付缺头少尾), 默认改关。
+    // 该值只可能是默认带入(0.3.23 仅存在数小时), 强制归零不冤枉任何显式选择。
+    if cfg.builtin_engine.vad == "ten" {
+        cfg.builtin_engine.vad = String::new();
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = fs::write(&p, json);
         }
     }
     Ok(cfg)
