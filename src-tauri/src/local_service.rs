@@ -59,7 +59,8 @@ fn expand_home(p: &str) -> String {
 }
 
 /// 拉起网关子进程：{local_service_dir}/.venv/bin/python -m denpa_asr.gateway
-/// 日志重定向到数据目录 local-service.log；PID 记入 AppState（退出时只杀自己的）
+/// 日志重定向到数据目录 local-service.log（卡片里可实时看，等效 shell 输出）；
+/// PID 记入 AppState（退出时只杀自己的）
 pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<u32, String> {
     let dir = expand_home(cfg.local_service_dir.trim());
     let python = std::path::Path::new(&dir).join(".venv/bin/python");
@@ -75,6 +76,16 @@ pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<u32, String> {
         .append(true)
         .open(&log_path)
         .map_err(|e| format!("打不开日志 {log_path:?}: {e}"))?;
+    // 分隔线让用户在日志里分得清这是第几次拉起
+    {
+        use std::io::Write;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut w = std::io::BufWriter::new(&log);
+        let _ = writeln!(w, "\n── APP 拉起网关 unix={ts} ──");
+    }
     let child = std::process::Command::new(&python)
         .arg("-m")
         .arg("denpa_asr.gateway")
@@ -87,21 +98,68 @@ pub fn start(app: &tauri::AppHandle, cfg: &Config) -> Result<u32, String> {
     // 丢弃 Child 句柄但保留 PID：进程独立存活, 由 AppState 在退出时按 PID 收掉
     std::mem::forget(child);
     crate::log::elog(&format!("[local-svc] 已拉起网关 pid={pid} 日志={}", log_path.display()));
-    app.state::<std::sync::Mutex<crate::AppState>>()
-        .lock()
-        .unwrap()
-        .gateway_pid = Some(pid);
+    let state = app.state::<std::sync::Mutex<crate::AppState>>();
+    let mut st = state.lock().unwrap();
+    st.gateway_pid = Some(pid);
+    st.gateway_started_at = Some(std::time::Instant::now());
     Ok(pid)
+}
+
+/// 卡片用的完整状态（替代过去的布尔探活）：
+/// running=健康检查通过；starting=我们拉起的进程还活着但未就绪(带已耗时)；
+/// failed=进程在就绪前退出(看日志)；stopped=无进程
+pub fn status(app: &tauri::AppHandle) -> (String, Option<u32>, Option<u64>) {
+    let (pid, started) = {
+        let state = app.state::<std::sync::Mutex<crate::AppState>>();
+        let st = state.lock().unwrap();
+        (st.gateway_pid, st.gateway_started_at)
+    };
+    let base = crate::recording::resolve_asr(&crate::settings::get_config(app.clone()).unwrap_or_default())
+        .map(|(p, _)| p.base_url)
+        .unwrap_or_default();
+    if healthy(&base) {
+        return ("running".into(), pid, started.map(|t| t.elapsed().as_secs()));
+    }
+    match pid {
+        Some(pid) if process_alive(pid) => (
+            "starting".into(),
+            Some(pid),
+            started.map(|t| t.elapsed().as_secs()),
+        ),
+        Some(pid) => {
+            // 进程死了但健康检查也没过 → 启动失败，清掉引用让状态不再误导
+            let state = app.state::<std::sync::Mutex<crate::AppState>>();
+            state.lock().unwrap().gateway_pid = None;
+            crate::log::elog(&format!("[local-svc] 网关进程 pid={pid} 在就绪前退出了(启动失败, 看 local-service.log)"));
+            ("failed".into(), None, None)
+        }
+        None => ("stopped".into(), None, None),
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// 读日志尾部（网关 stdout/stderr 都在 local-service.log；等效 shell 输出）
+pub fn log_tail(app: &tauri::AppHandle, lines: usize) -> Vec<String> {
+    let path = crate::settings::data_dir(app).join("local-service.log");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return vec![];
+    };
+    let mut out: Vec<String> = content.lines().rev().take(lines).map(String::from).collect();
+    out.reverse();
+    out
 }
 
 /// 停止：只杀 APP 自己拉起的实例（手动 `denpa-asr serve` 的不属于我们，不动）
 pub fn stop(app: &tauri::AppHandle) -> bool {
-    let pid = app
-        .state::<std::sync::Mutex<crate::AppState>>()
-        .lock()
-        .unwrap()
-        .gateway_pid
-        .take();
+    let pid = {
+        let state = app.state::<std::sync::Mutex<crate::AppState>>();
+        let mut st = state.lock().unwrap();
+        st.gateway_started_at = None;
+        st.gateway_pid.take()
+    };
     if let Some(pid) = pid {
         crate::log::elog(&format!("[local-svc] APP 退出, 收掉自己拉起的网关 pid={pid}"));
         unsafe {

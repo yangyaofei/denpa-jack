@@ -541,17 +541,18 @@ pub fn poll_versions() -> Versions {
 
 // ── 本地网关生命周期(方案 B: APP 拉子进程; 方案 A 手动 serve 与之共存, 探活即复用) ──
 
+#[derive(serde::Serialize)]
+pub struct LocalSvcStatus {
+    pub state: String, // stopped | starting | running | failed
+    pub pid: Option<u32>,
+    pub elapsed_secs: Option<u64>,
+    pub tail: Vec<String>, // 网关 stdout/stderr 尾部(等效 shell 输出)
+}
+
 #[tauri::command]
-pub fn local_service_status(app: tauri::AppHandle) -> String {
-    // 状态只反映"网关在不在", 不区分谁起的(复用语义)
-    let cfg_base = crate::recording::resolve_asr(&crate::settings::get_config(app).unwrap_or_default())
-        .map(|(p, _)| p.base_url)
-        .unwrap_or_default();
-    if crate::local_service::healthy(&cfg_base) {
-        "running".into()
-    } else {
-        "stopped".into()
-    }
+pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
+    let (state, pid, elapsed_secs) = crate::local_service::status(&app);
+    LocalSvcStatus { state, pid, elapsed_secs, tail: crate::local_service::log_tail(&app, 60) }
 }
 
 #[tauri::command]

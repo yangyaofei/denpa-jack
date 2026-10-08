@@ -43,10 +43,18 @@ pub struct AppState {
     pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::doubao::Cmd>>,
     /// APP 自己拉起的本地网关子进程 PID(退出时只收自己的; 手动起的不动)
     pub gateway_pid: Option<u32>,
+    /// 网关拉起时刻(starting 状态展示已耗时; 排障判断是否卡死)
+    pub gateway_started_at: Option<std::time::Instant>,
 }
 impl Default for AppState {
     fn default() -> Self {
-        Self { session: None, last_audio: None, engine_mirror: None, gateway_pid: None }
+        Self {
+            session: None,
+            last_audio: None,
+            engine_mirror: None,
+            gateway_pid: None,
+            gateway_started_at: None,
+        }
     }
 }
 

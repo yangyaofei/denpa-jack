@@ -59,9 +59,10 @@
         <div class="card">
           <h2>本地网关</h2>
           <div class="row">
-            <span>状态</span>
-            <span class="tag" :class="localSvc.state === 'running' ? 'ok' : ''"
-                  x-text="localSvc.state === 'running' ? '运行中' : (localSvc.state === 'starting' ? '启动中(模型加载 ~40s)' : '未运行')"></span>
+            <span>状态<span class="row-hint" x-show="localSvc.pid" x-text="'pid ' + localSvc.pid"></span></span>
+            <span class="tag"
+                  :class="localSvc.state === 'running' ? 'green' : (localSvc.state === 'starting' ? 'warn' : (localSvc.state === 'failed' ? 'err' : ''))"
+                  x-text="localSvcText"></span>
           </div>
           <div class="row">
             <span>APP 启动时自动拉起<span class="row-hint">(探活发现已在跑则直接复用)</span></span>
@@ -71,9 +72,14 @@
             <input class="inp" x-model="cfg.local_service_dir" @change="saveCfg()" />
           </label>
           <div class="btns end">
-            <button class="mini" @click="localSvcAction('start')" :disabled="localSvc.busy">启动</button>
-            <button class="mini" @click="localSvcAction('stop')" :disabled="localSvc.busy">停止</button>
+            <button class="mini" @click="localSvcAction('start')"
+                    :disabled="localSvc.busy || localSvc.state === 'starting' || localSvc.state === 'running'"
+                    x-text="localSvc.state === 'starting' ? '启动中…' : '启动'"></button>
+            <button class="mini" @click="localSvcAction('stop')"
+                    :disabled="localSvc.busy || !localSvc.pid">停止</button>
           </div>
+          <pre id="local-svc-log" class="log-box"><template x-for="(l, i) in localSvc.tail" :key="i"><span x-text="l"></span>
+</template><span class="dim" x-show="!localSvc.tail.length">（暂无日志——启动后网关的输出会显示在这里，等效终端）</span></pre>
           <p class="hint">自动拉起的实例随 APP 退出而停止；手动 <code>denpa-asr serve</code> 起的实例不会被 APP 动。</p>
         </div>
 

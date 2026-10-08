@@ -108,7 +108,7 @@ function describeCombo(s: string): string {
   history: [] as HistoryRecord[],
   selHist: null as HistoryRecord | null,
   asrEdit: null as AsrProfile | null,
-  localSvc: { state: "unknown" as string, busy: false },
+  localSvc: { state: "unknown" as string, pid: null as number | null, elapsed_secs: null as number | null, tail: [] as string[], busy: false },
   asrIsNew: false,
   llmEdit: null as LlmProfile | null,
   llmIsNew: false,
@@ -172,9 +172,9 @@ function describeCombo(s: string): string {
     await this.loadCfg();
     await this.refreshHistory();
     await this.refreshMics();
-    // 本地网关状态轮询(语音识别页展示; 5s 一次, 探活开销可忽略)
+    // 本地网关状态轮询(语音识别页展示; 2s 一次带日志尾部, starting 态靠它走秒)
     this.pollLocalSvc();
-    setInterval(() => this.pollLocalSvc(), 5000);
+    setInterval(() => this.pollLocalSvc(), 2000);
     try {
       this.version = await invoke<string>("app_version");
     } catch (e) {
@@ -473,7 +473,11 @@ function describeCombo(s: string): string {
   // ── 本地网关(方案 B: APP 拉子进程) ──
   async pollLocalSvc() {
     try {
-      this.localSvc.state = await invoke<string>("local_service_status");
+      const s = await invoke<any>("local_service_status");
+      // starting 态保留本地时钟计时(status 的 elapsed 是拉起时刻起的, 已含)
+      this.localSvc = { ...this.localSvc, ...s };
+      const el = document.getElementById("local-svc-log");
+      if (el) el.scrollTop = el.scrollHeight; // 日志自动滚到底(等效 tail -f)
     } catch { /* 探活失败按未知处理, 不打扰 */ }
   },
   async localSvcAction(act: "start" | "stop") {
@@ -481,16 +485,20 @@ function describeCombo(s: string): string {
     try {
       const r = await invoke<string>(act === "start" ? "local_service_start" : "local_service_stop");
       if (r === "not-ours") alert("这个实例不是 APP 拉起的（手动 serve），请自行停止。");
-      if (act === "start" && r.startsWith("started")) {
-        // 模型加载 ~20-40s, 先标"启动中", 轮询会刷成 running
-        this.localSvc.state = "starting";
-      }
       await this.pollLocalSvc();
     } catch (e) {
       alert(`操作失败: ${e}`);
     } finally {
       this.localSvc.busy = false;
     }
+  },
+  get localSvcText(): string {
+    const s = this.localSvc.state;
+    if (s === "running") return "运行中";
+    if (s === "starting")
+      return `启动中… ${this.localSvc.elapsed_secs ?? 0}s（模型加载约 40s，日志见下）`;
+    if (s === "failed") return "启动失败（进程已退出，看下方日志排查）";
+    return "未运行";
   },
 
   async saveAsr() {
