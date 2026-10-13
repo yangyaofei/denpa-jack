@@ -20,6 +20,7 @@ const hud = $("hud");
 const statusEl = $("status");
 const curText = $("curText");
 const fill = $("fill") as HTMLElement;
+const bar = $("bar") as HTMLElement;
 const dot = $("dot");
 const qlist = $("qlist");
 const clearBtn = $("clearBtn") as HTMLButtonElement;
@@ -161,10 +162,11 @@ async function pollOnce() {
     if (s.version === pollVer) return;
     pollVer = s.version;
 
-    // 电平条: 只有录音中才显示电平; 其它时候归零
-    // (bug 修复: 原来只在录音分支里写 0, 非录音态会保留上一次的宽度, 看起来像还在录音——issue #3)
+    // 电平条: 只有录音中才有意义。整条(含空轨道)在非录音阶段隐藏——
+    // 空轨道在转写/润色阶段会显示成一条无意义的灰线, 看起来像坏掉的进度条(用户反馈截图)。
     const recording = s.status === "recording";
     const lv = Math.min(1, (s.level / 1000) * 6);
+    bar.style.display = recording ? "" : "none";
     fill.style.width = recording ? `${Math.max(4, lv * 100)}%` : "0";
     fill.className = recording && lv > 0.9 ? "fill hot" : "fill";
 
