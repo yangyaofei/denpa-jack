@@ -101,6 +101,11 @@
             </div>
             <input class="inp num" type="number" min="0" max="10" x-model.number="cfg.trailing_newlines" @change="saveCfg()" />
           </div>
+          <label>粘贴优先的 App<span class="row-hint">(每行一个 bundle id；命中则跳过「AX 直写」直接粘贴——用于 AX 直写会重复输入的 App，如 com.google.GeminiMacOS)</span>
+            <textarea class="inp" rows="2" style="font-family: ui-monospace, monospace; font-size: 12px"
+                      placeholder="com.google.GeminiMacOS"
+                      x-model="axPasteOnlyText" @change="saveCfg()"></textarea>
+          </label>
           <div class="row">
             <div>
               <div class="row-title">截图作为纠错上下文</div>

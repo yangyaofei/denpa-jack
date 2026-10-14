@@ -73,6 +73,21 @@ check(
 const hudSrc = readFileSync("src/hud.ts", "utf8");
 check("hud 重试失败指向主窗历史", /主窗/.test(hudSrc) && !/设置→历史/.test(hudSrc));
 
+// 2.9) 粘贴优先名单(AX 直写会重复输入的 App; 2026-10-14 Gemini 实测): UI/转换/交付三处都在
+check("通用页有粘贴优先名单输入框", /x-model="axPasteOnlyText"/.test(htmlAll));
+check(
+  "粘贴优先名单 文本域↔数组 双向转换",
+  /axPasteOnlyText = \(this\.cfg\.ax_paste_only_apps \?\? \[\]\)\.join/.test(src) &&
+    /cfg\.ax_paste_only_apps = Array\.from/.test(src),
+);
+const pipe = readFileSync("src-tauri/src/pipeline.rs", "utf8");
+check("交付时命中名单跳过 AX 直写", /ax_paste_only\(&cfg_h\.ax_paste_only_apps/.test(pipe) && /粘贴优先名单命中, 跳过 AX 直写/.test(pipe));
+const deliverSrc = readFileSync("src-tauri/src/deliver.rs", "utf8");
+check(
+  "AX 校验改为多信号(AXValue 为主)",
+  /KAX_VALUE/.test(deliverSrc) && /after_val\.contains\(text\) && after_val != before_val/.test(deliverSrc),
+);
+
 // 2.8) TS 接口与 Rust settings.rs 字段对齐(settings.rs 为唯一事实来源)
 const rs = readFileSync("src-tauri/src/settings.rs", "utf8");
 const rsFields = (name) => {

@@ -240,15 +240,23 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     // 1) 先无条件写剪贴板 —— 用户定则: 不管走哪条交付路径, 这段文本都必须能拿得到。
     //    修 bug: 以前 AX 直写成功就 return, 剪贴板里什么都没有, 用户事后拿不回转写结果。
     app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
-    // 2) AX 直写光标(点不碰剪贴板式插入; 焦点校验通过才尝试, B10)
-    if !clipboard_only && focus_ok {
+    // 3-prev) 配置提前取一次(粘贴优先名单 + paste_tx 都要用)
+    let cfg_h: crate::settings::Config = crate::settings::get_config(app.clone()).unwrap_or_default();
+    // 2) AX 直写光标(点不碰剪贴板式插入; 焦点校验通过才尝试, B10)。
+    //    粘贴优先名单命中 → 跳过 AX(该 App 的 AX 写入会重复输入, 见 settings 字段注释)
+    let ax_skip = ax_paste_only(&cfg_h.ax_paste_only_apps, focus.bundle.as_deref());
+    if ax_skip {
+        crate::log::elog(&format!(
+            "[deliver] 粘贴优先名单命中, 跳过 AX 直写: {}",
+            focus.bundle.as_deref().unwrap_or("?")
+        ));
+    }
+    if !clipboard_only && focus_ok && !ax_skip {
         match crate::deliver::ax_insert(text) {
             Ok(()) => return Ok("pasted-ax".into()),
             Err(e) => crate::log::elog(&format!("[deliver] ax_insert 失败: {e}")),
         }
     }
-    // 3) paste_tx 需要的配置
-    let cfg_h: crate::settings::Config = crate::settings::get_config(app.clone()).unwrap_or_default();
     let app2_h = app.clone();
     if clipboard_only {
         // 只复制模式: 上一步已经真写过剪贴板(审计#1 对齐 Handy clipboard.rs:74)
@@ -270,6 +278,14 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         paste_cmd_v()?;
     }
     Ok("pasted-cmdv".into())
+}
+
+/// 粘贴优先名单匹配（纯函数, 便于单测）：bundle id 命中即跳过 AX 直写
+fn ax_paste_only(apps: &[String], bundle: Option<&str>) -> bool {
+    match bundle {
+        Some(b) => apps.iter().any(|x| x.trim() == b),
+        None => false,
+    }
 }
 
 /// 模拟 Cmd+V —— CGEvent 直发(线程安全; enigo 内部走 HIToolbox 输入法 API
@@ -319,7 +335,7 @@ fn trailing_newlines_text(text: &str, n: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::trailing_newlines_text;
+    use super::{ax_paste_only, trailing_newlines_text};
 
     #[test]
     fn trailing_newlines_rules() {
@@ -331,5 +347,15 @@ mod tests {
             "你好\n\n\n\n\n\n\n\n\n\n",
             "上限 10"
         );
+    }
+
+    #[test]
+    fn ax_paste_only_rules() {
+        let apps = vec!["com.google.GeminiMacOS".to_string(), "  com.x.y  ".to_string()];
+        assert!(ax_paste_only(&apps, Some("com.google.GeminiMacOS")), "精确命中");
+        assert!(ax_paste_only(&apps, Some("com.x.y")), "两侧空白应被容忍");
+        assert!(!ax_paste_only(&apps, Some("com.apple.Preview")), "未命中");
+        assert!(!ax_paste_only(&apps, None), "拿不到 bundle 不拦截");
+        assert!(!ax_paste_only(&[], Some("com.google.GeminiMacOS")), "空名单不拦截");
     }
 }

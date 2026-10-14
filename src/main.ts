@@ -38,7 +38,7 @@ export interface Config {
   auto_check_update: boolean;
   llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
-  keep_in_clipboard: boolean; trailing_newlines: number; local_autostart: boolean; local_service_dir: string;
+  keep_in_clipboard: boolean; trailing_newlines: number; ax_paste_only_apps: string[]; local_autostart: boolean; local_service_dir: string;
   builtin_engine: { model: string; vad: string; twopass: boolean; chunk_size_sec: number; max_context_sec: number; endpointing: string; max_sessions: number };
   overlay_position: string; history_limit: number;
   max_recording_seconds: number; min_recording_seconds: number; keep_audio_count: number;
@@ -111,6 +111,8 @@ function describeCombo(s: string): string {
   asrEdit: null as AsrProfile | null,
   localSvc: { state: "unknown" as string, port: 0 as number, elapsed_secs: null as number | null, exit: null as string | null, tail: [] as string[], busy: false },
   builtinDirty: false as boolean,
+  /** 粘贴优先名单的文本域(每行一个 bundle id; saveCfg 转数组, loadCfg 反向填充) */
+  axPasteOnlyText: "" as string,
   asrIsNew: false,
   llmEdit: null as LlmProfile | null,
   llmIsNew: false,
@@ -231,11 +233,16 @@ function describeCombo(s: string): string {
   async loadCfg() {
     try {
       this.cfg = await invoke("get_config");
+      this.axPasteOnlyText = (this.cfg.ax_paste_only_apps ?? []).join("\n");
       if (typeof this.refreshHotwords === "function") this.refreshHotwords();
     } catch (e) { this.error = String(e); }
   },
   async saveCfg() {
     if (!this.cfg) return;
+    // 文本域(每行一个 bundle id) → 数组: 去空白行/去重, 顺序保留
+    this.cfg.ax_paste_only_apps = Array.from(
+      new Set(this.axPasteOnlyText.split("\n").map((s) => s.trim()).filter((s) => s.length > 0)),
+    );
     try { await invoke("save_config", { config: this.cfg });
     try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {} }
     catch (e) { this.error = String(e); }
@@ -815,7 +822,7 @@ function describeCombo(s: string): string {
       ], normalizations: [], active_llm_id: "l1", active_asr_id: "a1",
       use_llm_correction: false, clipboard_only: false,
       activation: "hold", audio_feedback: true, restore_clipboard: true,
-      keep_in_clipboard: false, trailing_newlines: 0, local_autostart: true, local_service_dir: "~/workspace/denpa-asr",
+      keep_in_clipboard: false, trailing_newlines: 0, ax_paste_only_apps: [], local_autostart: true, local_service_dir: "~/workspace/denpa-asr",
       builtin_engine: { model: "Qwen/Qwen3-ASR-1.7B", vad: "", twopass: true, chunk_size_sec: 0.5, max_context_sec: 120, endpointing: "energy", max_sessions: 4 },
       overlay_position: "bottom", history_limit: 200,
       max_recording_seconds: 1800, min_recording_seconds: 0.3, keep_audio_count: 50,

@@ -273,6 +273,11 @@ pub struct Config {
     /// 只改交付出去的文本，不改历史里的识别结果。
     #[serde(default)]
     pub trailing_newlines: u32,
+    /// 粘贴优先名单（bundle id，每行一个）：命中时跳过 AX 直写、直接 Cmd+V 粘贴。
+    /// 手动配置项（C 方案），用于 AX 写入会重复输入的 App——如 com.google.GeminiMacOS
+    /// 实测 AX 写入生效但回读信号为空，旧校验误判后会再粘贴一次（双重插入，2026-10-14）。
+    #[serde(default)]
+    pub ax_paste_only_apps: Vec<String>,
     /// local 引擎网关自动拉起(APP 启动时探活, 不在则起子进程; 退出时只收自己的)
     #[serde(default = "default_true")]
     pub local_autostart: bool,

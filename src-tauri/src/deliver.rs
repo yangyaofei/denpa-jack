@@ -19,6 +19,7 @@ extern "C" {
 }
 
 const KAX_SELECTED_TEXT: &str = "AXSelectedText";
+const KAX_VALUE: &str = "AXValue";
 const KAX_FOCUSED_ELEMENT: &str = "AXFocusedUIElement";
 
 fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
@@ -32,7 +33,19 @@ fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
     v.downcast::<CFString>().map(|s| s.to_string())
 }
 
-/// AX 直写光标处: 读选区(before) → 写入 → 读回(after) 对比, 防"报成功但 app 静默忽略"
+/// AX 直写光标处 + 多信号回读校验。
+///
+/// 校验方式（2026-10-14 实测修正，原因见下）：
+///   SET `AXSelectedText` → 短时多次回读两个信号：
+///     ① `AXValue` 含写入文本且发生变化 → 成功
+///     ② `AXSelectedText` 含写入文本   → 成功
+///   无任何信号 → 判失败（由调用方回退 Cmd+V 粘贴）。
+///
+/// 为什么不能只看 AXSelectedText：Gemini（com.google.GeminiMacOS）实测——
+///   写入返回 r=0 且**已生效**（`AXValue` 能读到写入文本），但插入后选区折叠，
+///   `AXSelectedText` 回读为空 → 旧校验误判"静默忽略" → 又回退粘贴一次
+///   → **同一段文本被插入两次**（用户报"特定 App 重复输入两次"）。
+///   Preview 类应用则是真忽略（两个信号都无变化）→ 判失败 → 粘贴，行为不变。
 pub fn ax_insert(text: &str) -> Result<(), String> {
     unsafe {
         let sys = AXUIElementCreateSystemWide();
@@ -47,7 +60,8 @@ pub fn ax_insert(text: &str) -> Result<(), String> {
             return Err(format!("取焦点元素失败(kError={r})"));
         }
         let focused_el: AXUIElementRef = focused;
-        let before = ax_copy(focused_el, KAX_SELECTED_TEXT).unwrap_or_default();
+        let before_sel = ax_copy(focused_el, KAX_SELECTED_TEXT).unwrap_or_default();
+        let before_val = ax_copy(focused_el, KAX_VALUE).unwrap_or_default();
         let val = CFString::new(text);
         let sel_name = CFString::new(KAX_SELECTED_TEXT);
         let r = AXUIElementSetAttributeValue(
@@ -58,11 +72,27 @@ pub fn ax_insert(text: &str) -> Result<(), String> {
         if r != 0 {
             return Err(format!("AX 写入失败(kError={r})"));
         }
-        let after = ax_copy(focused_el, KAX_SELECTED_TEXT).unwrap_or_default();
-        if !text.is_empty() && after == before && after != text {
-            return Err("AX 写入被目标应用静默忽略".into());
+        if text.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        // 异步生效的应用需要给一拍; 两次回读覆盖"立即生效"与"延迟生效"两类
+        for delay_ms in [40u64, 120u64] {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            let after_sel = ax_copy(focused_el, KAX_SELECTED_TEXT).unwrap_or_default();
+            if after_sel.contains(text) {
+                return Ok(());
+            }
+            let after_val = ax_copy(focused_el, KAX_VALUE).unwrap_or_default();
+            if after_val.contains(text) && after_val != before_val {
+                return Ok(());
+            }
+        }
+        // 无信号: 保持旧判据的语义(可读且未变 → 静默忽略), 文案区分两种失败便于排障
+        if before_sel == ax_copy(focused_el, KAX_SELECTED_TEXT).unwrap_or_default() {
+            Err("AX 写入被目标应用静默忽略".into())
+        } else {
+            Err("AX 写入无法确认生效(回读无信号)".into())
+        }
     }
 }
 

@@ -45,7 +45,10 @@
   - 本地服务（local）：连本地 ASR 网关（`research-plan/voice-mac-app/local-asr/gateway.py`，mlx-qwen3-asr 滚动解码），WS 走 OpenAI Realtime 事件面子集。档案的 `base_url` 指定网关地址（空=`ws://127.0.0.1:8300`）；无需 API Key；partial 为全量替换语义（网关的滚动解码会回改近期文本）。网关单模型单流：并发会话会被拒绝（Error 入队可重试）。
 - **交付链**（pipeline::deliver 顺序，前一步成功即止）：
   1. 前台应用是本 app → 仅写剪贴板（delivered=`copied-self`，自贴无意义）。
-  2. AX 直写光标（写 `AXSelectedText`，前后读回对比防"报成功但 app 静默忽略"；仅 `clipboard_only=false` 且焦点校验通过时尝试；成功=delivered `pasted-ax`，不碰剪贴板）。
+  2. AX 直写光标（写 `AXSelectedText` + **多信号回读**校验；仅 `clipboard_only=false`、焦点校验通过、且未命中「粘贴优先名单」时尝试；成功=delivered `pasted-ax`，不碰剪贴板）。
+     - 回读信号：`AXValue` 含写入文本且发生变化 或 `AXSelectedText` 含写入文本（短时两次，40/120ms）→ 成功。
+     - 为什么不能只看 `AXSelectedText`（2026-10-14 Gemini `com.google.GeminiMacOS` 实测）：其输入框写入返回 0 且**已生效**（`AXValue` 可读到写入文本），但插入后选区折叠、`AXSelectedText` 回读为空 → 旧校验误判"静默忽略" → 再回退粘贴一次 → **同一段文本插入两次**。
+     - **粘贴优先名单**（通用页配置 `ax_paste_only_apps`，每行一个 bundle id）：命中则跳过 AX 直写直接粘贴——给"A 的多信号仍判不准"的个例留的手动开关。
   3. `clipboard_only=true` → 仅复制（`copied`）。
   4. 焦点已变 → 仅复制防串应用（`focus-changed-copied-only`）。
   5. 回执式可靠粘贴（paste_tx，delivered=`pasted-cmdv`）：
