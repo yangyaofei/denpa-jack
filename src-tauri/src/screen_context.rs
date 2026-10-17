@@ -8,6 +8,14 @@
 //! - 截图保存在 `<数据目录>/screen_context/`，保留最近若干张，便于事后判读与复现（用户要求留档）
 //! - 每次录音采集一张新截图（屏幕内容每次都在变，不做复用/缓存）；图片按 base64 内联进请求
 //! - 实测依据见 research-plan/voice-mac-app/day-07-context/report.md
+//!
+//! 采集目标 = **最前面那个 App 的前窗**（`screencapture -l <窗口ID>`），不是整屏（2026-10-18 定）。
+//! 理由：①我们要的上下文本来就是「你正在打字的那个窗口」；②截别人的窗口，我们的浮窗是另一个
+//! 窗口，**永远不会被拍进去**，于是"显示浮窗"不必再等截图；③实测按窗口截 219–571ms
+//! （验证工具 research-plan/tmp/winlist.swift）。
+//! 保护：单飞（同时最多一个 screencapture）+ 2s 超时（超时杀进程，本次不带图）。
+//! 反例留档：此前用整屏截图（p50 220ms、**最长 134.6s**），且浮窗/托盘被排在截图之后，
+//! 截图一卡就表现为"按住很久浮窗才出现"。
 use std::path::{Path, PathBuf};
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -25,8 +33,92 @@ pub struct Shot {
     pub path: PathBuf,
     pub bytes: usize,
     pub elapsed_ms: u128,
-    /// 采集目标显示器; None = 未能判定, 由 screencapture 用默认(主显示器)
-    pub display: Option<crate::overlay::DisplayTarget>,
+    /// 采集目标窗口 ID；None = 未判定（当前实现要求有窗口，None 只作类型兜底）
+    pub window: Option<u32>,
+}
+
+/// 截图超时（毫秒）：超时杀进程。整屏截图曾出现 134s 卡死，这个上限保证它永远不拖住任何东西。
+const CAPTURE_TIMEOUT_MS: u128 = 2500;
+
+/// 屏幕上的一个窗口（只取定位需要的字段）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WinInfo {
+    pub id: u32,
+    pub pid: i32,
+    pub layer: i32,
+    /// 逻辑尺寸；0 = 未取到（视为可通过尺寸筛）
+    pub w: i64,
+    pub h: i64,
+}
+
+/// 纯函数：从"按前后顺序"的窗口列表里挑采集目标。
+/// 规则：层 0（普通窗口）+ 不是我们自己的进程 + 不是小浮条（≥200×150；尺寸未知时放行）。
+pub fn pick_window(wins: &[WinInfo], self_pid: i32) -> Option<WinInfo> {
+    wins.iter()
+        .find(|w| {
+            w.layer == 0
+                && w.pid != self_pid
+                && (w.w == 0 || w.w >= 200)
+                && (w.h == 0 || w.h >= 150)
+        })
+        .copied()
+}
+
+/// 读屏幕上的窗口列表（按前后顺序，最前面在前）
+fn on_screen_windows() -> Vec<WinInfo> {
+    use core_foundation::base::TCFType;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::{
+        copy_window_info, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+    };
+    let opts = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let Some(list) = copy_window_info(opts, 0) else {
+        return Vec::new();
+    };
+    let k_num = CFString::new("kCGWindowNumber");
+    let k_layer = CFString::new("kCGWindowLayer");
+    let k_pid = CFString::new("kCGWindowOwnerPID");
+    let k_bounds = CFString::new("kCGWindowBounds");
+    let k_w = CFString::new("Width");
+    let k_h = CFString::new("Height");
+    let mut out = Vec::new();
+    for i in 0..list.len() {
+        let Some(item) = list.get(i) else { continue };
+        let dict: CFDictionary<CFString, core_foundation::base::CFType> =
+            unsafe { CFDictionary::wrap_under_get_rule(*item as core_foundation::dictionary::CFDictionaryRef) };
+        let num = |k: &CFString| -> Option<i64> {
+            let v = dict.find(k)?;
+            v.downcast::<CFNumber>()?.to_i64()
+        };
+        let (Some(id), Some(layer), Some(pid)) = (num(&k_num), num(&k_layer), num(&k_pid)) else {
+            continue;
+        };
+        let (mut w, mut h) = (0i64, 0i64);
+        if let Some(b) = dict.find(&k_bounds) {
+            // CFDictionary 不是 ConcreteCFType, 不能 downcast: 直接按裸引用包一层
+            let bd: CFDictionary<CFString, core_foundation::base::CFType> = unsafe {
+                CFDictionary::wrap_under_get_rule(
+                    b.as_concrete_TypeRef() as core_foundation::dictionary::CFDictionaryRef,
+                )
+            };
+            let f = |k: &CFString| -> Option<f64> {
+                bd.find(k)?.downcast::<CFNumber>()?.to_f64()
+            };
+            if let (Some(wd), Some(ht)) = (f(&k_w), f(&k_h)) {
+                w = wd as i64;
+                h = ht as i64;
+            }
+        }
+        out.push(WinInfo { id: id as u32, pid: pid as i32, layer: layer as i32, w, h });
+    }
+    out
+}
+
+/// 目标窗口：最前面那个非自身 App 的前窗
+fn front_target_window(self_pid: i32) -> Option<WinInfo> {
+    pick_window(&on_screen_windows(), self_pid)
 }
 
 /// 是否已获屏幕录制权限（不弹窗、不触发系统引导）
@@ -40,46 +132,95 @@ pub fn request() -> bool {
     unsafe { CGRequestScreenCaptureAccess() }
 }
 
-/// screencapture 参数(纯函数, 便于单测)。
-/// 有显示器编号时带 `-D`: 不指定的话 screencapture 抓主显示器, 多显示器下会与用户正在看的屏不一致。
-fn capture_args(display: Option<crate::overlay::DisplayTarget>) -> Vec<String> {
-    let mut a: Vec<String> = ["-x", "-o", "-t", "png"].iter().map(|s| (*s).to_string()).collect();
-    if let Some(t) = display {
-        a.push("-D".to_string());
-        a.push(t.index.to_string());
-    }
-    a
+/// screencapture 参数（纯函数，便于单测）：`-x` 不发声、`-o` 不带窗口阴影、`-l<id>` 只截该窗口。
+fn capture_args(window_id: u32) -> Vec<String> {
+    ["-x", "-o"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .chain(std::iter::once(format!("-l{window_id}")))
+        .collect()
 }
 
-/// 采集屏幕到 `dir`（每次新文件），返回文件路径与大小。
-/// 采集目标 = 光标所在显示器（与 hud 浮窗同一目标屏）。
+/// 跑一次 screencapture：带超时（超时杀掉，不留残留进程）。
+fn run_screencapture(path: &Path, window_id: u32) -> Result<(), String> {
+    let mut child = std::process::Command::new("/usr/sbin/screencapture")
+        .args(capture_args(window_id))
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("screencapture 启动失败: {e}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(CAPTURE_TIMEOUT_MS as u64);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("截图超时({CAPTURE_TIMEOUT_MS}ms)"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(e) => return Err(format!("等待截图进程失败: {e}")),
+        }
+    };
+    if !status.success() {
+        let mut err = String::new();
+        if let Some(mut s) = child.stderr.take() {
+            use std::io::Read;
+            let _ = s.read_to_string(&mut err);
+        }
+        return Err(format!("screencapture 退出码 {:?}: {}", status.code(), err.trim()));
+    }
+    Ok(())
+}
+
+/// 采集目标窗口到 `dir`（每次新文件），返回文件路径与大小。
+/// 目标 = 最前面那个 App 的前窗（排除我们自己的窗口，见模块注释）。
+/// 保护：单飞（同时最多一个）+ 2.5s 超时 + **超时/失败重试一次**——实测窗口首次采集可能 >2s
+/// （冷启动/窗口未被合成过），第二次通常 <300ms，不做重试会白丢一次上下文图。
+/// 本函数整体跑在采集线程里，没有任何调用方等待它，所以慢/失败都不影响转写与交付。
 pub fn capture(dir: &Path, tag: &str) -> Result<Shot, String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static CAPTURING: AtomicBool = AtomicBool::new(false);
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            CAPTURING.store(false, Ordering::SeqCst);
+        }
+    }
+    if CAPTURING.swap(true, Ordering::SeqCst) {
+        return Err("上一次截图还在进行，跳过本次".into());
+    }
+    let _guard = Guard;
+
     std::fs::create_dir_all(dir).map_err(|e| format!("建截图目录失败: {e}"))?;
+    let self_pid = std::process::id() as i32;
+    let win = front_target_window(self_pid)
+        .ok_or("未找到可采集的目标窗口（前台应用没有普通窗口？）")?;
     let path = dir.join(format!("screen-{}-{tag}.png", now_ms()));
     let t0 = std::time::Instant::now();
-    let display = crate::overlay::display_target_at_cursor();
-    let out = std::process::Command::new("/usr/sbin/screencapture")
-        .args(capture_args(display))
-        .arg(&path)
-        .output()
-        .map_err(|e| format!("screencapture 启动失败: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "screencapture 退出码 {:?}: {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    let mut last_err = String::new();
+    for _ in 1..=2 {
+        match run_screencapture(&path, win.id) {
+            Ok(()) => {
+                let bytes = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+                if bytes == 0 {
+                    last_err = "截图文件为空（通常是未授予屏幕录制权限）".into();
+                    continue;
+                }
+                return Ok(Shot {
+                    path,
+                    bytes,
+                    elapsed_ms: t0.elapsed().as_millis(),
+                    window: Some(win.id),
+                });
+            }
+            Err(e) => last_err = format!("{e} (窗口 id={} pid={} {}x{})", win.id, win.pid, win.w, win.h),
+        }
     }
-    let bytes = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
-    if bytes == 0 {
-        return Err("截图文件为空（通常是未授予屏幕录制权限）".into());
-    }
-    Ok(Shot {
-        path,
-        bytes,
-        elapsed_ms: t0.elapsed().as_millis(),
-        display,
-    })
+    Err(format!("截图失败(已重试一次): {last_err}"))
 }
 
 /// 读成 base64 data URL（模型请求内联用）。
@@ -241,11 +382,28 @@ mod tests {
     }
 
     #[test]
-    fn capture_args_targets_cursor_display() {
-        let base = capture_args(None);
-        assert_eq!(base, vec!["-x", "-o", "-t", "png"]);
-        let t = crate::overlay::DisplayTarget { index: 2, origin: (1728.0, 0.0), size: (2560.0, 1440.0) };
-        let with = capture_args(Some(t));
-        assert_eq!(with, vec!["-x", "-o", "-t", "png", "-D", "2"]);
+    fn capture_args_targets_window() {
+        // 只截目标窗口: -x 不发声, -o 不带阴影, -l<id> 指定窗口
+        assert_eq!(capture_args(93116), vec!["-x", "-o", "-l93116"]);
+    }
+
+    /// 窗口筛选: 层 0(普通窗口) + 排除自身 + 跳过小浮条; 顺序即前后层级
+    #[test]
+    fn pick_window_rules() {
+        let w = |id, pid, layer, ww, hh| WinInfo { id, pid, layer, w: ww, h: hh };
+        // 自身窗口在最前 → 跳过, 取目标 App 的前窗
+        let list = vec![w(1, 999, 0, 800, 600), w(2, 42, 0, 1200, 800)];
+        assert_eq!(pick_window(&list, 999).map(|x| x.id), Some(2));
+        // 非 0 层(浮层/面板)不算
+        let list = vec![w(1, 42, 25, 1200, 800), w(2, 42, 0, 1200, 800)];
+        assert_eq!(pick_window(&list, 999).map(|x| x.id), Some(2));
+        // 小浮条跳过
+        let list = vec![w(1, 42, 0, 120, 40), w(2, 42, 0, 900, 700)];
+        assert_eq!(pick_window(&list, 999).map(|x| x.id), Some(2));
+        // 尺寸未知(0)放行
+        let list = vec![w(1, 42, 0, 0, 0)];
+        assert_eq!(pick_window(&list, 999).map(|x| x.id), Some(1));
+        // 只有自身窗口 → 没有目标
+        assert_eq!(pick_window(&[w(1, 999, 0, 800, 600)], 999).map(|x| x.id), None);
     }
 }
