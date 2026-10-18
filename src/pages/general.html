@@ -109,11 +109,15 @@
           <div class="row">
             <div>
               <div class="row-title">截图作为纠错上下文</div>
-              <div class="row-hint">录音时截取当前屏幕, 连同转写文本一起发给纠错模型, 提升专有名词准确率。需要「屏幕录制」权限；截图保存在数据目录 screen_context/（便于事后核对），不上传到除所选模型之外的任何地方</div>
+              <div class="row-hint">录音时截取「当前窗口」（默认）或「当前屏幕」，连同转写文本一起发给纠错模型，提升专有名词准确率。需要「屏幕录制」权限；截图保存在数据目录 screen_context/（便于事后核对），不上传到除所选模型之外的任何地方</div>
             </div>
-            <input type="checkbox" class="switch" x-model="cfg.screenshot_context" @change="toggleScreenshotContext()" />
+            <select class="inp" style="width: 160px" x-model="cfg.screenshot_target" @change="onScreenshotTargetChange()">
+              <option value="off">关闭</option>
+              <option value="active_window">当前窗口</option>
+              <option value="active_display">当前屏幕</option>
+            </select>
           </div>
-          <div class="row" x-show="cfg.screenshot_context">
+          <div class="row" x-show="cfg.screenshot_target !== 'off'">
             <div>
               <div class="row-title">屏幕录制权限</div>
               <div class="row-hint">

@@ -248,11 +248,11 @@ fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cu
     }
 }
 
-/// 录音开始的可见反馈: 显示浮窗（顺带托盘染红/黄，见 hud）。
+/// 录音开始的可见反馈: 显示浮窗。
 ///
-/// 与截图无关：截图截的是「最前面那个 App 的前窗」，我们的浮窗是另一个窗口，不会入镜
-/// （2026-10-18 起；此前为"不把浮窗拍进整屏截图"而把显示延后到截图完成，导致截图一卡
-/// 就表现为"按住很久浮窗才出现"）。
+/// 任何目标模式下都是**按下即显示**：窗口截图天然不含浮窗；屏幕截图用 SCK 过滤器排除
+/// 本应用自己的窗口（不再需要"先截图、后显示"的顺序规避——那是 screencapture 整屏时代的做法，
+/// 也让浮窗被外部进程拖住不显示）。
 fn show_recording_ui(app: &tauri::AppHandle) {
     crate::hud::recording_started(app);
 }
@@ -357,11 +357,11 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     let cancel = rec.cancel.clone();
     let level = rec.level_handle();
     let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    // 屏幕上下文: 录音开始时后台采集一张截图(不阻塞录音启动; 开关关闭则完全不动作)
-    // 采集目标 = 最前面那个 App 的前窗(见 screen_context 模块注释)——**我们的浮窗是另一个窗口,
-    // 永远不会被拍进去**, 所以可见反馈(浮窗/托盘染红)不再需要等截图, 立刻就显示。
+    // 屏幕上下文: 录音开始时后台采集一张截图(不阻塞录音启动; 目标为 off 则完全不动作)
+    // 浮窗/托盘不受截图影响——窗口截图天然不含浮窗，屏幕截图在过滤器里排除自家窗口
+    let shot_target = crate::screen_context::parse_target(&cfg.screenshot_target);
     let shot_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
-    if cfg.screenshot_context {
+    if shot_target != crate::screen_context::ShotTarget::Off {
         let app_shot = app.clone();
         let slot = shot_slot.clone();
         std::thread::spawn(move || {
@@ -369,19 +369,19 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
                 log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
             } else {
                 let dir = crate::settings::data_dir(&app_shot);
-                match crate::screen_context::capture_and_prune(&dir, "ctx") {
+                match crate::screen_context::capture_and_prune(&dir, "ctx", shot_target) {
                     Ok(shot) => {
                         // sha256 与后续 [llm] 带图请求里的指纹对照 → 证明发出去的图就是这一张
                         let fp = std::fs::read(&shot.path)
                             .map(|raw| crate::screen_context::sha256_short_of(&raw))
                             .unwrap_or_else(|_| "读取失败".into());
                         log::elog(&format!(
-                            "[ctx] 截图已采集 path={} bytes={} ms={} sha256={} window={:?}",
+                            "[ctx] 截图已采集 path={} bytes={} ms={} sha256={} target={}",
                             shot.path.display(),
                             shot.bytes,
                             shot.elapsed_ms,
                             fp,
-                            shot.window
+                            shot.desc
                         ));
                         *slot.lock().unwrap() = Some(shot.path);
                     }
@@ -404,7 +404,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         });
     }
     register_esc(&app);
-    // 立即显示浮窗/托盘染红: 截图截的是"别人 App 的窗口", 我们自己的浮窗永远不入镜, 无需再等截图
+    // 按下即显示浮窗（截图在后台进行，不参与显示顺序）
     show_recording_ui(&app);
     spawn_level_loop(app.clone(), cancel.clone(), level);
     if cfg.max_recording_seconds > 0 {

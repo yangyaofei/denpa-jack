@@ -217,10 +217,13 @@ pub struct Config {
     pub use_llm_correction: bool,
     #[serde(default)]
     pub clipboard_only: bool,
-    /// 屏幕上下文开关：录音开始时采集一张截图，随转写文本一起发给纠错模型
-    /// （需要屏幕录制权限；截图存 `<数据目录>/screen_context/`，默认关）
-    #[serde(default)]
-    pub screenshot_context: bool,
+    /// 截图目标（屏幕上下文）：off / active_window（默认）/ active_display。
+    /// - active_window：截"最前面的普通窗口"，没有合格窗口时回退到指针命中的窗口
+    /// - active_display：截"光标所在显示器"整屏（排除本应用自己的窗口，浮窗不入镜）
+    /// 需要屏幕录制权限；截图存 `<数据目录>/screen_context/`。
+    /// 旧键 `screenshot_context` 已废弃（不迁移，见 docs/SPEC.md §3.5.1）。
+    #[serde(default = "d_screenshot_target")]
+    pub screenshot_target: String,
     /// LLM 请求超时（秒）。越大越能容忍慢思考模型，但出错时用户等待也更久。
     #[serde(default = "d_llm_timeout")]
     pub llm_timeout_secs: u64,
@@ -582,6 +585,8 @@ fn d_min_rec() -> f64 { 0.3 }
 fn d_keep_audio() -> u32 { 50 }
 fn d_llm_timeout() -> u64 { 30 }
 fn d_llm_retries() -> u32 { 2 }
+/// 截图目标默认值：当前窗口（"旧键忽略、新键缺省 active_window"）
+fn d_screenshot_target() -> String { "active_window".into() }
 pub fn default_config() -> Config {
     Config {
         use_llm_correction: true,

@@ -34,7 +34,7 @@ export interface Config {
   active_llm_id: string; active_asr_id: string;
   bindings: Record<string, BindingSet>;
   use_llm_correction: boolean; clipboard_only: boolean;
-  screenshot_context: boolean;
+  screenshot_target: string;
   auto_check_update: boolean;
   llm_timeout_secs: number; llm_max_tokens: number; llm_retries: number;
   activation: string; audio_feedback: boolean; restore_clipboard: boolean;
@@ -689,10 +689,10 @@ function describeCombo(s: string): string {
     try { await invoke("open_data_dir"); } catch (e) { console.error(e); }
   },
 
-  // 屏幕上下文开关: 保存后若为开启, 主动申请屏幕录制权限并刷新权限列表(缺权限时卡片会给出提示)
-  async toggleScreenshotContext() {
+  // 截图目标: 保存后若不是"关闭", 主动申请屏幕录制权限并刷新权限列表(缺权限时卡片会给出提示)
+  async onScreenshotTargetChange() {
     await this.saveCfg();
-    if (this.cfg.screenshot_context) {
+    if (this.cfg.screenshot_target !== "off") {
       try { await invoke("request_screen_permission"); } catch (e) { console.warn("request_screen_permission 失败", e); }
     }
     await this.checkPerms();

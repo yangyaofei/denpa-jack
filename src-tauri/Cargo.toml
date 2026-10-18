@@ -1,6 +1,6 @@
 [package]
 name = "denpa-jack"
-version = "0.3.27"
+version = "0.3.28"
 description = "Denpa Jack — 未来道具14号机：电波劫持者 (Mirai Gajetto Jūyon-gōki: Denpa Jakku). Push-to-talk dictation for macOS: audio → ASR → dictionary/LLM polish → clipboard."
 authors = ["yangyaofei"]
 edition = "2021"
@@ -47,6 +47,11 @@ tauri-plugin-autostart = "2.5.1"
 core-graphics = "0.25.0"
 handy-keys = "0.3.4"
 objc2-av-foundation = { version = "0.3.2", features = ["AVMediaFormat", "block2"] }
+# 截图走 ScreenCaptureKit 进程内 API（替代 screencapture 命令行，见 src/screen_context.rs）
+objc2-screen-capture-kit = { version = "0.3.2", features = ["SCShareableContent", "SCScreenshotManager", "SCStream"] }
+objc2-image-io = { version = "0.3.2", features = ["CGImageDestination"] }
+objc2-core-graphics = { version = "0.3.2", features = ["CGImage"] }
+objc2-core-foundation = "0.3.2"
 block2 = "0.6"
 libc = "0.2.189"
 tauri-plugin-updater = "2.11.0"
