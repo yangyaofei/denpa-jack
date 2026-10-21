@@ -3,6 +3,8 @@ mod audio_feedback;
 mod autotest;
 mod commands;
 pub mod crash_log;
+/// 活动目标探测（焦点窗口/指针窗口 + 显示器；截图与浮窗共用）
+pub mod active_target;
 mod deliver;
 pub mod dict;
 pub mod doubao;

@@ -1,10 +1,12 @@
 //! 屏幕上下文：把当前窗口/屏幕截图作为纠错上下文传给模型
 //!
-//! 目标选项（config `screenshot_target`，默认 `active_window`）：
+//! 目标选项（config `detect_active_target`，默认 `active_window`）：
 //! - `off`            不截图
-//! - `active_window`  截"最前面的普通窗口"（层 0、非本进程、≥200×150）；没有合格窗口时
-//!                    回退到"鼠标指针命中的最前面合格窗口"；再不行本次不带图（只记日志）
+//! - `active_window`  截"主窗口"：键盘焦点窗口（光标所在）→ 没有则指针下的窗口；
+//!                    都没有则回退截显示器（`[ctx]` 日志说明）
 //! - `active_display` 截"光标所在显示器"整屏；过滤器里排除本应用自己的窗口（浮窗不入镜）
+//!
+//! 主窗口与显示器的探测在 `active_target::detect_active_target`（与浮窗定位共用一次结果）。
 //!
 //! 实现：ScreenCaptureKit（进程内系统 API，macOS 14+）：
 //!   SCShareableContent 枚举 → SCContentFilter → SCScreenshotManager.captureImage → ImageIO 写 PNG。
@@ -51,9 +53,18 @@ extern "C" {
         the_type: isize,
         value_ptr: *mut std::ffi::c_void,
     ) -> bool;
+    fn CFStringGetCString(
+        string: *const std::ffi::c_void,
+        buffer: *mut i8,
+        buffer_size: isize,
+        encoding: u32,
+    ) -> bool;
     // 与 overlay.rs/deliver.rs 保持同一签名（否则 clashing_extern_declarations）
     fn CFRelease(cf: *mut std::ffi::c_void);
 }
+
+/// CFString 的 UTF-8 编码常量（CFStringEncodings 里 kCFStringEncodingUTF8）
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x08000100;
 
 /// CGWindowListCopyWindowInfo 选项（本机只需这两个）
 const K_CG_WINDOW_LIST_ON_SCREEN_ONLY: u32 = 1 << 0;
@@ -71,7 +82,7 @@ const MIN_WIN_H: f64 = 150.0;
 /// SCK 回调等待上限（枚举一次、截图一次，各给 5s；内部是异步回调 + 主线程等结果）
 const SCK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 截图目标（config `screenshot_target` 的解析结果）
+/// 截图目标（config `detect_active_target` 的解析结果）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShotTarget {
     Off,
@@ -122,11 +133,13 @@ pub fn request() -> bool {
 // ---------------------------------------------------------------------------
 
 /// 一个窗口的判定信息（来自 CoreGraphics 窗口列表，顺序=从前往后）
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WinInfo {
     pub id: u32,
     pub pid: i32,
     pub layer: i64,
+    /// 窗口标题（无权限/无标题时为空串）
+    pub title: String,
     /// (x, y, w, h)，全局显示空间、点为单位（y 向下）
     pub frame: (f64, f64, f64, f64),
 }
@@ -147,23 +160,103 @@ impl WinInfo {
     }
 }
 
-/// 挑选窗口（纯函数，便于单测）：
-/// 1. 最前面的合格窗口（层 0、非本进程、≥200×150）
-/// 2. 没有合格窗口时：指针命中的最前面合格窗口（wins 顺序=从前往后）
-/// 3. 都没有 → None（本次不带图，只记日志）
-pub fn pick_window(wins: &[WinInfo], our_pid: i32, cursor: Option<(f64, f64)>) -> Option<u32> {
-    if let Some(w) = wins.iter().find(|w| w.eligible(our_pid)) {
-        return Some(w.id);
-    }
-    let p = cursor?;
+/// 光标命中的窗口（纯函数，便于单测）：从前往后，第一个"合格且包含该点"的窗口。
+/// 合格 = 层 0、非本进程、≥200×150（过滤浮层、本应用窗口、工具提示等）。
+pub fn pick_window_at(wins: &[WinInfo], our_pid: i32, point: (f64, f64)) -> Option<u32> {
     wins.iter()
-        .find(|w| w.eligible(our_pid) && w.contains(p))
+        .find(|w| w.eligible(our_pid) && w.contains(point))
         .map(|w| w.id)
+}
+
+/// 前台窗口（供 capture_target 解析）：id / 标题 / 窗口框
+#[derive(Debug, Clone)]
+pub struct WindowRef {
+    pub id: u32,
+    pub title: String,
+    pub frame: (f64, f64, f64, f64),
+}
+
+/// 光标下的普通窗口（层 0、非本进程、≥200×150）；没有则 None。
+pub fn window_at(point: (f64, f64)) -> Option<WindowRef> {
+    let wins = window_list();
+    let id = pick_window_at(&wins, std::process::id() as i32, point)?;
+    wins.into_iter()
+        .find(|w| w.id == id)
+        .map(|w| WindowRef {
+            id: w.id,
+            title: w.title,
+            frame: w.frame,
+        })
+}
+
+/// 键盘焦点（光标所在）窗口，三级取法：
+/// 1. AX 焦点元素 → 窗口框匹配（±2px，最精确）；
+/// 2. 取不到框（Electron 等应用常拿不到 AXWindow）→ 焦点应用的 pid → 它最前面的窗口；
+/// 3. AX 整体不可用（应用不响应 AX，实测 OpenChamber 会返回 kAXErrorCannotComplete）
+///    → 回退"全系统最前面的普通窗口"（≈ 前台应用的主窗口）。
+pub fn focused_window() -> Option<WindowRef> {
+    let our_pid = std::process::id() as i32;
+    let Some(info) = crate::deliver::focused_element_info() else {
+        crate::log::elog("[ctx] AX 焦点不可用，回退全系统最前窗口");
+        return frontmost_window();
+    };
+    if info.pid == our_pid {
+        return None;
+    }
+    let wins = window_list();
+    if let Some(frame) = info.frame {
+        if let Some(w) = wins.iter().find(|w| {
+            w.layer == 0
+                && w.pid != our_pid
+                && (w.frame.0 - frame.0).abs() <= 2.0
+                && (w.frame.1 - frame.1).abs() <= 2.0
+                && (w.frame.2 - frame.2).abs() <= 2.0
+                && (w.frame.3 - frame.3).abs() <= 2.0
+        }) {
+            return Some(WindowRef {
+                id: w.id,
+                title: w.title.clone(),
+                frame: w.frame,
+            });
+        }
+    }
+    wins.into_iter()
+        .find(|w| {
+            w.pid == info.pid
+                && w.layer == 0
+                && w.frame.2 >= MIN_WIN_W
+                && w.frame.3 >= MIN_WIN_H
+        })
+        .map(|w| WindowRef {
+            id: w.id,
+            title: w.title,
+            frame: w.frame,
+        })
+}
+
+/// 全系统最前面的普通窗口（层 0、非本进程、≥200×150；列表顺序=从前往后）
+fn frontmost_window() -> Option<WindowRef> {
+    let our_pid = std::process::id() as i32;
+    window_list()
+        .into_iter()
+        .find(|w| {
+            w.layer == 0
+                && w.pid != our_pid
+                && w.frame.2 >= MIN_WIN_W
+                && w.frame.3 >= MIN_WIN_H
+        })
+        .map(|w| WindowRef {
+            id: w.id,
+            title: w.title,
+            frame: w.frame,
+        })
 }
 
 /// 读 CoreGraphics 窗口列表（文档保证从前往后）。失败返回空列表（调用方按"没有窗口"处理）。
 fn window_list() -> Vec<WinInfo> {
-    use core_graphics::window::{kCGWindowBounds, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID};
+    use core_graphics::window::{
+        kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
+    };
     unsafe {
         let arr = CGWindowListCopyWindowInfo(
             K_CG_WINDOW_LIST_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
@@ -183,11 +276,28 @@ fn window_list() -> Vec<WinInfo> {
                 id: dict_number(dict, kCGWindowNumber as *const std::ffi::c_void) as u32,
                 pid: dict_number(dict, kCGWindowOwnerPID as *const std::ffi::c_void) as i32,
                 layer: dict_number(dict, kCGWindowLayer as *const std::ffi::c_void) as i64,
+                title: dict_string(dict, kCGWindowName as *const std::ffi::c_void),
                 frame: dict_bounds(dict, kCGWindowBounds as *const std::ffi::c_void),
             });
         }
         CFRelease(arr as *mut std::ffi::c_void);
         out
+    }
+}
+
+unsafe fn dict_string(dict: *const std::ffi::c_void, key: *const std::ffi::c_void) -> String {
+    let v = CFDictionaryGetValue(dict, key);
+    if v.is_null() {
+        return String::new();
+    }
+    let mut buf = [0i8; 512];
+    let ok = CFStringGetCString(v, buf.as_mut_ptr(), buf.len() as isize, K_CF_STRING_ENCODING_UTF8);
+    if ok {
+        std::ffi::CStr::from_ptr(buf.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        String::new()
     }
 }
 
@@ -328,13 +438,19 @@ fn write_png(img: &CGImage, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 采集入口：枚举可截取内容 → 按目标建过滤器 → 截图 → 等结果。
+/// 采集入口：枚举可截取内容 → 按"选择"建过滤器（窗口 / 显示器）→ 截图 → 等结果。
+/// 目标来自 `active_target::detect_active_target`（与浮窗定位共用同一次探测）；
+/// `use_window` 由配置在该消费端决定：要窗口且窗口存在 → 窗口，否则回退显示器。
 /// 全程有超时（枚举 5s、截图 5s），不会像外部进程那样无限期挂住。
-fn capture_with_sck(path: &Path, target: ShotTarget) -> Result<String, String> {
+fn capture_with_sck(
+    path: &Path,
+    target: &crate::active_target::ActiveTarget,
+    use_window: bool,
+) -> Result<String, String> {
     let (tx, rx) = mpsc::channel::<Result<String, String>>();
     let path_owned = path.to_path_buf();
+    let target = target.clone();
     let our_pid = std::process::id() as i32;
-    let cursor = crate::overlay::cursor_point();
     let block = RcBlock::new(move |content: *mut SCShareableContent, err: *mut NSError| {
         let prepared = (|| -> Result<(Retained<SCContentFilter>, Retained<SCStreamConfiguration>, String), String> {
             if content.is_null() {
@@ -343,16 +459,16 @@ fn capture_with_sck(path: &Path, target: ShotTarget) -> Result<String, String> {
             let content: &SCShareableContent = unsafe { &*content };
             let displays = unsafe { content.displays() };
             let windows = unsafe { content.windows() };
-            match target {
-                ShotTarget::ActiveWindow => {
-                    let wins = window_list();
-                    let id = pick_window(&wins, our_pid, cursor)
-                        .ok_or_else(|| "没有可作为目标的窗口".to_string())?;
-                    let win = find_sc_window(&windows, id)
-                        .ok_or_else(|| format!("窗口 {id} 不在可截取列表(可能刚关闭)"))?;
+            match target.window.as_ref().filter(|_| use_window) {
+                Some(w) => {
+                    let win = find_sc_window(&windows, w.id)
+                        .ok_or_else(|| format!("窗口 {} 不在可截取列表(可能刚关闭)", w.id))?;
                     let frame = unsafe { win.frame() };
-                    let scale =
-                        display_scale_for_center(&displays, frame.origin.x + frame.size.width / 2.0, frame.origin.y + frame.size.height / 2.0);
+                    let scale = display_scale_for_center(
+                        &displays,
+                        frame.origin.x + frame.size.width / 2.0,
+                        frame.origin.y + frame.size.height / 2.0,
+                    );
                     let cfg = unsafe { SCStreamConfiguration::new() };
                     unsafe {
                         cfg.setWidth((frame.size.width * scale).round().max(1.0) as usize);
@@ -366,14 +482,10 @@ fn capture_with_sck(path: &Path, target: ShotTarget) -> Result<String, String> {
                             &win,
                         )
                     };
-                    let title = unsafe { win.title() }
-                        .map(|t| t.to_string())
-                        .unwrap_or_default();
-                    Ok((filter, cfg, format!("window({id} {title})")))
+                    Ok((filter, cfg, format!("window({} {})", w.id, w.title)))
                 }
-                ShotTarget::ActiveDisplay => {
-                    let dt = crate::overlay::display_target_at_cursor()
-                        .ok_or_else(|| "无法判定光标所在显示器".to_string())?;
+                None => {
+                    let dt = &target.display;
                     let disp = find_sc_display(&displays, dt.id)
                         .ok_or_else(|| format!("显示器 {} 不在可截取列表", dt.id))?;
                     let ours = own_windows(&windows, our_pid);
@@ -402,7 +514,6 @@ fn capture_with_sck(path: &Path, target: ShotTarget) -> Result<String, String> {
                         ),
                     ))
                 }
-                ShotTarget::Off => Err("截图目标为 off".into()),
             }
         })();
         match prepared {
@@ -426,11 +537,26 @@ fn capture_with_sck(path: &Path, target: ShotTarget) -> Result<String, String> {
 }
 
 /// 采集到 `dir`（每次新文件），返回文件路径与大小。
-pub fn capture(dir: &Path, tag: &str, target: ShotTarget) -> Result<Shot, String> {
+/// `mode` 是配置值（off / active_window / active_display），只在截图这一端消费：
+/// - active_window：有活动窗口就截窗口；没有就回退截显示器（并在日志里说明）
+/// - active_display：始终截显示器
+pub fn capture(
+    dir: &Path,
+    tag: &str,
+    target: &crate::active_target::ActiveTarget,
+    mode: ShotTarget,
+) -> Result<Shot, String> {
+    if mode == ShotTarget::Off {
+        return Err("截图已关闭(detect_active_target=off)".into());
+    }
     std::fs::create_dir_all(dir).map_err(|e| format!("建截图目录失败: {e}"))?;
     let path = dir.join(format!("screen-{}-{tag}.png", now_ms()));
     let t0 = std::time::Instant::now();
-    let desc = capture_with_sck(&path, target)?;
+    let use_window = mode == ShotTarget::ActiveWindow && target.window.is_some();
+    if mode == ShotTarget::ActiveWindow && target.window.is_none() {
+        crate::log::elog("[ctx] 光标下没有可截取窗口，回退为屏幕截图");
+    }
+    let desc = capture_with_sck(&path, target, use_window)?;
     let bytes = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
     if bytes == 0 {
         return Err("截图文件为空".into());
@@ -511,9 +637,14 @@ pub fn prune(dir: &Path, keep: usize) {
 }
 
 /// 采集 + 清理（一次调用，供录音开始时后台线程使用）
-pub fn capture_and_prune(data_dir: &Path, tag: &str, target: ShotTarget) -> Result<Shot, String> {
+pub fn capture_and_prune(
+    data_dir: &Path,
+    tag: &str,
+    target: &crate::active_target::ActiveTarget,
+    mode: ShotTarget,
+) -> Result<Shot, String> {
     let dir = data_dir.join(DIR_NAME);
-    let shot = capture(&dir, tag, target)?;
+    let shot = capture(&dir, tag, target, mode)?;
     prune(&dir, KEEP);
     Ok(shot)
 }
@@ -597,7 +728,16 @@ mod tests {
     #[test]
     fn capture_fails_gracefully_on_bad_dir() {
         // 目录不可创建时返回 Err 而不是 panic（调用方据此退回纯文本）
-        let r = capture(Path::new("/dev/null/nope"), "t", ShotTarget::ActiveWindow);
+        let target = crate::active_target::ActiveTarget {
+            display: crate::overlay::DisplayTarget {
+                index: 1,
+                id: 1,
+                origin: (0.0, 0.0),
+                size: (100.0, 100.0),
+            },
+            window: None,
+        };
+        let r = capture(Path::new("/dev/null/nope"), "t", &target, ShotTarget::ActiveWindow);
         assert!(r.is_err());
     }
 
@@ -619,64 +759,45 @@ mod tests {
         assert_eq!(parse_target(" off "), ShotTarget::Off);
     }
 
-    // —— 窗口挑选规则 ——
+    // —— 光标命中窗口（纯规则）——
 
     fn win(id: u32, pid: i32, layer: i64, frame: (f64, f64, f64, f64)) -> WinInfo {
-        WinInfo { id, pid, layer, frame }
+        WinInfo {
+            id,
+            pid,
+            layer,
+            title: String::new(),
+            frame,
+        }
     }
 
     #[test]
-    fn pick_takes_frontmost_eligible() {
+    fn hit_test_takes_topmost_window_under_point() {
         let wins = vec![
             win(1, 100, 0, (0.0, 0.0, 800.0, 600.0)), // 最前
-            win(2, 200, 0, (0.0, 0.0, 900.0, 700.0)),
+            win(2, 200, 0, (0.0, 0.0, 900.0, 700.0)), // 在下面
         ];
-        assert_eq!(pick_window(&wins, 999, None), Some(1));
+        assert_eq!(pick_window_at(&wins, 999, (50.0, 50.0)), Some(1));
+        // 点只落在后面那个窗口上 → 选它
+        assert_eq!(pick_window_at(&wins, 999, (850.0, 650.0)), Some(2));
     }
 
     #[test]
-    fn pick_skips_own_and_off_layer_and_small() {
+    fn hit_test_skips_own_off_layer_and_small() {
         let wins = vec![
-            win(1, 999, 0, (0.0, 0.0, 800.0, 600.0)),   // 本进程 → 跳过
-            win(2, 100, 3, (0.0, 0.0, 800.0, 600.0)),   // 非 0 层 → 跳过
-            win(3, 100, 0, (0.0, 0.0, 150.0, 100.0)),   // 太小 → 跳过
-            win(4, 100, 0, (0.0, 0.0, 800.0, 600.0)),   // 合格
+            win(1, 999, 0, (0.0, 0.0, 800.0, 600.0)), // 本进程 → 跳过
+            win(2, 100, 3, (0.0, 0.0, 800.0, 600.0)), // 非 0 层 → 跳过
+            win(3, 100, 0, (0.0, 0.0, 150.0, 100.0)), // 太小 → 跳过
+            win(4, 100, 0, (0.0, 0.0, 800.0, 600.0)), // 合格
         ];
-        assert_eq!(pick_window(&wins, 999, None), Some(4));
+        assert_eq!(pick_window_at(&wins, 999, (10.0, 10.0)), Some(4));
     }
 
     #[test]
-    fn pick_falls_back_to_cursor_window() {
-        // 没有"最前合格窗口"的场景: 列表里只有本进程窗口 → 回退到指针命中的合格窗口
-        let wins = vec![
-            win(1, 999, 0, (0.0, 0.0, 800.0, 600.0)), // 本进程
-            win(2, 100, 0, (100.0, 100.0, 300.0, 300.0)), // 合格但不在指针下
-            win(3, 100, 0, (500.0, 400.0, 300.0, 300.0)), // 指针命中
-        ];
-        // 注意: 规则 1 会先选中 2（最前合格窗口）；指针回退只在"没有合格窗口"时生效。
-        assert_eq!(pick_window(&wins, 999, Some((600.0, 500.0))), Some(2));
-        // 全部不可用（都是本进程）→ 指针命中也不给
-        let only_ours = vec![win(1, 999, 0, (0.0, 0.0, 800.0, 600.0))];
-        assert_eq!(pick_window(&only_ours, 999, Some((10.0, 10.0))), None);
-    }
-
-    #[test]
-    fn pick_cursor_fallback_when_no_eligible_at_all() {
-        // 合格窗口只有"指针下的那个"（另一个合格窗口不存在时）——构造：前两个不合格，第三个合格且被指针命中
-        let wins = vec![
-            win(1, 999, 0, (0.0, 0.0, 800.0, 600.0)), // 本进程 → 不合格
-            win(2, 100, 5, (0.0, 0.0, 800.0, 600.0)), // 非 0 层 → 不合格
-            win(3, 100, 0, (200.0, 200.0, 400.0, 300.0)), // 合格
-        ];
-        // 规则 1 已经能选中 3（它是唯一合格窗口）
-        assert_eq!(pick_window(&wins, 999, Some((0.0, 0.0))), Some(3));
-    }
-
-    #[test]
-    fn pick_none_when_nothing_usable() {
-        let wins = vec![win(1, 999, 0, (0.0, 0.0, 800.0, 600.0))];
-        assert_eq!(pick_window(&wins, 999, Some((10.0, 10.0))), None);
-        assert_eq!(pick_window(&[], 999, None), None);
+    fn hit_test_none_when_point_not_on_any_window() {
+        let wins = vec![win(1, 100, 0, (0.0, 0.0, 800.0, 600.0))];
+        assert_eq!(pick_window_at(&wins, 999, (900.0, 100.0)), None);
+        assert_eq!(pick_window_at(&[], 999, (10.0, 10.0)), None);
     }
 
     #[test]

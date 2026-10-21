@@ -247,23 +247,29 @@
   - 每次调用全量落盘 `llm_logs/{millis}-{provider}-{耗时}ms.json`（url/request/response_raw）。
   - `list_models`：GET `{base}/models`（10s 超时），取 data[].id 排序返回。
 
-#### 3.5.1 屏幕上下文（`screen_context.rs` + `llm.rs` 的带图路径）
+#### 3.5.1 屏幕上下文（`active_target.rs` + `screen_context.rs` + `llm.rs` 的带图路径）
 
-开关式功能（`screenshot_target`，默认 `active_window`），定位是"提升专有名词准确率"，不改变 ASR 本身。
+开关式功能（`detect_active_target`，默认 `active_window`），定位是"提升专有名词准确率"，不改变 ASR 本身。
 
-- 目标选项（三值）：`off` 不截图；`active_window`（默认）截"最前面的普通窗口"；`active_display` 截"光标所在显示器"整屏。
+- 目标选项（三值）：`off` 不截图；`active_window`（默认）截"主窗口"；`active_display` 截"光标所在显示器"整屏。
+- 主窗口与显示器由 `active_target::detect_active_target()` 探测**一次**，截图与浮窗共用（浮窗只取 `display`）：
+  1. **先看光标**：键盘焦点（输入光标所在）窗口 → 主窗口，它的屏 = 活动显示器；
+  2. **没有光标**：鼠标指针下的普通窗口 → 主窗口；
+  3. **鼠标下也没有窗口**：无主窗口，活动显示器 = 指针所在屏。
+  - 窗口合格条件：层 0、非本进程、≥200×150（过滤浮层、自己的窗口、工具提示）。
+  - 键盘焦点窗口 = AX 焦点元素的 `AXWindow` 的坐标/尺寸 → 在 CoreGraphics 窗口列表里按框匹配（±2px）。
+- 截图端消费配置：`active_window` 有主窗口 → 截窗口；没有 → 回退截显示器（`[ctx]` 日志说明）；`active_display` 始终截显示器。
 - 采集实现 = **ScreenCaptureKit**（进程内系统 API，macOS 14+）：`SCShareableContent` 枚举 → `SCContentFilter` → `SCScreenshotManager.captureImage` → ImageIO 写 PNG，存 `<数据目录>/screen_context/screen-{millis}-ctx.png`；**在录音开始的后台线程执行**，不占录音启动时间；保留最近 200 张。
   - 不用 `screencapture` 命令行：外部进程不可控（实测最长一次卡 134.6s，把浮窗显示一起拖住，且无超时/单飞手段）。
   - 窗口前后顺序取 CoreGraphics 窗口列表（文档保证"从前往后"）；ScreenCaptureKit 只负责截。
-- `active_window` 的挑选规则：最前面的普通窗口（层 0、非本进程、≥200×150）→ 没有合格窗口时回退到"鼠标指针命中的最前面合格窗口"→ 再不行本次不带图（`[ctx]` 日志说明原因）。
 - `active_display` 排除浮窗：过滤器用 `SCContentFilter(display:excludingWindows:)`，把**本应用自己的全部窗口**（浮窗/主窗/设置窗）从这一张截图里排除；不设 `NSWindow.sharingType`（那会连带影响屏幕共享/录屏里浮窗的可见性）。
-- 显示顺序：**按下热键立即显示浮窗**（浮窗不会被截进图，不再需要"先截图后显示"的顺序规避）。
+- 显示顺序：**按下热键立即显示浮窗**，并放在活动显示器上（屏内位置仍按 `overlay_position`）。
 - 注入（`llm.rs`）：user 消息变成 `[图片, 文本]` 内容块数组（带图时文本前缀"参考随附截图中的上下文，修正下面这段转写："）。图片走 base64 内联 data URL，每次新截图；**不带图时 user 消息仍是纯字符串**。
 - 权限：需要"屏幕录制"（TCC）。常驻在「权限」卡里展示（标"可选"）；目标非 `off` 时前端可调 `request_screen_permission` 触发系统引导；缺权限时采集失败 → `[ctx]` 日志 + 本次退回纯文本纠错，**不阻塞交付**。
 - 失败降级：枚举/截图失败（含 5s 超时）、图片读取失败、模型不支持图片，都只记日志并继续纯文本纠错。
 - 落盘留档：截图本体存 `screen_context/`；`llm_logs/*.json` 里把 base64 换成 `<截图内联: <路径> (N MB)>` 占位。
 - 实测依据（模型选择、token 成本、失败模式）：`research-plan/voice-mac-app/day-07-context/report.md`。要点：DeepSeek Flash 与 GLM 5.3 Flash 均支持图片；带图 vs 不带图的专名命中实测 1/5 → 5/5。
-- 配置迁移：旧键 `screenshot_context`（布尔）**不迁移、直接忽略**；新键 `screenshot_target` 缺省 `active_window`（升级后截图行为从"整屏"变为"当前窗口"，用户自行改配置）。
+- 配置迁移：旧键 `screenshot_context`（布尔）与 `screenshot_target`（早期取值）**不迁移、直接忽略**；新键 `detect_active_target` 缺省 `active_window`（用户自行改配置）。
 - `deliver.rs`（交付原语，155 行，移植自 Swift OutputAndHistory）：
   - `ax_insert`：systemWide → `AXFocusedUIElement` → 读选区 before → 写 `AXSelectedText` → 读回 after 对比，防"报成功但 app 静默忽略"。
   - `ax_trusted(prompt)`：AXIsProcessTrustedWithOptions，quiet=仅查询，否则弹系统授权窗。
@@ -406,7 +412,7 @@
   - `hotkey`：key(默认 f5) / ctrl / alt / cmd / shift；保存时键名归一化为 keyboard_types Code 格式（F5/KeyA/Space/Digit1/Comma/ArrowUp…）。
   - 行为开关与数值：
     - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`trailing_newlines`（默认 0 = 不追加，夹到 0..=10，只改交付文本不改历史原文）。
-    - `screenshot_target`（默认 `active_window`）：截图目标（off / active_window / active_display），把当前窗口或屏幕截图作为纠错上下文。旧键 `screenshot_context` 已废弃、忽略不迁移。详见 §3.5.1。
+    - `detect_active_target`（默认 `active_window`）：活动目标探测的用途（off / active_window / active_display）——截图用窗口还是显示器作为纠错上下文；旧键 `screenshot_context` / `screenshot_target` 已废弃、忽略不迁移。详见 §3.5.1。
     - `llm_timeout_secs`（默认 30）、`llm_max_tokens`（默认 0 = 不传该字段，用服务端默认）、`llm_retries`（默认 2）：LLM 调用参数，大模型页「调用参数」卡可改。详见 §3.5.2。
     - `auto_check_update`（默认 true）：启动时自动检查更新（只报告，不自动安装）。详见 §3.11。
     - `overlay_position`（"bottom"）、`history_limit`（200，0 不限）、`keep_audio_count`（50）。
@@ -417,7 +423,7 @@
 - **recordings/**（同目录）：`rec_{unix_millis}.wav`，16k mono i16le；keep_audio_count 裁剪最旧。
 - **llm_logs/**（同目录）：每次 LLM 调用 `{millis}-{provider}-{耗时}ms.json`，含 url / request / response_raw 全文（本地明文；key 不写入）。
 - **app.log**（同目录）：关键链路诊断日志（setup/hotkey/doubao 帧诊断/pipeline/paste-tx/autotest 断言）。
-- **screen_context/**（同目录）：屏幕上下文截图归档，`screen-{millis}-ctx.png`，保留最近 200 张（超出删最早）。仅当 `screenshot_target` 非 `off` 时产生；用途是事后核对"当时屏幕上是什么、模型看到的是不是这个"。
+- **screen_context/**（同目录）：屏幕上下文截图归档，`screen-{millis}-ctx.png`，保留最近 200 张（超出删最早）。仅当 `detect_active_target` 非 `off` 时产生；用途是事后核对"当时屏幕上是什么、模型看到的是不是这个"。
 
 ## 5. 构建与签名
 

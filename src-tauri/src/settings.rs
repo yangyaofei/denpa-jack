@@ -217,13 +217,13 @@ pub struct Config {
     pub use_llm_correction: bool,
     #[serde(default)]
     pub clipboard_only: bool,
-    /// 截图目标（屏幕上下文）：off / active_window（默认）/ active_display。
-    /// - active_window：截"最前面的普通窗口"，没有合格窗口时回退到指针命中的窗口
-    /// - active_display：截"光标所在显示器"整屏（排除本应用自己的窗口，浮窗不入镜）
+    /// 活动目标探测的用途（决策在消费端）：off / active_window（默认）/ active_display。
+    /// - active_window：截"主窗口"（键盘焦点窗口；没有则指针下的窗口）；都没有则回退截屏
+    /// - active_display：截"光标所在显示器"；截图时排除本应用自己的窗口（浮窗不入镜）
     /// 需要屏幕录制权限；截图存 `<数据目录>/screen_context/`。
-    /// 旧键 `screenshot_context` 已废弃（不迁移，见 docs/SPEC.md §3.5.1）。
-    #[serde(default = "d_screenshot_target")]
-    pub screenshot_target: String,
+    /// 旧键 `screenshot_target` / `screenshot_context` 已废弃（不迁移，见 docs/SPEC.md §3.5.1）。
+    #[serde(default = "d_detect_active_target")]
+    pub detect_active_target: String,
     /// LLM 请求超时（秒）。越大越能容忍慢思考模型，但出错时用户等待也更久。
     #[serde(default = "d_llm_timeout")]
     pub llm_timeout_secs: u64,
@@ -585,8 +585,8 @@ fn d_min_rec() -> f64 { 0.3 }
 fn d_keep_audio() -> u32 { 50 }
 fn d_llm_timeout() -> u64 { 30 }
 fn d_llm_retries() -> u32 { 2 }
-/// 截图目标默认值：当前窗口（"旧键忽略、新键缺省 active_window"）
-fn d_screenshot_target() -> String { "active_window".into() }
+/// 活动目标探测用途的默认值：截当前窗口（"旧键忽略、新键缺省 active_window"）
+fn d_detect_active_target() -> String { "active_window".into() }
 pub fn default_config() -> Config {
     Config {
         use_llm_correction: true,

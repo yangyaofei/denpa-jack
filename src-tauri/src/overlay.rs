@@ -25,6 +25,7 @@ extern "C" {
         count: *mut u32,
     ) -> i32;
     fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> CgRect;
     fn CGDisplayPixelsWide(display: u32) -> usize;
     // 与 deliver.rs 保持同一签名（否则 clashing_extern_declarations）
@@ -58,21 +59,24 @@ pub struct DisplayTarget {
     pub size: (f64, f64),
 }
 
-/// 取光标所在显示器。
-///
-/// 用途：截图默认抓主显示器，多显示器下与用户实际看的屏不一致（用户实测反馈）。
-/// 与 hud 定位同源——都以"光标所在屏"为目标屏。
-/// 实现只用 CoreGraphics（全局显示空间，线程安全）：截图跑在后台线程，不能依赖主线程的 NSScreen。
-/// 编号取自 CGGetActiveDisplayList 的下标 +1（与 screencapture 的编号规则一致，主显示器排第一；
-/// 已实测：本机 1 = 内建屏 3456x2160，2 = 外接屏 5120x2880）。
-pub fn display_target_at_cursor() -> Option<DisplayTarget> {
+/// 主显示器（"找不到目标屏"时的最终兜底）
+pub fn main_display_target() -> DisplayTarget {
     unsafe {
-        let ev = CGEventCreate(std::ptr::null());
-        if ev.is_null() {
-            return None;
+        let id = CGMainDisplayID();
+        let b = CGDisplayBounds(id);
+        DisplayTarget {
+            index: 1,
+            id,
+            origin: (b.origin.x, b.origin.y),
+            size: (b.size.width, b.size.height),
         }
-        let p = CGEventGetLocation(ev);
-        CFRelease(ev);
+    }
+}
+
+/// 包含给定点（CG 全局显示空间，y 向下）的显示器
+pub fn display_target_at(point: (f64, f64)) -> Option<DisplayTarget> {
+    unsafe {
+        let p = CgPoint { x: point.0, y: point.1 };
         let mut hit = [0u32; 8];
         let mut hit_n = 0u32;
         if CGGetDisplaysWithPoint(p, hit.len() as u32, hit.as_mut_ptr(), &mut hit_n) != 0 || hit_n == 0
@@ -93,6 +97,12 @@ pub fn display_target_at_cursor() -> Option<DisplayTarget> {
             size: (b.size.width, b.size.height),
         })
     }
+}
+
+/// 取光标所在显示器（探测函数与单测共用；`detect_active_target` 内联的同一逻辑）
+#[cfg(test)]
+fn display_target_at_cursor() -> Option<DisplayTarget> {
+    display_target_at(cursor_point()?)
 }
 
 /// 光标在全局显示空间（点为单位，y 向下）的位置——截图判定"指针命中哪个窗口"用
@@ -119,7 +129,10 @@ pub fn display_scale(display_id: u32) -> f64 {
     }
 }
 
-pub fn position_hud_at_cursor(app: &tauri::AppHandle) {
+/// 把浮窗放到目标显示器上（`None` = 光标所在屏）。
+/// 位置规则仍由配置 `overlay_position` 决定（bottom/top/center），与旧行为一致——
+/// 这里只改变"哪块屏"，不改"屏内哪个位置"。
+pub fn position_hud(app: &tauri::AppHandle, display: Option<&DisplayTarget>) {
     let Some(w) = app.get_webview_window("hud") else {
         log::log(app, "hud 窗口不存在!");
         return;
@@ -128,12 +141,18 @@ pub fn position_hud_at_cursor(app: &tauri::AppHandle) {
     let pos_mode = crate::settings::get_config(app.clone())
         .map(|c| c.overlay_position)
         .unwrap_or_else(|_| "bottom".to_string());
+    let target = display.copied();
     let r = w.run_on_main_thread(move || unsafe {
-        position_on_main(&app2, &pos_mode);
+        position_on_main(&app2, target, &pos_mode);
     });
     if let Err(e) = r {
         log::log(app, &format!("hud 定位调度失败: {e}"));
     }
+}
+
+/// 兼容入口：按光标所在屏定位（启动时的初始摆放、以及没有窗口目标的场景）
+pub fn position_hud_at_cursor(app: &tauri::AppHandle) {
+    position_hud(app, None);
 }
 
 /// NS 坐标系点(左下原点, y 向上)——模块私有新类型:
@@ -166,7 +185,31 @@ unsafe fn place(nsw: &NSWindow, p: NsPoint) {
 }
 
 /// 必须主线程: NSWindow 操作约束(与 tray/paste_tx 同一模型)
-unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
+/// CG 全局显示空间（y 向下，原点=主显示器左上）→ NS 全局坐标（y 向上，原点=主显示器左下）
+fn ns_frame_of(t: &DisplayTarget, main_h: f64) -> objc2_foundation::NSRect {
+    objc2_foundation::NSRect {
+        origin: objc2_foundation::NSPoint {
+            x: t.origin.0,
+            y: main_h - t.origin.1 - t.size.1,
+        },
+        size: objc2_foundation::NSSize {
+            width: t.size.0,
+            height: t.size.1,
+        },
+    }
+}
+
+/// 目标显示器对应的 NSScreen 矩形（按设备独立坐标换算后匹配；匹配不到返回 None）
+fn screen_rect_for(t: &DisplayTarget) -> objc2_foundation::NSRect {
+    let main_h = unsafe { CGDisplayBounds(CGMainDisplayID()).size.height };
+    ns_frame_of(t, main_h)
+}
+
+unsafe fn position_on_main(
+    app: &tauri::AppHandle,
+    target: Option<DisplayTarget>,
+    pos_mode: &str,
+) {
     use objc2_foundation::MainThreadMarker;
 
     let Some(mtm) = MainThreadMarker::new() else {
@@ -184,17 +227,33 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
     };
     let nsw: &NSWindow = unsafe { &*(ns_ptr.cast::<NSWindow>()) };
 
-    // 光标位置 + 光标所在屏(全 NS 坐标, y 向上)
-    let loc = NsPoint::from_cursor();
     let screens = NSScreen::screens(mtm);
-    let target = screens
-        .iter()
-        .map(|s| s.frame())
-        .find(|f| loc.within(*f))
-        .or_else(|| NSScreen::mainScreen(mtm).map(|s| s.frame()));
-    let Some(f) = target else {
-        log::log(app, "hud 定位失败: 无可用显示器");
-        return;
+    // 目标屏：优先用解析出来的采集目标（与截图同一个屏）；没有目标时退回光标所在屏
+    let wanted = target.map(|t| screen_rect_for(&t));
+    let by_target = wanted.and_then(|r| {
+        screens
+            .iter()
+            .map(|s| s.frame())
+            .find(|f| {
+                (f.origin.x - r.origin.x).abs() < 1.0
+                    && (f.origin.y - r.origin.y).abs() < 1.0
+                    && (f.size.width - r.size.width).abs() < 1.0
+                    && (f.size.height - r.size.height).abs() < 1.0
+            })
+    });
+    let loc = NsPoint::from_cursor();
+    let f = match by_target.or_else(|| {
+        screens
+            .iter()
+            .map(|s| s.frame())
+            .find(|f| loc.within(*f))
+            .or_else(|| NSScreen::mainScreen(mtm).map(|s| s.frame()))
+    }) {
+        Some(f) => f,
+        None => {
+            log::log(app, "hud 定位失败: 无可用显示器");
+            return;
+        }
     };
 
     // 窗口尺寸取实际值: 单栏 480 / 出现队列时 664(分段队列定则), 高度固定 200。
@@ -224,8 +283,16 @@ unsafe fn position_on_main(app: &tauri::AppHandle, pos_mode: &str) {
         return;
     }
     log::elog(&format!(
-        "[hud] 定位: 光标=({:.0},{:.0}) 屏=({:.0},{:.0})x({:.0}x{:.0}) -> ({:.0},{:.0})",
-        loc.x, loc.y, f.origin.x, f.origin.y, f.size.width, f.size.height, p.x, p.y
+        "[hud] 定位: 目标屏={:?} 光标=({:.0},{:.0}) 屏=({:.0},{:.0})x({:.0}x{:.0}) -> ({:.0},{:.0})",
+        target.map(|t| t.id),
+        loc.x,
+        loc.y,
+        f.origin.x,
+        f.origin.y,
+        f.size.width,
+        f.size.height,
+        p.x,
+        p.y
     ));
     place(nsw, p);
 }

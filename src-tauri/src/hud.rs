@@ -151,9 +151,10 @@ fn apply_error(g: &mut Snapshot, reason: &str) {
 // ───────────────────────── 对外唯一接口 ─────────────────────────
 
 /// 一条新录音开始了(按下热键)。定位并显示浮窗, 清掉上一条的内容。
-pub fn recording_started(app: &tauri::AppHandle) {
+pub fn recording_started(app: &tauri::AppHandle, display: &crate::overlay::DisplayTarget) {
     update(apply_recording_started);
-    crate::overlay::position_hud_at_cursor(app);
+    // 与截图共用同一个目标显示器（capture_target::resolve 的快照）
+    crate::overlay::position_hud(app, Some(display));
     LAST_SHOW_MS.store(now_ms(), Ordering::SeqCst);
     crate::overlay::show_window(app);
 }

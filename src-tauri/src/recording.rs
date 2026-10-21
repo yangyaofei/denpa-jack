@@ -248,13 +248,12 @@ fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cu
     }
 }
 
-/// 录音开始的可见反馈: 显示浮窗。
+/// 录音开始的可见反馈: 显示浮窗（放在目标显示器上；与截图共用同一个目标，见 capture_target）。
 ///
-/// 任何目标模式下都是**按下即显示**：窗口截图天然不含浮窗；屏幕截图用 SCK 过滤器排除
-/// 本应用自己的窗口（不再需要"先截图、后显示"的顺序规避——那是 screencapture 整屏时代的做法，
-/// 也让浮窗被外部进程拖住不显示）。
-fn show_recording_ui(app: &tauri::AppHandle) {
-    crate::hud::recording_started(app);
+/// 位置规则不变（屏幕底部居中，按 overlay_position），只是"哪块屏"跟随目标窗口，
+/// 不再跟随鼠标——多屏时浮窗和截图不会再指向两个不同的东西。
+fn show_recording_ui(app: &tauri::AppHandle, display: &crate::overlay::DisplayTarget) {
+    crate::hud::recording_started(app, display);
 }
 
 #[tauri::command]
@@ -357,19 +356,21 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     let cancel = rec.cancel.clone();
     let level = rec.level_handle();
     let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    // 屏幕上下文: 录音开始时后台采集一张截图(不阻塞录音启动; 目标为 off 则完全不动作)
-    // 浮窗/托盘不受截图影响——窗口截图天然不含浮窗，屏幕截图在过滤器里排除自家窗口
-    let shot_target = crate::screen_context::parse_target(&cfg.screenshot_target);
+    // 屏幕上下文: 按下时探测一次活动目标（焦点窗口 → 指针窗口 → 指针所在屏），
+    // 截图与浮窗共用；配置在该消费端决定截窗口还是截屏
+    let shot_mode = crate::screen_context::parse_target(&cfg.detect_active_target);
+    let target = crate::active_target::detect_active_target();
     let shot_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
-    if shot_target != crate::screen_context::ShotTarget::Off {
+    if shot_mode != crate::screen_context::ShotTarget::Off {
         let app_shot = app.clone();
         let slot = shot_slot.clone();
+        let target_shot = target.clone();
         std::thread::spawn(move || {
             if !crate::screen_context::preflight() {
                 log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
             } else {
                 let dir = crate::settings::data_dir(&app_shot);
-                match crate::screen_context::capture_and_prune(&dir, "ctx", shot_target) {
+                match crate::screen_context::capture_and_prune(&dir, "ctx", &target_shot, shot_mode) {
                     Ok(shot) => {
                         // sha256 与后续 [llm] 带图请求里的指纹对照 → 证明发出去的图就是这一张
                         let fp = std::fs::read(&shot.path)
@@ -405,7 +406,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     }
     register_esc(&app);
     // 按下即显示浮窗（截图在后台进行，不参与显示顺序）
-    show_recording_ui(&app);
+    show_recording_ui(&app, &target.display);
     spawn_level_loop(app.clone(), cancel.clone(), level);
     if cfg.max_recording_seconds > 0 {
         spawn_max_timer(app.clone(), cfg.max_recording_seconds, cancel);

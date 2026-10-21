@@ -16,11 +16,114 @@ extern "C" {
     ) -> i32;
     fn AXUIElementSetAttributeValue(el: AXUIElementRef, attr: CFStringRef, val: CFTypeRef) -> i32;
     fn AXIsProcessTrustedWithOptions(opts: core_foundation::dictionary::CFDictionaryRef) -> bool;
+    fn AXValueGetValue(value: CFTypeRef, the_type: u32, value_ptr: *mut std::ffi::c_void) -> bool;
+    fn AXUIElementGetPid(el: AXUIElementRef, pid: *mut i32) -> i32;
+}
+
+// AXValue 的几何类型（AXValueType: kAXValueCGPointType = 1, kAXValueCGSizeType = 2）
+const K_AX_VALUE_CG_POINT: u32 = 1;
+const K_AX_VALUE_CG_SIZE: u32 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AxPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AxSize {
+    width: f64,
+    height: f64,
+}
+
+/// 取属性值（Copy 规则：调用方持有 +1 引用，CFType 析构时释放）
+fn ax_attr_owned(el: AXUIElementRef, attr: &str) -> Option<CFType> {
+    let name = CFString::new(attr);
+    let mut out: CFTypeRef = std::ptr::null_mut();
+    let r = unsafe { AXUIElementCopyAttributeValue(el, name.as_concrete_TypeRef(), &mut out) };
+    if r != 0 || out.is_null() {
+        return None;
+    }
+    Some(unsafe { CFType::wrap_under_create_rule(out) })
+}
+
+/// 键盘焦点信息：焦点元素所属进程 + （能取到时）它的窗口框
+pub struct FocusInfo {
+    pub pid: i32,
+    pub frame: Option<(f64, f64, f64, f64)>,
+}
+
+/// 当前键盘焦点（光标所在）元素：所属进程 + 窗口框。
+///
+/// 窗口框取不到不要紧——`screen_context::focused_window` 会用 pid 回退到该应用最前面的窗口
+/// （Electron 等应用的焦点元素常拿不到 AXWindow）。
+/// 最多试 3 次（AX 服务在应用切换瞬间会返回 kAXErrorCannotComplete）。
+pub fn focused_element_info() -> Option<FocusInfo> {
+    for attempt in 0..3 {
+        if let Some(f) = focused_element_info_once() {
+            return Some(f);
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    }
+    None
+}
+
+fn focused_element_info_once() -> Option<FocusInfo> {
+    unsafe {
+        let sys = AXUIElementCreateSystemWide();
+        if sys.is_null() {
+            return None;
+        }
+        let focused = ax_attr_owned(sys, KAX_FOCUSED_ELEMENT)?;
+        let mut pid: i32 = 0;
+        if AXUIElementGetPid(focused.as_concrete_TypeRef(), &mut pid) != 0 || pid <= 0 {
+            return None;
+        }
+        Some(FocusInfo {
+            pid,
+            frame: window_frame_of(focused.as_concrete_TypeRef()),
+        })
+    }
+}
+
+fn window_frame_of(focused: AXUIElementRef) -> Option<(f64, f64, f64, f64)> {
+    unsafe {
+        let win = ax_attr_owned(focused, KAX_WINDOW)?;
+        let pos = ax_attr_owned(win.as_concrete_TypeRef(), KAX_POSITION)?;
+        let size = ax_attr_owned(win.as_concrete_TypeRef(), KAX_SIZE)?;
+        let mut p = AxPoint { x: 0.0, y: 0.0 };
+        let mut s = AxSize { width: 0.0, height: 0.0 };
+        if !AXValueGetValue(
+            pos.as_concrete_TypeRef(),
+            K_AX_VALUE_CG_POINT,
+            &mut p as *mut AxPoint as *mut std::ffi::c_void,
+        ) {
+            return None;
+        }
+        if !AXValueGetValue(
+            size.as_concrete_TypeRef(),
+            K_AX_VALUE_CG_SIZE,
+            &mut s as *mut AxSize as *mut std::ffi::c_void,
+        ) {
+            return None;
+        }
+        if s.width < 1.0 || s.height < 1.0 {
+            return None;
+        }
+        Some((p.x, p.y, s.width, s.height))
+    }
 }
 
 const KAX_SELECTED_TEXT: &str = "AXSelectedText";
 const KAX_VALUE: &str = "AXValue";
 const KAX_FOCUSED_ELEMENT: &str = "AXFocusedUIElement";
+const KAX_WINDOW: &str = "AXWindow";
+const KAX_POSITION: &str = "AXPosition";
+const KAX_SIZE: &str = "AXSize";
 
 fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
     let name = CFString::new(attr);
