@@ -11,8 +11,7 @@ pub(crate) static LAST_GEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::ne
 
 use crate::audio;
 use crate::deliver;
-use crate::doubao;
-use crate::engines;
+use crate::engine;
 use crate::pipeline;
 use crate::settings::{self, Config};
 use crate::shortcut::{register_esc, unregister_esc};
@@ -21,7 +20,7 @@ use crate::{log, AppState};
 /// 一次录音会话的完整状态——生命周期与按住-松开严格一致
 pub struct RecordingSession {
     pub rec: audio::Recording,
-    cmd_tx: ttx::Sender<doubao::Cmd>,
+    cmd_tx: ttx::Sender<engine::Cmd>,
     started_at: std::time::Instant,
     focus: deliver::FocusLock,
     gen: u64,
@@ -39,7 +38,7 @@ impl RecordingSession {
         engine: &str,
     ) -> (
         pipeline::SessionHandoff,
-        ttx::Sender<doubao::Cmd>,
+        ttx::Sender<engine::Cmd>,
         Arc<Mutex<Option<pipeline::SessionHandoff>>>,
     ) {
         let duration_ms = self.started_at.elapsed().as_millis() as u64;
@@ -298,7 +297,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     }
     let mic = resolve_mic(&app, &mut cfg);
     let mic_name = mic.clone();
-    let (tx, rx) = ttx::channel::<doubao::Cmd>(64);
+    let (tx, rx) = ttx::channel::<engine::Cmd>(64);
     let (atx, arx) = mpsc::channel::<Vec<u8>>();
     // 音频自愈(Handy recorder.rs): open 失败重解析设备重试一次
     let rec = match audio::start_input(mic.clone(), atx.clone()) {
@@ -326,7 +325,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     // 交接箱: 会话作用域——stop 写, 引擎 Result 读(唯一交接点, 无全局)
     let handoff = Arc::new(Mutex::new(None));
     let focus = deliver::FocusLock::snapshot();
-    engines::spawn_session(
+    engine::spawn_session(
         app.clone(),
         profile.provider.clone(),
         key,
@@ -344,7 +343,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             }
             // 审计#2(对齐 Handy transcription.rs:169 无界阻塞保序): 会话通道满=引擎背压,
             // 阻塞等而不是丢帧(丢帧=文本截尾无告警); 会话已死时 send 立即返回 Err
-            if cmd_tx.blocking_send(doubao::Cmd::Feed(chunk)).is_err() {
+            if cmd_tx.blocking_send(engine::Cmd::Feed(chunk)).is_err() {
                 log::elog("[bridge] 引擎通道已关闭, 停止喂入(余量音频丢弃)");
                 break;
             }
@@ -454,7 +453,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 200ms 的音频会因 duration 达到 300ms 被误判为有效语音而交付
     if ho.pcm.len() < 9600 {
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
-        let _ = cmd_tx.try_send(doubao::Cmd::Abort);
+        let _ = cmd_tx.try_send(engine::Cmd::Abort);
         session_cleanup(&app, None);
         crate::hud::hide(&app);
         log::log(&app, &format!("录音太短已丢弃 {}ms", ho.duration_ms));
@@ -468,7 +467,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
-    if cmd_tx.blocking_send(doubao::Cmd::Finish).is_err() {
+    if cmd_tx.blocking_send(engine::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
         crate::hud::error(&app, "引擎会话异常中断");
     }
@@ -500,9 +499,9 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     }
     // 会话 drop=cancel 置位; 无论有无会话, 清理路径一致
     if let Some(s) = sess {
-        s.cmd_tx.try_send(doubao::Cmd::Abort).ok();
+        s.cmd_tx.try_send(engine::Cmd::Abort).ok();
     } else {
-        crate::engines::send_current(app, doubao::Cmd::Abort);
+        crate::engine::send_current(app, engine::Cmd::Abort);
     }
     session_cleanup(app, None);
     crate::hud::hide(app);

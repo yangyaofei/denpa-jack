@@ -1,6 +1,7 @@
 // 豆包流式 ASR 引擎(Rust 移植自 Swift DoubaoEngine)
 // 生命线: start → feed → finish → 恰好一次 result/error 事件
 // 约束: C16 连接关闭属正常路径由状态判定; C20(废止) definite 不结算——交付只认按键松开; C21 finish 幂等
+use super::contract::{AsrEvent, Cmd};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use futures_util::{SinkExt, StreamExt};
@@ -9,20 +10,8 @@ use std::io::Write;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-pub enum Cmd {
-    Feed(Vec<u8>),
-    Finish,
-    Abort,
-}
-
-#[derive(Debug, Clone)]
-pub enum AsrEvent {
-    Partial(String),
-    Result(String),
-    /// 转写为空(没听清/全程没声音)。不是失败: 只提示 + 写一条历史, 不进队列、不常驻(issue #6)
-    NoSpeech(String),
-    Error(String),
-}
+/// 豆包引擎(单元标记: 挂 impl 用)
+pub struct Doubao;
 
 fn gzip(data: &[u8]) -> Vec<u8> {
     let mut e = GzEncoder::new(Vec::new(), Compression::fast());
@@ -65,7 +54,7 @@ fn parse_frame(data: &[u8]) -> Option<(u8, u8, Vec<u8>)> {
 }
 
 /// 结算契约(恰好一次): 空文本=没听清(NoSpeech, 不是失败), 非空=Result。
-/// 本地实现(未并入 engines::settle): 额外落一条长度日志, 且空判据为 `is_empty`(不 trim)。
+/// 本地实现(未并入 engine::settle): 额外落一条长度日志, 且空判据为 `is_empty`(不 trim)。
 fn settle(emit: &dyn Fn(AsrEvent), text: &str) {
     crate::log::elog(&format!("[doubao] settle: len={}", text.chars().count()));
     if text.is_empty() {
@@ -75,12 +64,15 @@ fn settle(emit: &dyn Fn(AsrEvent), text: &str) {
     }
 }
 
-pub async fn run_session(
-    api_key: String,
-    hotwords: Vec<String>,
+impl<E: Fn(AsrEvent) + Send + 'static> super::AsrEngine<E> for Doubao {
+async fn run(
+    self,
+    ctx: super::EngineCtx,
     mut rx: mpsc::Receiver<Cmd>,
-    emit: impl Fn(AsrEvent) + Send + 'static,
+    emit: E,
 ) {
+    let hotwords = ctx.hotwords;
+    let api_key = ctx.api_key;
     let req_id = uuid::Uuid::new_v4().to_string();
     let req = http::Request::builder()
         .method("GET")
@@ -206,7 +198,7 @@ pub async fn run_session(
                 Cmd::Finish => {
                     if !finish_sent {
                         finish_sent = true;
-                        crate::log::elog(&format!("[doubao] finish: 停音频+收尾帧; 等服务端最终结果({}s 兜底)", crate::engines::DOUBAO_FINALIZE_TIMEOUT_SECS));
+                        crate::log::elog(&format!("[doubao] finish: 停音频+收尾帧; 等服务端最终结果({}s 兜底)", super::DOUBAO_FINALIZE_TIMEOUT_SECS));
                         let f = frame([0x11, 0x22, 0x01, 0x00], &gzip(b""));
                         // C34: 长录音的收尾帧发送可能被 TCP 背压阻塞 → 1s 超时
                         let _ = tokio::time::timeout(
@@ -214,7 +206,7 @@ pub async fn run_session(
                             sink.send(Message::Binary(f.into())),
                         )
                         .await;
-                        watchdog = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(crate::engines::DOUBAO_FINALIZE_TIMEOUT_SECS));
+                        watchdog = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(super::DOUBAO_FINALIZE_TIMEOUT_SECS));
                         crate::log::elog("[doubao] finish 分支完成, 进等待");
                     }
                 }
@@ -269,6 +261,7 @@ pub async fn run_session(
             }
         }
     }
+}
 }
 
 #[cfg(test)]

@@ -2,18 +2,21 @@
 // 网关: research-plan/voice-mac-app/local-asr/gateway.py（mlx-qwen3-asr，
 //       未来会拆成项目内的独立 package——用户定则：本地 ASR 与 APP 是两个部分）。
 // 协议: OpenAI Realtime 事件面子集 + x-input-transcript.partial 扩展（见网关文件头）。
-// 与 openai_realtime.rs 的三点差异：
+// 与 openai.rs 的三点差异：
 //   1) 音频 16k pcm16 原样直传（网关固定 sample_rate=16000，不需要上采样）；
 //   2) partial 是全量替换语义（滚动解码会回改近期文本，与豆包 partial 一致）；
 //   3) completed.transcript 是整个会话的最终全量（不是按语音段），直接结算。
 // 热词：首帧 append 携带 context（词典 term 顿号连接）——网关把它同时注入
 // 流式解码与松手后的二遍全句重解，等于词典层直接进模型。
 // 连接契约对齐 doubao：断连/收尾必须恰好一次 Result|NoSpeech|Error。
-use crate::doubao::{AsrEvent, Cmd};
+use super::contract::{AsrEvent, Cmd};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::time::Duration;
+
+/// 本地网关引擎(单元标记: 挂 impl 用)
+pub struct LocalGateway;
 
 /// base_url 归一化：空 → 默认本机网关；无协议前缀补 ws://；去尾部斜杠
 pub fn normalize_base_url(base: &str) -> String {
@@ -37,12 +40,15 @@ fn context_from_hotwords(hotwords: &[String]) -> String {
     }
 }
 
-pub async fn run_local_session(
-    base_url: String,
-    hotwords: Vec<String>,
+impl<E: Fn(AsrEvent) + Send + 'static> super::AsrEngine<E> for LocalGateway {
+async fn run(
+    self,
+    ctx: super::EngineCtx,
     mut rx: tokio::sync::mpsc::Receiver<Cmd>,
-    emit: impl Fn(AsrEvent),
+    emit: E,
 ) {
+    let hotwords = ctx.hotwords;
+    let base_url = ctx.base_url;
     let url = format!("{}/v1/realtime", normalize_base_url(&base_url));
     crate::log::elog(&format!("[local-asr] connecting {url}..."));
     let (ws, _) = match tokio_tungstenite::connect_async(&url).await {
@@ -88,7 +94,7 @@ pub async fn run_local_session(
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(
                         json!({"type": "input_audio_buffer.commit"}).to_string().into())).await;
                     // 网关二遍全句重解：30s 口述约 1-2s；30s 只是异常兜底（与全引擎统一）
-                    let deadline = tokio::time::Instant::now() + Duration::from_secs(crate::engines::FINALIZE_TIMEOUT_SECS);
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(super::FINALIZE_TIMEOUT_SECS);
                     while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, stream.next()).await {
                         let Ok(m) = msg else { break };
                         let tokio_tungstenite::tungstenite::Message::Text(t) = m else { continue };
@@ -96,7 +102,7 @@ pub async fn run_local_session(
                         match v["type"].as_str().unwrap_or("") {
                             "conversation.item.input_audio_transcription.completed" => {
                                 let t = v["transcript"].as_str().unwrap_or("");
-                                crate::engines::settle(&emit, t);
+                                super::settle(&emit, t);
                                 let _ = sink.close().await;
                                 return;
                             }
@@ -147,6 +153,7 @@ pub async fn run_local_session(
             }
         }
     }
+}
 }
 
 #[cfg(test)]

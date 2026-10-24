@@ -190,8 +190,8 @@ check(`版本号六处一致(${allV.join("/")})`, allV.every((v) => v && v === a
 // 6) issue #6: 空转写(没听清)不能当失败常驻
 check(
   "空转写走 NoSpeech(不进失败队列)",
-  /NoSpeech/.test(readFileSync("src-tauri/src/doubao.rs", "utf8")) &&
-    /AsrEvent::NoSpeech/.test(readFileSync("src-tauri/src/engines.rs", "utf8")) &&
+  /NoSpeech/.test(readFileSync("src-tauri/src/engine/doubao.rs", "utf8")) &&
+    /AsrEvent::NoSpeech/.test(readFileSync("src-tauri/src/engine/mod.rs", "utf8")) &&
     /record_no_speech/.test(segQ),
 );
 check(
@@ -209,7 +209,7 @@ check(
   "空转写走 no_speech 并结束阶段",
   /apply_no_speech/.test(readFileSync("src-tauri/src/hud.rs", "utf8")) &&
     /apply_no_speech\(g, &r\)/.test(readFileSync("src-tauri/src/hud.rs", "utf8")) &&
-    /crate::hud::no_speech\(&app, &payload\)/.test(readFileSync("src-tauri/src/engines.rs", "utf8")),
+    /crate::hud::no_speech\(&app, &payload\)/.test(readFileSync("src-tauri/src/engine/mod.rs", "utf8")),
 );
 check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/recording.rs", "utf8")));
 check("录音中的提示不触发收窗(静音提醒走 msg 但不排程收窗)", /if \(!recording\) hideAfter = 2500/.test(hudTs));

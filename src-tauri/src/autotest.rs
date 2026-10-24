@@ -5,7 +5,7 @@
 //   VOICEMAC_AUTOTEST=quit        2 秒后走正常退出路径(验证"正常退出"标记与会话文件清理)
 use tauri::{AppHandle, Manager};
 
-use crate::doubao;
+use crate::engine;
 use crate::log;
 use crate::recording::wav_data_chunk;
 use crate::AppState;
@@ -116,9 +116,9 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
                 return;
             }
         };
-        let (tx, rx) = tokio::sync::mpsc::channel::<doubao::Cmd>(64);
-        let handoff: crate::engines::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
-        crate::engines::spawn_session(
+        let (tx, rx) = tokio::sync::mpsc::channel::<engine::Cmd>(64);
+        let handoff: crate::engine::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
+        crate::engine::spawn_session(
             app.clone(),
             profile.provider.clone(),
             key,
@@ -130,13 +130,13 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
         app.state::<std::sync::Mutex<AppState>>().lock().unwrap().engine_mirror = Some(tx.clone());
         for (i, chunk) in pcm.chunks(6400).enumerate() {
             log::elog(&format!("[at] 段{} feed #{}", idx + 1, i + 1));
-            let _ = tx.try_send(doubao::Cmd::Feed(chunk.to_vec()));
+            let _ = tx.try_send(engine::Cmd::Feed(chunk.to_vec()));
             if feed_ms > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(feed_ms));
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let _ = tx.try_send(doubao::Cmd::Finish);
+        let _ = tx.try_send(engine::Cmd::Finish);
         log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段 fed+finish", idx + 1));
         std::thread::sleep(std::time::Duration::from_millis(400));
     }
@@ -191,9 +191,9 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
                 Ok(x) => x,
                 Err(e) => { log::log(&app, &format!("AUTOTEST-FILE: resolve 失败: {e}")); app.exit(1); return; }
             };
-            let (tx, rx) = tokio::sync::mpsc::channel::<doubao::Cmd>(64);
-            let handoff: crate::engines::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
-            crate::engines::spawn_session(
+            let (tx, rx) = tokio::sync::mpsc::channel::<engine::Cmd>(64);
+            let handoff: crate::engine::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
+            crate::engine::spawn_session(
                 app.clone(), profile.provider.clone(), key, profile.base_url.clone(),
                 crate::recording::budget_hotwords(&cfg.dict), handoff.clone(), rx,
             );
@@ -203,11 +203,11 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             }
             for (i, chunk) in pcm.chunks(6400).enumerate() {
                 log::elog(&format!("[at] feed #{}", i + 1));
-                let _ = tx.try_send(doubao::Cmd::Feed(chunk.to_vec()));
+                let _ = tx.try_send(engine::Cmd::Feed(chunk.to_vec()));
                 std::thread::sleep(std::time::Duration::from_millis(190));
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
-            let _ = tx.try_send(doubao::Cmd::Finish);
+            let _ = tx.try_send(engine::Cmd::Finish);
             log::log(&app, "AUTOTEST-FILE: fed+finish");
             // 交付期间 engine_mirror 保留给 pipeline 可用(pipeline 不用 mirror, 无碍)
             std::thread::sleep(std::time::Duration::from_millis(15000));

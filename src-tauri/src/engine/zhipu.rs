@@ -1,13 +1,19 @@
 // 智谱 GLM-ASR 文件式引擎(第二 ASR 引擎, 兜底/长句)
 // 移植自 Swift ZhipuFileEngine: feed 累积 → finish 打包 WAV multipart 上传; 无实时 partial
-use crate::doubao::{AsrEvent, Cmd};
+use super::contract::{AsrEvent, Cmd};
 
-pub async fn run_zhipu_session(
-    api_key: String,
-    _hotwords: Vec<String>, // 智谱 ASR 无热词支持
+/// 智谱引擎(单元标记: 挂 impl 用)
+pub struct Zhipu;
+
+impl<E: Fn(AsrEvent) + Send + 'static> super::AsrEngine<E> for Zhipu {
+async fn run(
+    self,
+    ctx: super::EngineCtx,
     mut rx: tokio::sync::mpsc::Receiver<Cmd>,
-    emit: impl Fn(AsrEvent),
+    emit: E,
 ) {
+    let api_key = ctx.api_key;
+    let _hotwords = ctx.hotwords; // 智谱 ASR 无热词支持
     let mut pcm: Vec<u8> = vec![];
     let mut n_chunks = 0usize;
     // 收集直到 Finish/Abort
@@ -54,6 +60,7 @@ pub async fn run_zhipu_session(
             emit(AsrEvent::Error(msg))
         }
     }
+}
 }
 
 async fn transcribe(api_key: &str, wav: Vec<u8>) -> Result<Option<String>, String> {

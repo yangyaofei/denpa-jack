@@ -2,16 +2,12 @@
 // 坐标 API 只准 overlay.rs 出现——模块收口从"约定"升级为"编译失败"
 fn main() {
     println!("cargo:rerun-if-changed=src/");
-    // 写坐标(改变窗口位置)只准 overlay.rs; 读坐标允许验证者(autotest 断言)
-    let overlay_only = ["setFrameOrigin", "CGDisplayBounds", "CGGetDisplaysWithPoint", "cursor_position"];
-    let entries = std::fs::read_dir("src").expect("read src");
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("rs") {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
+    // 递归收集 src/ 下全部 .rs(域子目录 engine/ 等同样受闸——搬家不豁免契约)
+    let mut files: Vec<(String, String)> = Vec::new();
+    collect_rs("src", &mut files);
+    for (name, content) in files {
+        // 写坐标(改变窗口位置)只准 overlay.rs; 读坐标允许验证者(autotest 断言)
+        let overlay_only = ["setFrameOrigin", "CGDisplayBounds", "CGGetDisplaysWithPoint", "cursor_position"];
         for api in overlay_only {
             if name != "overlay.rs" && content.contains(api) {
                 panic!(
@@ -47,5 +43,27 @@ fn main() {
                  见 docs/CONTRACTS.md 线程模型一节。"
             );
         }
+    }
+}
+
+/// 递归收集 .rs 文件: (文件名, 内容)。文件名用 basename 判等——子目录里的
+/// overlay.rs/hud.rs(将来 ui/overlay.rs 等)与平铺时同规则豁免。
+fn collect_rs(dir: &str, out: &mut Vec<(String, String)>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            collect_rs(&path.to_string_lossy(), out);
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        out.push((name, content));
     }
 }

@@ -3,8 +3,7 @@ use tauri::{Emitter, Manager};
 
 use crate::audio;
 use crate::deliver;
-use crate::doubao;
-use crate::engines;
+use crate::engine;
 use crate::history;
 use crate::pipeline;
 use crate::settings::Config;
@@ -119,7 +118,7 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
     // 旧的 raw[44..] 假设 data 固定在 44 偏移, 含 FLLR 的历史音频会把 fmt 头
     // 当 PCM 喂给引擎(C40 教训的重演, 审核a-9)
     let pcm = crate::recording::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
-    let (tx, rx) = ttx::channel::<doubao::Cmd>(64);
+    let (tx, rx) = ttx::channel::<engine::Cmd>(64);
     // 重跑也是一次会话: 交接箱随会话走, 与主链路同构
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
         audio_path: Some(audio_path.clone()),
@@ -131,7 +130,7 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
         // 重跑历史音频时不采集屏幕: 截图应当属于"当时那次录音"，事后重跑拿到的是现在的屏幕，会误导纠错
         screenshot: None,
     })));
-    engines::spawn_session(app.clone(), profile.provider.clone(), key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx);
+    engine::spawn_session(app.clone(), profile.provider.clone(), key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx);
     use tauri::Manager;
     app.state::<std::sync::Mutex<crate::AppState>>()
         .lock()
@@ -139,12 +138,12 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
         .last_audio = Some(audio_path.clone());
     tauri::async_runtime::spawn(async move {
         for chunk in pcm.chunks(6400) {
-            if tx.try_send(doubao::Cmd::Feed(chunk.to_vec())).is_err() {
+            if tx.try_send(engine::Cmd::Feed(chunk.to_vec())).is_err() {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(180)).await;
         }
-        let _ = tx.try_send(doubao::Cmd::Finish);
+        let _ = tx.try_send(engine::Cmd::Finish);
     });
     crate::hud::notify(&app, "… 重新转写中");
     Ok(())

@@ -1,17 +1,23 @@
 // OpenAI Realtime 流式转写引擎(gpt-4o-mini-transcribe)
 // 协议: WSS JSON 事件; 音频 pcm16(16k 上采样 24k); 按键定则——Finish 立即结算累积文本
-use crate::doubao::{AsrEvent, Cmd};
+use super::contract::{AsrEvent, Cmd};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::time::Duration;
 
-pub async fn run_openai_session(
-    api_key: String,
-    _hotwords: Vec<String>, // OpenAI 转写无热词参数(可用 prompt 但 realtime 会话不支持)
+/// OpenAI Realtime 引擎(单元标记: 挂 impl 用)
+pub struct OpenAiRealtime;
+
+impl<E: Fn(AsrEvent) + Send + 'static> super::AsrEngine<E> for OpenAiRealtime {
+async fn run(
+    self,
+    ctx: super::EngineCtx,
     mut rx: tokio::sync::mpsc::Receiver<Cmd>,
-    emit: impl Fn(AsrEvent),
+    emit: E,
 ) {
+    let api_key = ctx.api_key;
+    let _hotwords = ctx.hotwords; // OpenAI 转写无热词参数(可用 prompt 但 realtime 会话不支持)
     let url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-transcribe";
     let req = tokio_tungstenite::tungstenite::http::Request::builder()
         .uri(url)
@@ -66,7 +72,7 @@ pub async fn run_openai_session(
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(
                         json!({"type": "input_audio_buffer.commit"}).to_string().into())).await;
                     // 给服务端一个短窗口收最后一段 completed(转写通常 <1.5s), 到时或收到即结算
-                    let deadline = tokio::time::Instant::now() + Duration::from_secs(crate::engines::FINALIZE_TIMEOUT_SECS);
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(super::FINALIZE_TIMEOUT_SECS);
                     while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, stream.next()).await {
                         let Ok(m) = msg else { break };
                         let tokio_tungstenite::tungstenite::Message::Text(t) = m else { continue };
@@ -91,7 +97,7 @@ pub async fn run_openai_session(
                     } else {
                         last_partial
                     };
-                    crate::engines::settle(&emit, &t);
+                    super::settle(&emit, &t);
                     let _ = sink.close().await;
                     break;
                 }
@@ -133,6 +139,7 @@ pub async fn run_openai_session(
             }
         }
     }
+}
 }
 
 /// 16k mono i16le → 24k(线性插值, 每样本 1.5 倍)

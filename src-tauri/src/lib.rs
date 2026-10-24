@@ -9,21 +9,19 @@ pub mod core;
 pub mod active_target;
 mod deliver;
 pub mod dict;
-pub mod doubao;
-mod engines;
+/// 引擎域: 契约 + 四引擎 + 会话调度(阶段A trait 化归位)
+pub mod engine;
 mod history;
 pub mod hud;
 pub mod llm;
 mod log;
 mod mic_watch;
-mod local_asr;
-mod local_service;
-mod openai_realtime;
+pub mod local_service;
 mod overlay;
 mod paste_tx;
 mod permissions;
 mod pipeline;
-mod recording;
+pub mod recording;
 pub mod screen_context;
 mod segment_queue;
 mod update;
@@ -33,7 +31,6 @@ mod shortcut;
 mod tray;
 mod tray_events;
 mod transcription_coordinator;
-mod zhipu_file;
 
 
 use tauri::Manager;
@@ -44,7 +41,7 @@ pub struct AppState {
     /// 最近一次已保存录音(hud 重试用)——会话产物, 归 AppState 而非全局
     pub last_audio: Option<String>,
     /// 当前引擎命令镜像(转写中 abort / 测试通道用)——会话产物
-    pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::doubao::Cmd>>,
+    pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::engine::Cmd>>,
 }
 impl Default for AppState {
     fn default() -> Self {
