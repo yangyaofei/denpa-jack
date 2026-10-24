@@ -408,6 +408,15 @@ pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
 
 
 /// 配置变更信号(save_config 时递增; 主窗轮询刷新顶栏状态)
+/// 原子写 config.json(审核a-4): 先写同目录临时文件再 rename——写盘中途崩溃
+/// (进程死亡真实发生过, 见 crash_log)不会留下半截 JSON 让全部配置不可读。
+/// rename 在同一文件系统上原子, 半截文件只可能是 .tmp(下次覆盖)。
+pub(crate) fn write_config_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, path)
+}
+
 /// 配置版本(转发 core: 计数已收口, 写路径走 core::bump_config)
 pub fn config_version() -> u64 {
     crate::core::config_version()
@@ -476,7 +485,16 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
         cfg.bindings.insert("transcribe".into(), BindingSet { current: set });
         // 迁移即落盘(旧字段 skip_serializing 不再写出, 重复组合已归一去重)
         if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-            let _ = fs::write(&p, json);
+            let _ = write_config_atomic(&p, &json);
+        }
+    }
+    // F5 兜底(审核a-3): 旧迁移条件"≠F5 才迁"把热键恰好等于默认 F5 的用户漏掉——
+    // bindings 为空且从未有 bindings 键 → 无热键可按。这里对"从未有键"的配置补默认 F5;
+    // 只查键不存在(不查 current 空)——用户显式清空全部热键的选择不被覆盖。
+    if !cfg.bindings.contains_key("transcribe") {
+        cfg.bindings.insert("transcribe".into(), BindingSet { current: vec!["F5".to_string()] });
+        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+            let _ = write_config_atomic(&p, &json);
         }
     }
     // 内置引擎迁移(2026-10-08): 激活档案是"local 且地址为空"的旧形态 → 切到
@@ -492,7 +510,7 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
             cfg.active_asr_id = crate::local_service::BUILTIN_ID.into();
             cfg.asr_profiles.retain(|x| x.id != old_id);
             if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                let _ = fs::write(&p, json);
+                let _ = write_config_atomic(&p, &json);
             }
         }
     }
@@ -502,7 +520,7 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
     if cfg.builtin_engine.vad == "ten" {
         cfg.builtin_engine.vad = String::new();
         if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-            let _ = fs::write(&p, json);
+            let _ = write_config_atomic(&p, &json);
         }
     }
     Ok(cfg)
@@ -576,7 +594,7 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
     invalidate_data_dir_cache();
     let p = config_path(&app);
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    fs::write(&p, json).map_err(|e| e.to_string())
+    write_config_atomic(&p, &json).map_err(|e| e.to_string())
 }
 
 pub fn d_max_rec() -> u32 { 1800 }

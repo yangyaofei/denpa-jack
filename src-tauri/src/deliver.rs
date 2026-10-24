@@ -74,11 +74,11 @@ pub fn focused_element_info() -> Option<FocusInfo> {
 
 fn focused_element_info_once() -> Option<FocusInfo> {
     unsafe {
-        let sys = AXUIElementCreateSystemWide();
-        if sys.is_null() {
+        let _sys = AxGuard(AXUIElementCreateSystemWide());
+        if _sys.0.is_null() {
             return None;
         }
-        let focused = ax_attr_owned(sys, KAX_FOCUSED_ELEMENT)?;
+        let focused = ax_attr_owned(_sys.0, KAX_FOCUSED_ELEMENT)?;
         let mut pid: i32 = 0;
         if AXUIElementGetPid(focused.as_concrete_TypeRef(), &mut pid) != 0 || pid <= 0 {
             return None;
@@ -149,20 +149,32 @@ fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
 ///   `AXSelectedText` 回读为空 → 旧校验误判"静默忽略" → 又回退粘贴一次
 ///   → **同一段文本被插入两次**（用户报"特定 App 重复输入两次"）。
 ///   Preview 类应用则是真忽略（两个信号都无变化）→ 判失败 → 粘贴，行为不变。
+/// AX 引用 RAII: Create/Copy 规则 +1 的 AXUIElementRef, 离域自动 CFRelease——
+/// 旧实现裸指针无释放, 每次交付/探测泄漏一个 AXUIElement(菜单栏常驻进程累积泄漏, 审核a1/a2)
+struct AxGuard(AXUIElementRef);
+impl Drop for AxGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0 as *mut std::ffi::c_void) };
+        }
+    }
+}
+
 pub fn ax_insert(text: &str) -> Result<(), String> {
     unsafe {
-        let sys = AXUIElementCreateSystemWide();
-        if sys.is_null() {
+        let _sys = AxGuard(AXUIElementCreateSystemWide());
+        if _sys.0.is_null() {
             return Err("AXUIElementCreateSystemWide 失败".into());
         }
         let focused_name = CFString::new(KAX_FOCUSED_ELEMENT);
         let mut focused: CFTypeRef = std::ptr::null_mut();
         let r =
-            AXUIElementCopyAttributeValue(sys, focused_name.as_concrete_TypeRef(), &mut focused);
+            AXUIElementCopyAttributeValue(_sys.0, focused_name.as_concrete_TypeRef(), &mut focused);
         if r != 0 || focused.is_null() {
             return Err(format!("取焦点元素失败(kError={r})"));
         }
-        let focused_el: AXUIElementRef = focused;
+        let _focused = AxGuard(focused as AXUIElementRef);
+        let focused_el: AXUIElementRef = _focused.0;
         let before_sel = ax_copy(focused_el, KAX_SELECTED_TEXT).unwrap_or_default();
         let before_val = ax_copy(focused_el, KAX_VALUE).unwrap_or_default();
         let val = CFString::new(text);

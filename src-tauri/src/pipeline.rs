@@ -26,8 +26,10 @@ pub enum Outcome {
     Delivered,
     /// ASR 没识别到语音内容(有 warning, 不算失败——重试也没有意义)
     NoSpeech,
-    /// 失败(配置读取失败 / 交付失败等): 队列保留该段, 音频与原文进历史, 可重试
-    Failed(String),
+    /// 失败(配置读取失败 / 交付失败等): 队列保留该段, 音频与原文进历史, 可重试。
+    /// 带上已产出的纠正稿与 llm_used——历史留痕由队列 worker 统一写(修双写),
+    /// 信息不许降级成"只剩 raw"。
+    Failed { reason: String, final_text: String, llm_used: bool },
 }
 
 pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> Outcome {
@@ -44,7 +46,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             let _ = crate::emit_both(&app, "asr-final", payload.clone());
             // 交付完成只"报事实"给 HUD(它自己决定是否采纳——录音中不覆盖当前回显)
             crate::hud::delivered(&app, payload);
-            return Outcome::Failed(msg);
+            return Outcome::Failed { reason: msg, final_text: raw, llm_used: false };
         }
     };
 
@@ -187,26 +189,31 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         }
     };
 
-    // 4) 历史
+    // 4) 历史 —— 交付失败**不在此写**: 由队列 worker 的失败留痕(record_failed)统一写。
+    //    旧实现两处都写 → 同一段两行历史、两个 wav、last_audio 两线程竞写(审核 a-6)。
+    //    失败信息(纠正稿/llm_used)经 Outcome::Failed 带给 worker, 留痕不降级。
     let audio_path = ho.audio_path.clone().unwrap_or_default();
-    let rec = crate::history::HistoryRecord {
-        llm_thinking: history_thinking.clone(),
-        ts: now_local_pub(),
-        engine: if ho.engine.is_empty() { cfg.active_asr_id.clone() } else { ho.engine.clone() },
-        raw,
-        final_text: final_text.clone(),
-        llm_used,
-        delivered: delivered.clone(),
-        audio_path,
-        warning: warning.clone(),
-        duration_ms: ho.duration_ms,
-    };
-    crate::history::append(&app, &rec);
-    crate::history::enforce_limit(&app, cfg.history_limit);
-    crate::log::elog(&format!("[pipeline] delivered={delivered} history appended"));
+    let raw_for_payload = raw.clone();
+    if delivered != "failed" {
+        let rec = crate::history::HistoryRecord {
+            llm_thinking: history_thinking.clone(),
+            ts: now_local_pub(),
+            engine: if ho.engine.is_empty() { cfg.active_asr_id.clone() } else { ho.engine.clone() },
+            raw,
+            final_text: final_text.clone(),
+            llm_used,
+            delivered: delivered.clone(),
+            audio_path,
+            warning: warning.clone(),
+            duration_ms: ho.duration_ms,
+        };
+        crate::history::append(&app, &rec);
+        crate::history::enforce_limit(&app, cfg.history_limit);
+        crate::log::elog(&format!("[pipeline] delivered={delivered} history appended"));
+    }
 
     let fin_payload = serde_json::json!({
-        "raw": rec.raw, "final": final_text, "llm_used": llm_used,
+        "raw": raw_for_payload, "final": final_text, "llm_used": llm_used,
         "delivered": delivered, "warning": warning,
     });
     let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
@@ -215,7 +222,11 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     crate::hud::delivered(&app, fin_payload);
     // 托盘复位交给队列统一处理(队列里可能还有别的段在排队/转写)
     if delivered == "failed" {
-        Outcome::Failed(warning.clone().unwrap_or_else(|| "交付失败".into()))
+        Outcome::Failed {
+            reason: warning.clone().unwrap_or_else(|| "交付失败".into()),
+            final_text,
+            llm_used,
+        }
     } else {
         Outcome::Delivered
     }
@@ -299,12 +310,18 @@ pub fn now_local_pub() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    // UTC+8 近似格式化(自实现, 不依赖时区库)
-    let days = secs / 86400;
-    let rem = secs % 86400;
-    let (h, m, s) = (rem / 3600 + 8, (rem % 3600) / 60, rem % 60); // UTC+8
+    format_epoch_utc8(secs)
+}
+
+/// UTC+8 格式化(纯函数, 可测): **先加 8 小时再分解**——旧实现先分解后给小时 +8,
+/// UTC 16:00–24:00(北京次日 0–8 点)日期不进位, 历史时间戳少一天(审核 a-8)。
+/// 时区固定北京(个人工具, 不引时区库)。
+pub fn format_epoch_utc8(secs: i64) -> String {
+    let secs = secs + 8 * 3600;
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
     let (y, mo, d) = civil_from_days(days);
-    let h = h % 24;
     format!("{y:04}-{mo:02}-{d:02} {h:02}:{m:02}:{s:02}")
 }
 
@@ -335,7 +352,17 @@ fn trailing_newlines_text(text: &str, n: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ax_paste_only, trailing_newlines_text};
+    use super::{ax_paste_only, format_epoch_utc8, trailing_newlines_text};
+
+    #[test]
+    fn utc8_crosses_midnight_correctly() {
+        // 2026-10-24 16:00:00 UTC = 北京 2026-10-25 00:00:00 —— 旧实现日期不进位(少一天)
+        let epoch = 1792857600i64; // 2026-10-24T16:00:00Z
+        assert_eq!(format_epoch_utc8(epoch), "2026-10-25 00:00:00");
+        // 日内不跨日: 2026-10-24 01:10:05 UTC = 北京 09:10:05
+        let epoch2 = 1792804205i64; // 2026-10-24T01:10:05Z
+        assert_eq!(format_epoch_utc8(epoch2), "2026-10-24 09:10:05");
+    }
 
     #[test]
     fn trailing_newlines_rules() {

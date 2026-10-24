@@ -54,6 +54,12 @@ pub struct SegView {
     pub text: String,
 }
 
+/// worker 单段执行结果(内部): 失败时携带纠正稿与 llm_used, 留痕不降级
+enum WorkOutcome {
+    Done,
+    Failed { reason: String, final_text: String, llm_used: bool },
+}
+
 /// 启动 worker 线程(在 lib.rs setup 调用一次)
 pub fn start(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
@@ -79,39 +85,42 @@ pub fn start(app: tauri::AppHandle) {
 
         // 2) 执行(不持锁): ASR 阶段失败过的段不再跑后处理, 直接判失败
         let outcome = if asr_failed {
-            Err("语音识别失败".to_string())
+            WorkOutcome::Failed { reason: "语音识别失败".to_string(), final_text: String::new(), llm_used: false }
         } else {
             match crate::pipeline::post_process(app.clone(), raw.clone(), ho.clone()) {
-                crate::pipeline::Outcome::Delivered | crate::pipeline::Outcome::NoSpeech => Ok(()),
-                crate::pipeline::Outcome::Failed(e) => Err(e),
+                crate::pipeline::Outcome::Delivered | crate::pipeline::Outcome::NoSpeech => WorkOutcome::Done,
+                crate::pipeline::Outcome::Failed { reason, final_text, llm_used } => {
+                    WorkOutcome::Failed { reason, final_text, llm_used }
+                }
             }
         };
 
-        // 3) 回写: 成功出队; 失败保留(可重试), 并把音频与原文补进历史(不丢段)
-        let mut fail_record: Option<(String, crate::pipeline::SessionHandoff, String)> = None;
+        // 3) 回写: 成功出队; 失败保留(可重试), 并把音频与原文补进历史(不丢段)。
+        //    失败留痕由这里统一写(pipeline 交付失败不再自写历史——修双写, 审核a-6)
+        let mut fail_record: Option<(String, String, bool, crate::pipeline::SessionHandoff, String)> = None;
         {
             let mut c = crate::core::lock();
             if let Some(pos) = c.queue.items.iter().position(|s| s.id == id) {
                 match outcome {
-                    Ok(()) => {
+                    WorkOutcome::Done => {
                         c.queue.items.remove(pos);
                         c.version += 1;
                     }
-                    Err(e) => {
+                    WorkOutcome::Failed { reason, final_text, llm_used } => {
                         let s = &mut c.queue.items[pos];
                         s.state = SegState::Failed;
-                        s.reason = Some(e.clone());
+                        s.reason = Some(reason.clone());
                         // ASR 阶段失败的段在入队时已经落盘+写过历史, 这里只处理后处理失败
                         if !s.asr_failed {
-                            fail_record = Some((s.raw.clone(), s.ho.clone(), e));
+                            fail_record = Some((s.raw.clone(), final_text, llm_used, s.ho.clone(), reason));
                         }
                         c.version += 1;
                     }
                 }
             }
         }
-        if let Some((raw, ho, reason)) = fail_record {
-            let p = record_failed(&app, &raw, &ho, &reason);
+        if let Some((raw, final_text, llm_used, ho, reason)) = fail_record {
+            let p = record_failed(&app, &raw, &final_text, llm_used, &ho, &reason);
             log_debug(&format!("后处理失败已入历史 audio={:?}", p));
         }
         log_debug("队列状态变化");
@@ -146,7 +155,7 @@ pub fn enqueue(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline:
 pub fn enqueue_asr_failed(app: &tauri::AppHandle, reason: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
     let ho = ho.unwrap_or_default();
     // 落盘音频 + 写历史(delivered="failed") —— 保证"能重试"不是空话
-    let audio = record_failed(app, "", &ho, &reason);
+    let audio = record_failed(app, "", "", false, &ho, &reason);
     let mut seg_ho = ho.clone();
     seg_ho.audio_path = audio;
     let mut c = crate::core::lock();
@@ -166,10 +175,18 @@ pub fn enqueue_asr_failed(app: &tauri::AppHandle, reason: String, ho: Option<cra
     id
 }
 
-/// 失败留痕: 音频落盘 + 历史记录(delivered="failed")。返回落盘后的音频路径。
+/// 失败留痕(唯一的历史失败写入点): 音频落盘 + 历史记录(delivered="failed")。
+/// 返回落盘后的音频路径。final_text/llm_used 来自失败时已产出的纠正结果(不降级)。
 ///
 /// 规则 5 的落点: 无论失败发生在 ASR 阶段还是后处理阶段, 音频与原文都必须能再找到。
-fn record_failed(app: &tauri::AppHandle, raw: &str, ho: &crate::pipeline::SessionHandoff, reason: &str) -> Option<String> {
+fn record_failed(
+    app: &tauri::AppHandle,
+    raw: &str,
+    final_text: &str,
+    llm_used: bool,
+    ho: &crate::pipeline::SessionHandoff,
+    reason: &str,
+) -> Option<String> {
     use tauri::Manager;
     let mut audio = ho.audio_path.clone();
     if !ho.pcm.is_empty() {
@@ -184,8 +201,8 @@ fn record_failed(app: &tauri::AppHandle, raw: &str, ho: &crate::pipeline::Sessio
         ts: crate::pipeline::now_local_pub(),
         engine: ho.engine.clone(),
         raw: raw.to_string(),
-        final_text: raw.to_string(),
-        llm_used: false,
+        final_text: final_text.to_string(),
+        llm_used,
         delivered: "failed".into(),
         audio_path: audio.clone().unwrap_or_default(),
         warning: Some(reason.to_string()),

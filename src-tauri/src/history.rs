@@ -202,6 +202,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bump_second_unique_and_monotonic() {
+        // 常规: 秒 +1
+        assert_eq!(bump_second("2026-10-24 10:30:05"), "2026-10-24 10:30:06");
+        // 59 → 伪秒 :60(唯一且排序在后; 旧实现 %60 回退 00, 同秒第三条与第二条撞 ts, B45 复发)
+        assert_eq!(bump_second("2026-10-24 10:30:59"), "2026-10-24 10:30:60");
+        // 连续撞秒也保持唯一(真实时间戳永远不会是 60+)
+        assert_eq!(bump_second("2026-10-24 10:30:60"), "2026-10-24 10:30:61");
+    }
+
+    #[test]
+    fn config_atomic_write_roundtrip_and_no_tmp_leftover() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.json");
+        crate::settings::write_config_atomic(&p, "{\"a\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"a\":1}");
+        // 覆盖写不留 .tmp 残留
+        crate::settings::write_config_atomic(&p, "{\"a\":2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"a\":2}");
+        let leftovers: Vec<_> = std::fs::read_dir(d.path()).unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "tmp").unwrap_or(false))
+            .collect();
+        assert!(leftovers.is_empty(), "tmp 残留: {leftovers:?}");
+    }
+
+    #[test]
     fn wav_header_valid_pcm16_mono_16k() {
         // C40 回归: 曾因半字节拷贝把 audio_format 写成 0x0101(257) 智谱拒收
         let h = wav_header(1000);
@@ -278,11 +304,13 @@ mod fs_tests {
 
 /// "2026-09-12 21:42:09" → "2026-09-12 21:42:10"(仅秒+1, 测试友好)
 pub fn bump_second(ts: &str) -> String {
+    // 撞秒唯一化: 秒 +1。**不取模**——59 时产生 ":60" 伪秒: 字符串唯一且排序仍在后,
+    // 真实时间戳永远不会是 60(旧实现 (n+1)%60 让 59→00 回退, 同秒第三条会与第二条
+    // 生成相同 ts, B45 撞秒塌缩复发; 而跨分进位需要完整日历, 不值得)。
     let mut t = ts.to_string();
     if let Some(sec_pos) = t.rfind(':') {
-        if let Ok(mut n) = t[sec_pos + 1..].parse::<u32>() {
-            n = (n + 1) % 60;
-            t.replace_range(sec_pos + 1.., &format!("{n:02}"));
+        if let Ok(n) = t[sec_pos + 1..].parse::<u32>() {
+            t.replace_range(sec_pos + 1.., &format!("{:02}", n + 1));
         }
     }
     t
