@@ -101,21 +101,18 @@ fn update(f: impl FnOnce(&mut Snapshot)) {
     g.version += 1;
 }
 
-fn is_recording(g: &Snapshot) -> bool {
-    g.status == Phase::Recording.wire()
-}
-
 /// 隐藏请求是否应当被忽略(显示不足 `MIN_SHOW_MS`)
 fn should_skip_hide(now: u64, shown: u64) -> bool {
     shown > 0 && now.saturating_sub(shown) < MIN_SHOW_MS
 }
 
 // ───────────────────────── 状态迁移(纯函数, 便于单测) ─────────────────────────
+// 注: "是否在录"这个**事实**在 core(第 2a 步搬入); 这里的纯函数只管**展示**,
+// 保护规则(录音中不被收尾事件打扰)以 recording 入参接收事实, 不再读自己的 status 推断。
 
-/// 新的一条录音开始: 清掉上一条的残留内容, 进入 Recording
+/// 新的一条录音开始: 展示进入 Recording(上一条的流数据清空发生在 core 迁移里)
 fn apply_recording_started(g: &mut Snapshot) {
     g.status = Phase::Recording.wire_str();
-    g.partial.clear();
     g.finished = None;
     g.err = None;
     g.msg.clear();
@@ -129,24 +126,24 @@ fn apply_recording_ended(g: &mut Snapshot) {
 
 /// 交付完成: 报"交付完了"这个事实。录音中不采纳——
 /// 用户可能已经在录下一段, 那段的状态不能被上一条的收尾覆盖(issue #2)。
-fn apply_delivered(g: &mut Snapshot, payload: serde_json::Value) {
-    if !is_recording(g) {
+fn apply_delivered(g: &mut Snapshot, recording: bool, payload: serde_json::Value) {
+    if !recording {
         g.status.clear();
     }
     g.finished = Some(payload);
 }
 
 /// 进入 LLM 润色阶段: 同样不许覆盖"录音中"
-fn apply_polishing(g: &mut Snapshot) {
-    if !is_recording(g) {
+fn apply_polishing(g: &mut Snapshot, recording: bool) {
+    if !recording {
         g.status = Phase::Polishing.wire_str();
     }
 }
 
 /// 错误: 录音中不打扰(只落日志, 由调用方记), 不写进快照; 非录音时错误意味着这一段已结束,
 /// 阶段必须一起收掉——否则"转写中"会常驻, 浮窗永不收起(issue #9 同类问题)。
-fn apply_error(g: &mut Snapshot, reason: &str) {
-    if !is_recording(g) {
+fn apply_error(g: &mut Snapshot, recording: bool, reason: &str) {
+    if !recording {
         g.status.clear();
         g.err = Some(reason.to_string());
     }
@@ -155,7 +152,9 @@ fn apply_error(g: &mut Snapshot, reason: &str) {
 // ───────────────────────── 对外唯一接口 ─────────────────────────
 
 /// 一条新录音开始了(按下热键)。定位并显示浮窗, 清掉上一条的内容。
+/// 事实(在录/电平/partial 归零)迁移进 core; 这里只编排展示与窗口。
 pub fn recording_started(app: &tauri::AppHandle, display: &crate::overlay::DisplayTarget) {
+    crate::core::session_started();
     update(apply_recording_started);
     // 与截图共用同一个目标显示器（capture_target::resolve 的快照）
     crate::overlay::position_hud(app, Some(display));
@@ -166,26 +165,15 @@ pub fn recording_started(app: &tauri::AppHandle, display: &crate::overlay::Displ
 /// 这一条录完了(松手)。只表达事实, 显示成什么样由本模块决定。
 pub fn recording_ended(app: &tauri::AppHandle) {
     let _ = app;
+    crate::core::session_ended();
     update(apply_recording_ended);
-}
-
-/// 实时回显(逐字)
-pub fn partial(app: &tauri::AppHandle, text: &str) {
-    let _ = app;
-    let t = text.to_string();
-    update(|g| g.partial = t);
-}
-
-/// 音量(RMS 0-1000 定点)
-pub fn level(app: &tauri::AppHandle, lv: u32) {
-    let _ = app;
-    update(|g| g.level = lv);
 }
 
 /// 进入 AI 润色阶段
 pub fn polishing(app: &tauri::AppHandle) {
     let _ = app;
-    update(apply_polishing);
+    let r = crate::core::session_recording();
+    update(|g| apply_polishing(g, r));
 }
 
 /// 一次性提示(静音提醒/太短丢弃/已达上限/权限缺失…)。确保窗口可见(但不重新定位)。
@@ -198,7 +186,8 @@ pub fn notify(app: &tauri::AppHandle, msg: &str) {
 /// 交付完成(带载荷: raw/final/llm_used/delivered/warning)
 pub fn delivered(app: &tauri::AppHandle, payload: serde_json::Value) {
     let _ = app;
-    update(|g| apply_delivered(g, payload));
+    let r = crate::core::session_recording();
+    update(|g| apply_delivered(g, r, payload));
 }
 
 /// 空转写的状态迁移: 结束阶段 + 一次性提示 + 清掉可能残留的错误
@@ -222,8 +211,9 @@ pub fn no_speech(app: &tauri::AppHandle, reason: &str) {
 pub fn error(app: &tauri::AppHandle, reason: &str) {
     let _ = app;
     crate::log::elog(&format!("[hud] error: {reason}"));
-    let r = reason.to_string();
-    update(|g| apply_error(g, &r));
+    let r = crate::core::session_recording();
+    let rs = reason.to_string();
+    update(|g| apply_error(g, r, &rs));
 }
 
 /// 前端请求隐藏(唯一隐藏入口)。带最短显示守卫:
@@ -257,19 +247,22 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
 }
 
 /// 前端唯一读接口: 取一份快照。一次性字段(msg/err/finished)取后清。
-/// 队列派生的三个字段在这里现算(分段队列的规则见 `segment_queue.rs`):
+/// 会话流(电平/partial)与队列数据一律取自 core(唯一事实源), 快照只是投影:
 ///   左栏 = 录音中显示实时文字; 没在录音时 = 正在转写的那段
 ///   右栏 = 队列里其余段(录音时, 正在转写的那段退到右栏)
-/// 队列数据一律取自 core(唯一事实源); 队列有迁移时推进 version 让前端重绘。
 pub fn poll() -> Snapshot {
     let (cur, queue) = crate::segment_queue::views();
-    let core_ver = crate::core::version();
+    let (core_ver, recording, level, partial) = {
+        let c = crate::core::lock();
+        (c.version, c.session.recording, c.session.level, c.session.partial.clone())
+    };
     let mut g = HUD.lock().unwrap();
-    let recording = is_recording(&g);
+    g.level = level;
+    g.partial.clone_from(&partial);
     g.seg_current = if recording {
         Some(crate::segment_queue::SegView {
             state: "recording".into(),
-            text: g.partial.clone(),
+            text: partial,
         })
     } else {
         cur.clone()
@@ -307,16 +300,16 @@ mod tests {
     }
 
     // 新录音开始时, 上一条的残留内容必须清干净(否则会闪上一条)
+    // (流数据 partial 的清空发生在 core::session_started, 这里只管展示残留)
     #[test]
     fn recording_started_clears_previous() {
         let mut g = snap();
-        g.partial = "上一段".into();
         g.finished = Some(serde_json::json!({"final": "x"}));
         g.err = Some("旧错误".into());
         g.msg = "旧提示".into();
         apply_recording_started(&mut g);
         assert_eq!(g.status, "recording");
-        assert!(g.partial.is_empty() && g.finished.is_none() && g.err.is_none() && g.msg.is_empty());
+        assert!(g.finished.is_none() && g.err.is_none() && g.msg.is_empty());
     }
 
     // 松手进转写: 不能清 partial(结果还没到, 清空就是"回显瞬间消失")
@@ -335,12 +328,20 @@ mod tests {
     fn delivered_and_polishing_do_not_disturb_recording() {
         let mut g = snap();
         apply_recording_started(&mut g);
-        g.partial = "新一段的话".into();
-        apply_polishing(&mut g);
-        apply_delivered(&mut g, serde_json::json!({"final": "上一条"}));
+        apply_polishing(&mut g, true);
+        apply_delivered(&mut g, true, serde_json::json!({"final": "上一条"}));
         assert_eq!(g.status, "recording");
-        assert_eq!(g.partial, "新一段的话");
         assert!(g.finished.is_some());
+    }
+
+    // 非录音时交付/润色正常迁移阶段
+    #[test]
+    fn delivered_and_polishing_apply_when_not_recording() {
+        let mut g = snap();
+        apply_polishing(&mut g, false);
+        assert_eq!(g.status, "busy");
+        apply_delivered(&mut g, false, serde_json::json!({"final": "x"}));
+        assert_eq!(g.status, "");
     }
 
     // 录音中出错: 不写进快照(不打扰); 松手后(转写态)才提示
@@ -348,10 +349,10 @@ mod tests {
     fn error_is_dropped_while_recording() {
         let mut g = snap();
         apply_recording_started(&mut g);
-        apply_error(&mut g, "连接失败");
+        apply_error(&mut g, true, "连接失败");
         assert!(g.err.is_none());
         apply_recording_ended(&mut g);
-        apply_error(&mut g, "连接失败");
+        apply_error(&mut g, false, "连接失败");
         assert_eq!(g.err.as_deref(), Some("连接失败"));
     }
 
@@ -381,9 +382,37 @@ mod tests {
         let mut g = snap();
         apply_recording_started(&mut g);
         apply_recording_ended(&mut g);
-        apply_error(&mut g, "引擎会话异常中断");
+        apply_error(&mut g, false, "引擎会话异常中断");
         assert!(g.status.is_empty());
         assert_eq!(g.err.as_deref(), Some("引擎会话异常中断"));
+    }
+
+    // 会话流来自 core: poll() 把 core 的电平/partial 投进快照(2a 的投影回归)
+    #[test]
+    fn poll_projects_session_stream_from_core() {
+        let v0 = {
+            let mut c = crate::core::lock();
+            c.session = crate::core::SessionState {
+                recording: true,
+                level: 321,
+                partial: "投影回归".into(),
+            };
+            c.version += 1;
+            c.version
+        };
+        let snap = poll();
+        assert!(snap.level == 321);
+        assert!(snap.partial.contains("投影回归"));
+        // 录音中: 左栏 = recording + 实时文字(来自 core, 不是 HUD 自己的存储)
+        assert_eq!(snap.seg_current.as_ref().map(|s| s.state.as_str()), Some("recording"));
+        assert!(snap.seg_current.as_ref().map(|s| s.text.contains("投影回归")).unwrap_or(false));
+        // 复位(不留脏状态给其他测试)
+        {
+            let mut c = crate::core::lock();
+            c.session = crate::core::SessionState { recording: false, level: 0, partial: String::new() };
+            c.version += 1;
+        }
+        let _ = v0;
     }
 
     // 队列迁移发生在 core(不在 HUD 的 update() 路径上), poll() 必须通过 core.version

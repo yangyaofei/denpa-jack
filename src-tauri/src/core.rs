@@ -52,17 +52,33 @@ pub struct QueueState {
     pub next_id: u64,
 }
 
+/// 会话域状态(第 2a 步搬入): "现在是否在录、录的内容"——全 App 最核心的事实,
+/// 从此只有 core 一处(HUD 只是它的投影)。
+/// 注: 阶段展示语义(transcribing/busy 等展示态)仍归 hud.rs 的展示状态机,
+/// 那是"事实的投影规则", 不是事实本身。
+pub struct SessionState {
+    /// 是否正在录音(按下→松手之间)
+    pub recording: bool,
+    /// 音量(RMS 0-1000 定点, 录音中 120ms 刷新)
+    pub level: u32,
+    /// 实时回显(流式引擎的 partial 文本)
+    pub partial: String,
+}
+
 /// 核心状态: 全部可投影的数据(投影函数只读这里)
 pub struct CoreState {
     /// 全局版本号: 任一状态迁移 +1, 轮询方据此判断"有没有新东西"
     pub version: u64,
     /// 段队列域(第 1 步搬入)
     pub queue: QueueState,
+    /// 会话域(第 2a 步搬入)
+    pub session: SessionState,
 }
 
 static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     version: 0,
     queue: QueueState { items: VecDeque::new(), next_id: 1 },
+    session: SessionState { recording: false, level: 0, partial: String::new() },
 });
 
 /// 取 core 锁(中毒时取出数据继续——见模块头"锁中毒策略")
@@ -73,6 +89,44 @@ pub fn lock() -> MutexGuard<'static, CoreState> {
 /// 当前全局版本号(读一次, 微秒级)
 pub fn version() -> u64 {
     lock().version
+}
+
+// ── 会话域写接口(执行者迁移事实的唯一入口) ────────────────────────
+
+/// 一条新录音开始: 事实置位 + 清上一条的流数据
+pub fn session_started() {
+    let mut c = lock();
+    c.session.recording = true;
+    c.session.level = 0;
+    c.session.partial.clear();
+    c.version += 1;
+}
+
+/// 这一条录完了(松手): 事实复位。partial 不清——结果还没到,
+/// 清空回显就是用户看到的"瞬间消失再出现"(hud.rs 同名规则的事实版)。
+pub fn session_ended() {
+    let mut c = lock();
+    c.session.recording = false;
+    c.version += 1;
+}
+
+/// 音量(RMS 0-1000 定点)
+pub fn session_level(lv: u32) {
+    let mut c = lock();
+    c.session.level = lv;
+    c.version += 1;
+}
+
+/// 实时回显(逐字, 全量替换语义)
+pub fn session_partial(text: &str) {
+    let mut c = lock();
+    c.session.partial = text.to_string();
+    c.version += 1;
+}
+
+/// 当前是否在录(展示层判定用的事实源)
+pub fn session_recording() -> bool {
+    lock().session.recording
 }
 
 #[cfg(test)]
@@ -89,5 +143,36 @@ mod tests {
         });
         let recovered = m.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(*recovered, 7);
+    }
+
+    /// 会话事实迁移: started/ended 置位复位, 流数据生命周期正确
+    #[test]
+    fn session_lifecycle_transitions() {
+        // 复位到"未在录"的已知初态(测试独占 core, 其他并行测试不碰 session 域)
+        {
+            let mut c = lock();
+            c.session = SessionState { recording: false, level: 0, partial: String::new() };
+        }
+        assert!(!session_recording());
+        session_started();
+        assert!(session_recording());
+        session_level(123);
+        session_partial("正在说的话");
+        session_ended();
+        // 松手后: 事实复位, 但 partial 保留(回显不闪断)
+        assert!(!session_recording());
+        {
+            let c = lock();
+            assert_eq!(c.session.level, 123);
+            assert_eq!(c.session.partial, "正在说的话");
+        }
+        // 下一段开始: 流数据必须被清干净(不闪上一条)
+        session_started();
+        {
+            let c = lock();
+            assert_eq!(c.session.level, 0);
+            assert!(c.session.partial.is_empty());
+        }
+        session_ended();
     }
 }

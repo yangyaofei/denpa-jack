@@ -199,7 +199,7 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
                 return;
             }
             let lv = level.load(std::sync::atomic::Ordering::SeqCst);
-            crate::hud::level(&app, lv);
+            crate::core::session_level(lv);
             // 静音阈值: RMS 定点 < 2。实测该阈值必须贴着 0——
             // 用户的 USB 麦克风(DJI Wireless Mic)电平很低: 正常说话时 peak 只有 0.06,
             // 阈值 10 会在真的说话时也报"还没听到声音"(误报, 实测日志)。
