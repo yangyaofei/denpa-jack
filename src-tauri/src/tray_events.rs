@@ -3,22 +3,43 @@ use tauri::{Emitter, Manager};
 
 use crate::commands::{open_config_file, open_data_dir};
 use crate::settings::{self, Config};
-use crate::{AppState, TRAY_TX};
+use crate::TRAY_TX;
 use crate::tray;
 
 pub static TRAY: std::sync::Mutex<Option<tray::MacTray>> = std::sync::Mutex::new(None);
+
+/// 会话状态行文案(core 事实的投影; 图标不参与状态表达——2026-09-18 用户裁决)
+fn status_text() -> String {
+    if crate::core::session_recording() {
+        "状态: 录音中…".to_string()
+    } else {
+        "状态: 待命".to_string()
+    }
+}
+
+/// 就地刷新菜单状态行(不重建托盘)。挂在会话生灭的执行点:
+/// ctrl_start 尾部 / ctrl_stop / ctrl_abort——从此状态行跟随事实,
+/// 不再恒显启动时刻的值(审核 a13/d3 的修复)。
+pub fn refresh_status(app: &tauri::AppHandle) {
+    let text = status_text();
+    let r = app.run_on_main_thread(move || {
+        if let Some(t) = TRAY.lock().unwrap().as_ref() {
+            if let Some(mtm) = objc2::MainThreadMarker::new() {
+                t.set_status_text(mtm, &text);
+            }
+        }
+    });
+    if let Err(e) = r {
+        crate::log::elog(&format!("[tray] 状态行刷新调度失败: {e}"));
+    }
+}
 
 pub fn spawn_tray(app: &tauri::AppHandle) -> Result<(), String> {
     // 调用点均在主线程(setup / run_on_main_thread)
     let mtm = objc2::MainThreadMarker::new().ok_or("spawn_tray 不在主线程")?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let cfg: Config = settings::get_config(app.clone()).unwrap_or_default();
-    let busy = app
-        .state::<std::sync::Mutex<AppState>>()
-        .lock()
-        .unwrap()
-        .session
-        .is_some();
+    let busy = crate::core::session_recording();
     let t = tray::MacTray::new(
         mtm,
         tx.clone(),
@@ -74,8 +95,8 @@ pub fn handle_tray_event(app: &tauri::AppHandle, ev: &str) {
         }
         "toggle_record" => {
             // 统一入口: 托盘也发协调器信号(与快捷键同源), 不直调 ctrl_*——单一真源
-            let st = app.state::<std::sync::Mutex<AppState>>();
-            let busy = st.lock().unwrap().session.is_some();
+            // busy 读 core 事实(转写中 session 为空, 点"录音"=按队列规则开新段, 行为兼容)
+            let busy = crate::core::session_recording();
             crate::send_ctrl(!busy);
         }
         "open_settings" => {

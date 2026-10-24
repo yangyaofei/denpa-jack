@@ -228,6 +228,12 @@ fn run_timelimit(app: tauri::AppHandle) {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(3);
+    // 先等内置网关就绪(冷启动模型加载 ~40s): ctrl_start 的 resolve 不带等待,
+    // 网关未就绪时第一次按下会 Start 失败, 干扰状态机断言(非被测行为)
+    let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    if let Err(e) = resolve_asr_wait_gateway(&app, &cfg) {
+        log::log(&app, &format!("AUTOTEST-TL: resolve 未就绪({e}), 继续测试"));
+    }
     // 轮询等待事实(固定 sleep 会假阴性: ctrl_start 前置链(resolve/开流)冷启动可达数秒,
     // "按下后在录"的出现时刻不固定)
     let wait_fact = |want: bool, timeout_ms: u64| -> bool {

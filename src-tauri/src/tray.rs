@@ -49,6 +49,8 @@ pub struct MacTray {
     /// 持有 TrayHandler 防止其被释放: 菜单项的 target 是弱引用, 释放后菜单动作失效
     #[allow(dead_code)]
     handler: Retained<TrayHandler>,
+    /// 菜单第一行"状态: …"(唯一随会话事实刷新的行; 图标不参与状态表达——2026-09-18 用户裁决)
+    status_item: Retained<NSMenuItem>,
 }
 // SAFETY: NSStatusItem/TrayHandler 均为主线程对象; 所有创建/销毁都经 run_on_main_thread 保证在主线程
 unsafe impl Send for MacTray {}
@@ -68,7 +70,7 @@ fn add_item(
     tag: isize,
     enabled: bool,
     checked: bool,
-) {
+) -> Retained<NSMenuItem> {
     let mtm = MainThreadMarker::new().expect("add_item 需在主线程");
     let item = unsafe { NSMenuItem::new(mtm) };
     unsafe {
@@ -82,6 +84,7 @@ fn add_item(
         item.setTag(tag);
         menu.addItem(&item);
     }
+    item
 }
 
 impl MacTray {
@@ -118,7 +121,7 @@ impl MacTray {
         } else {
             format!("状态: 待命 (按住 {hotkey} 说话)")
         };
-        add_item(&menu, &handler, &status_text, 0, false, false);
+        let status_item = add_item(&menu, &handler, &status_text, 0, false, false);
         unsafe {
             let sep = NSMenuItem::separatorItem(mtm);
             menu.addItem(&sep);
@@ -141,6 +144,14 @@ impl MacTray {
         unsafe {
             item.setMenu(Some(&menu));
         }
-        Ok(Self { item, handler })
+        Ok(Self { item, handler, status_item })
+    }
+
+    /// 就地更新"状态: …"行的文案(不重建托盘)。
+    /// 必须在主线程调用(与 new 相同的线程约束); 菜单下次展开时按新 title 绘制。
+    pub fn set_status_text(&self, _mtm: MainThreadMarker, text: &str) {
+        unsafe {
+            self.status_item.setTitle(&*NSString::from_str(text));
+        }
     }
 }

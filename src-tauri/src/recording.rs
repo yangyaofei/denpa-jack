@@ -417,6 +417,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         spawn_max_timer(app.clone(), secs, cancel);
     }
     log::log(&app, &format!("录音开始 engine={} mic={:?}", profile.provider, mic_name));
+    crate::tray_events::refresh_status(&app);
     if cfg.audio_feedback {
         crate::audio_feedback::play_on_main(&app, crate::audio_feedback::Cue::Start);
     }
@@ -476,6 +477,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 松手 = 告诉 HUD 一个事实:"这一条录完了"。阶段/文案/延时全部由 HUD 自己决定;
     // 这里不再直接改快照, 也不再重复 show 窗口(重复 show 就是用户看到的"瞬间消失再出现")。
     crate::hud::recording_ended(&app);
+    crate::tray_events::refresh_status(&app);
     Ok(())
 }
 
@@ -504,6 +506,7 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     }
     session_cleanup(app, None);
     crate::hud::hide(app);
+    crate::tray_events::refresh_status(app);
     log::log(app, "录音取消(esc)");
     Ok(())
 }

@@ -203,11 +203,19 @@ function describeCombo(s: string): string {
     let lastHistVer = -1;
     let lastCfgVer = -1;
     let lastMicVer = -1;
+    let lastPollRecording: { v: boolean | null } = { v: null }; // 后端录音值, 仅后端值变化才同步到按钮
     let tick = 0;
     setInterval(async () => {
       try {
         tick++;
         const v = await invoke<any>("poll_versions");
+        // 录音状态同步: 热键/托盘录音 → 主窗试音按钮跟随(core 事实投影)。
+        // 只在后端值自身变化时写入——试音点击的乐观置位不被 800ms 轮询覆盖
+        // (ctrl_start 前置链冷启动慢, core 置位前乐观值是唯一正确显示)
+        if (typeof v.recording === "boolean" && v.recording !== lastPollRecording.v) {
+          lastPollRecording.v = v.recording;
+          this.recording = v.recording;
+        }
         if (tick % 10 === 1) invoke("ui_log", { msg: `poll alive histVer=${v.history}` }).catch(() => {});
         if (v.history !== lastHistVer) {
           const from = lastHistVer;

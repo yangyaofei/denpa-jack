@@ -528,7 +528,13 @@ pub fn queue_dismiss() -> usize {
 }
 
 #[derive(serde::Serialize)]
-pub struct Versions { pub history: u64, pub config: u64, pub mics: u64 }
+pub struct Versions {
+    pub history: u64,
+    pub config: u64,
+    pub mics: u64,
+    /// 是否在录(core 事实投影)——主窗试音按钮跟随热键/托盘录音的同步源
+    pub recording: bool,
+}
 
 #[tauri::command]
 pub fn poll_versions() -> Versions {
@@ -536,6 +542,7 @@ pub fn poll_versions() -> Versions {
         history: crate::history::history_version(),
         config: crate::settings::config_version(),
         mics: crate::mic_watch::mic_version(),
+        recording: crate::core::session_recording(),
     }
 }
 
