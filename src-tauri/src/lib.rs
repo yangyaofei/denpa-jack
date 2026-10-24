@@ -67,6 +67,12 @@ pub fn send_cancel() {
         .map(|tx| tx.send(transcription_coordinator::CoordCmd::Cancel));
 }
 
+/// B5 超长到期信号(与 send_cancel 同形: 只发信号, 决策在协调器)
+pub fn send_autostop() {
+    let _ = CTRL_TX.lock().unwrap().as_ref()
+        .map(|tx| tx.send(transcription_coordinator::CoordCmd::AutoStopDue));
+}
+
 /// C43: asr-final 类事件双发(main 历史页 + hud 浮窗), 替代全局广播
 /// C43b: Tauri 2 事件通道(Rust→webview)在本机打包版实测不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
 /// HUD 的唯一读通道是 `hud::poll()`(前端 150ms 轮询, invoke 通道已证可靠)。

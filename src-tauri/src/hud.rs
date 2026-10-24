@@ -390,6 +390,7 @@ mod tests {
     // 会话流来自 core: poll() 把 core 的电平/partial 投进快照(2a 的投影回归)
     #[test]
     fn poll_projects_session_stream_from_core() {
+        let _guard = crate::core::TEST_SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let v0 = {
             let mut c = crate::core::lock();
             c.session = crate::core::SessionState {

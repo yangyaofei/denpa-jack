@@ -86,6 +86,11 @@ pub fn lock() -> MutexGuard<'static, CoreState> {
     CORE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// 跨模块碰 core.session 的测试互斥锁(测试并行时 session 是单例字段,
+/// 生命周期测试与投影测试同时动它会闪断)
+#[cfg(test)]
+pub static TEST_SESSION_LOCK: Mutex<()> = Mutex::new(());
+
 /// 当前全局版本号(读一次, 微秒级)
 pub fn version() -> u64 {
     lock().version
@@ -148,7 +153,8 @@ mod tests {
     /// 会话事实迁移: started/ended 置位复位, 流数据生命周期正确
     #[test]
     fn session_lifecycle_transitions() {
-        // 复位到"未在录"的已知初态(测试独占 core, 其他并行测试不碰 session 域)
+        let _guard = TEST_SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 复位到"未在录"的已知初态(锁内独占 session 域)
         {
             let mut c = lock();
             c.session = SessionState { recording: false, level: 0, partial: String::new() };

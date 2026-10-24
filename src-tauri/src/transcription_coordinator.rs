@@ -12,6 +12,10 @@ pub enum CoordCmd {
     Cancel,
     /// Start 效果的真实结果(失败时协调器复位, 乐观转移对账)
     StartResult { started: bool },
+    /// B5 超长定时器到期: 请求自动截断。与"松开"等价的内部信号源——
+    /// 定时器不直调 ctrl_stop(那会绕过本状态机, 记忆与现实分叉:
+    /// 超长截断后的下一次按住会被 press-while-recording 吞掉, 哑火一次)。
+    AutoStopDue,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,6 +78,15 @@ pub fn spawn(
                         recording = false;
                     }
                     None
+                }
+                CoordCmd::AutoStopDue => {
+                    // 与"松开"同语义: 只在录音中生效, 决策统一在本状态机
+                    if recording {
+                        recording = false;
+                        Some(Effect::Stop)
+                    } else {
+                        None
+                    }
                 }
             };
             if let Some(e) = effect {
@@ -191,6 +204,59 @@ mod tests {
     #[test]
     fn cancel_when_idle_noop() {
         assert_eq!(drive(vec![CoordCmd::Cancel]), vec![]);
+    }
+
+    // B5 超长到期: 录音中 → 等价松开(Stop); 空闲 → 忽略
+    #[test]
+    fn autostop_due_stops_recording() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::AutoStopDue,
+            ]),
+            vec![Effect::Start, Effect::Stop]
+        );
+        assert_eq!(drive(vec![CoordCmd::AutoStopDue]), vec![]);
+    }
+
+    // 到期与松手竞争: 用户先松手, 迟到的到期消息不得产生第二次 Stop(哑火/重复结算防线)
+    #[test]
+    fn late_autostop_after_release_is_noop() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
+                CoordCmd::AutoStopDue,
+            ]),
+            vec![Effect::Start, Effect::Stop]
+        );
+    }
+
+    // 超长截断后紧接着的新按下必须能开新录音(哑火 bug 的正反断言)
+    #[test]
+    fn press_after_autostop_starts_new_session() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::AutoStopDue,
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
+            ]),
+            vec![Effect::Start, Effect::Stop, Effect::Start, Effect::Stop]
+        );
+    }
+
+    // Start 失败对账仍在: AutoStopDue 只对真实"记忆在录"生效
+    #[test]
+    fn autostop_after_failed_start_is_noop() {
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::StartResult { started: false },
+                CoordCmd::AutoStopDue,
+            ]),
+            vec![Effect::Start]
+        );
     }
     #[test]
     fn full_cycle_restart() {

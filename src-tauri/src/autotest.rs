@@ -20,6 +20,11 @@ pub fn maybe_spawn(app: &AppHandle) {
         });
         return;
     }
+    if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("timelimit") {
+        let app2 = app.clone();
+        std::thread::spawn(move || run_timelimit(app2));
+        return;
+    }
     if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("ui") {
         let app2 = app.clone();
         std::thread::spawn(move || run_ui_chain(app2));
@@ -210,6 +215,62 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
 /// 注入按键信号到协调器(与全局快捷键 handler 完全同通道, 证明按键之后的一切)
 fn send_key(pressed: bool) {
     crate::send_ctrl(pressed);
+}
+
+/// 超长截断闭环 e2e: 按下(真麦) → 等自动截断 → 断言可立即再录 → Esc 中止。
+/// 验证 B5 消息化(spawn_max_timer 只发 AutoStopDue 信号)之后:
+///   截断决策走协调器, 截断后的下一次按下不被吞(旧直调实现的哑火 bug 正反断言)。
+/// 断言全部读 core 事实(session_recording), 不读展示层。
+/// 用法: VOICEMAC_AUTOTEST=timelimit VOICEMAC_AUTOTEST_MAX_SECS=3 cargo run
+fn run_timelimit(app: tauri::AppHandle) {
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let max_secs: u64 = std::env::var("VOICEMAC_AUTOTEST_MAX_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    // 轮询等待事实(固定 sleep 会假阴性: ctrl_start 前置链(resolve/开流)冷启动可达数秒,
+    // "按下后在录"的出现时刻不固定)
+    let wait_fact = |want: bool, timeout_ms: u64| -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        while std::time::Instant::now() < deadline {
+            if crate::core::session_recording() == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    };
+    log::log(&app, "AUTOTEST-TL: 模拟按下(走完整 ctrl_start, 真麦)");
+    send_key(true);
+    let p1 = wait_fact(true, 6000);
+    log::log(&app, &format!("AUTOTEST-TL: 断言1 按下后在录 = {p1}"));
+
+    log::log(&app, &format!("AUTOTEST-TL: 等待超长自动截断(上限 {max_secs}s)…"));
+    let p2 = wait_fact(false, (max_secs + 8) * 1000);
+    log::log(&app, &format!("AUTOTEST-TL: 断言2 截断后不在录 = {p2}"));
+
+    // 截断后立即再按——哑火 bug 的核心断言(旧实现此处被协调器吞掉)
+    log::log(&app, "AUTOTEST-TL: 截断后立即模拟第二次按下");
+    send_key(true);
+    let p3 = wait_fact(true, 6000);
+    log::log(&app, &format!("AUTOTEST-TL: 断言3 第二次按下能开录(哑火修复) = {p3}"));
+
+    // Esc 中止第二段(不产生交付)
+    crate::send_cancel();
+    let p4 = wait_fact(false, 5000);
+    log::log(&app, &format!("AUTOTEST-TL: 断言4 Esc 后不在录 = {p4}"));
+
+    // 第一段已被截断入队转写, 等它跑完(交付与否如实记录, 不断言——环境音内容不可控)
+    for _t in 0..20u64 {
+        if !crate::segment_queue::busy() && !crate::segment_queue::has_failed() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
+    log::log(&app, &format!("AUTOTEST-TL: 队列收尾 busy={} failed={}", crate::segment_queue::busy(), crate::segment_queue::has_failed()));
+    let all = p1 && p2 && p3 && p4;
+    log::log(&app, &format!("AUTOTEST-TL: {} ({}/{})", if all { "PASS" } else { "FAIL" }, [p1, p2, p3, p4].iter().filter(|x| **x).count(), 4));
+    app.exit(if all { 0 } else { 1 });
 }
 
 /// 录音 e2e: 真实麦克风 2.5s → 转写 → 交付 → 退出

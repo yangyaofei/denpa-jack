@@ -2,7 +2,6 @@
 // 全部会话状态(采集/命令通道/起点/焦点快照/交接箱)收进 RecordingSession,
 // 会话结束=结构体 drop=取消令牌置位=附属物(定时器/音量循环/桥线程)随之失效。
 // 无会话级全局 static; stop/abort 共用同一清理路径, 不存在"错误分支跳过清理"。
-use tauri::Manager;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc as ttx;
@@ -218,21 +217,19 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
     });
 }
 
-/// B5 超长截断: 持会话取消令牌——会话结束(停止/中止)即失效, 定时器醒来后不会操作已结束的会话
+/// B5 超长截断: 持会话取消令牌——会话结束(停止/中止)即失效, 定时器醒来后不会操作已结束的会话。
+/// 到期后**只发信号**(send_autostop), 决策与执行统一走协调器→效果线程——
+/// 不再直调 ctrl_stop: 直调会绕过协调器, 其 recording 记忆与现实分叉,
+/// 超长截断后的下一次按住会被吞掉(哑火一次), 见协调器 AutoStopDue 注释。
 fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atomic::AtomicBool>) {
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(secs.max(10) as u64));
+        std::thread::sleep(std::time::Duration::from_secs(secs as u64));
         if cancel.load(std::sync::atomic::Ordering::SeqCst) {
             return; // 会话已结束, 本定时器作废
         }
-        let st = app.state::<std::sync::Mutex<AppState>>();
-        let s = st.lock().unwrap();
-        if s.session.is_some() {
-            log::log(&app, "B5: 录音超长, 自动截断");
-            drop(s);
-            let _ = ctrl_stop(app.clone(), &st.inner());
-            crate::hud::notify(&app, "⚠️ 录音已达上限, 自动截断");
-        }
+        log::log(&app, "B5: 录音超长, 发自动截断信号(走协调器)");
+        crate::send_autostop();
+        crate::hud::notify(&app, "⚠️ 录音已达上限, 自动截断");
     });
 }
 
@@ -408,8 +405,16 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     // 按下即显示浮窗（截图在后台进行，不参与显示顺序）
     show_recording_ui(&app, &target.display);
     spawn_level_loop(app.clone(), cancel.clone(), level);
-    if cfg.max_recording_seconds > 0 {
-        spawn_max_timer(app.clone(), cfg.max_recording_seconds, cancel);
+    // 自测钩子: VOICEMAC_AUTOTEST_MAX_SECS 覆盖超长上限(不改用户配置),
+    // 供 timelimit 模式验证"自动截断→可立即再录"的状态机闭环
+    let hook = std::env::var("VOICEMAC_AUTOTEST_MAX_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok());
+    let max_secs = hook.unwrap_or(cfg.max_recording_seconds);
+    if max_secs > 0 {
+        // 生产值保留下限防御(防手滑配 1s 截断); 测试钩子显式注入则忠实执行
+        let secs = if hook.is_some() { max_secs } else { max_secs.max(10) };
+        spawn_max_timer(app.clone(), secs, cancel);
     }
     log::log(&app, &format!("录音开始 engine={} mic={:?}", profile.provider, mic_name));
     if cfg.audio_feedback {
@@ -479,6 +484,9 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
         let mut st = state.lock().unwrap();
         st.session.take()
     };
+    // 中止=会话终结: 事实必须复位(core 化后 abort 与 stop 同样有义务清 recording,
+    // 否则 Esc 后"在录"残留为真, 投影层(浮窗/托盘)全部显示错——timelimit e2e 断言4 抓获)
+    crate::core::session_ended();
     // 转写中 esc: 标记本代被取消——若 Result 已在途, 交付层据此跳过粘贴
     if let Some(s) = sess.as_ref() {
         pipeline::CANCELLED_GEN.store(s.gen, std::sync::atomic::Ordering::SeqCst);
