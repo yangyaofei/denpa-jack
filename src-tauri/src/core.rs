@@ -65,6 +65,14 @@ pub struct SessionState {
     pub partial: String,
 }
 
+/// 控制域: 轮询版本计数(第 3 步收口)——"数据变了"的信号统一住 core,
+/// poll_versions 从 core 一次读齐。
+pub struct CtrlState {
+    pub config_version: u64,
+    pub history_version: u64,
+    pub mic_list_version: u64,
+}
+
 /// 核心状态: 全部可投影的数据(投影函数只读这里)
 pub struct CoreState {
     /// 全局版本号: 任一状态迁移 +1, 轮询方据此判断"有没有新东西"
@@ -73,12 +81,15 @@ pub struct CoreState {
     pub queue: QueueState,
     /// 会话域(第 2a 步搬入)
     pub session: SessionState,
+    /// 控制域: 版本计数(第 3 步收口)
+    pub ctrl: CtrlState,
 }
 
 static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     version: 0,
     queue: QueueState { items: VecDeque::new(), next_id: 1 },
     session: SessionState { recording: false, level: 0, partial: String::new() },
+    ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
 });
 
 /// 取 core 锁(中毒时取出数据继续——见模块头"锁中毒策略")
@@ -132,6 +143,39 @@ pub fn session_partial(text: &str) {
 /// 当前是否在录(展示层判定用的事实源)
 pub fn session_recording() -> bool {
     lock().session.recording
+}
+
+// ── 版本计数(第 3 步收口: settings/history/mic_watch 的写路径调 bump, 读走各自转发) ──
+
+pub fn config_version() -> u64 {
+    lock().ctrl.config_version
+}
+pub fn bump_config() {
+    lock().ctrl.config_version += 1;
+}
+pub fn history_version() -> u64 {
+    lock().ctrl.history_version
+}
+pub fn bump_history() {
+    lock().ctrl.history_version += 1;
+}
+pub fn mic_list_version() -> u64 {
+    lock().ctrl.mic_list_version
+}
+pub fn bump_mic_list() {
+    lock().ctrl.mic_list_version += 1;
+}
+
+// ── 门面: 静态数据经 core 可查(转发给纯数据模块; core 不 import 执行模块) ──
+
+/// 配置快照(门面: 转发 settings; 调用方不需要知道 settings 的存在)
+pub fn get_config(app: &tauri::AppHandle) -> Result<crate::settings::Config, String> {
+    crate::settings::get_config(app.clone())
+}
+
+/// 最近历史(门面: 转发 history)
+pub fn get_history(app: &tauri::AppHandle, limit: usize) -> Vec<crate::history::HistoryRecord> {
+    crate::history::recent(app, limit)
 }
 
 #[cfg(test)]

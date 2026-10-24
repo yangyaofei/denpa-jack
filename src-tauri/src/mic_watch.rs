@@ -1,17 +1,10 @@
 //! 麦克风设备热插拔监听（CoreAudio 设备列表变化 → 版本号递增）
 //!
 //! 设计（用户定则：事件驱动，不按秒轮询设备）：
-//! CoreAudio 在系统设备增删时回调本模块，回调线程只做一件事——递增 MIC_VER；
-//! 前端经已有的 poll_versions 通道读到版本号变化时，才真正重扫设备列表
-//! （list_mics + get_active_mic）。平时轮询只读一个计数器，不枚举设备。
-
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static MIC_VER: AtomicU64 = AtomicU64::new(0);
-
-pub fn mic_version() -> u64 {
-    MIC_VER.load(Ordering::Relaxed)
-}
+//! CoreAudio 在系统设备增删时回调本模块，回调线程只做一件事——递增计数
+//! （计数已收口 core::bump_mic_list）；前端经已有的 poll_versions 通道读到
+//! 版本号变化时，才真正重扫设备列表（list_mics + get_active_mic）。
+//! 平时轮询只读一个计数器，不枚举设备。
 
 #[repr(C)]
 struct AudioObjectPropertyAddress {
@@ -44,7 +37,7 @@ extern "C" fn on_devices_changed(
     _addr: *const AudioObjectPropertyAddress,
     _data: *mut std::ffi::c_void,
 ) -> i32 {
-    MIC_VER.fetch_add(1, Ordering::Relaxed);
+    crate::core::bump_mic_list();
     // 设备增删 → 麦克风选择可能变(优先级里更高的设备刚插上/拔掉): 清解析缓存
     crate::recording::invalidate_mic_cache();
     0
@@ -73,12 +66,10 @@ pub fn start() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn mic_version_increments_monotonically() {
-        let before = mic_version();
-        MIC_VER.fetch_add(1, Ordering::SeqCst);
-        assert!(mic_version() > before);
+        let before = crate::core::mic_list_version();
+        crate::core::bump_mic_list();
+        assert!(crate::core::mic_list_version() > before);
     }
 }

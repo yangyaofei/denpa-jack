@@ -49,15 +49,13 @@ pub fn enforce_limit(app: &tauri::AppHandle, limit: u64) {
     let _ = std::fs::write(&path, keep.join("\n") + "\n");
 }
 
-/// 主窗历史刷新信号(事件通道不可达的轮询替代, 与 HUD 同模式)
-pub static HISTORY_VER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
+/// 主窗历史刷新信号(转发 core: 计数已收口, 写路径走 core::bump_history)
 pub fn history_version() -> u64 {
-    HISTORY_VER.load(std::sync::atomic::Ordering::SeqCst)
+    crate::core::history_version()
 }
 
 pub fn append(app: &tauri::AppHandle, rec: &HistoryRecord) {
-    HISTORY_VER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    crate::core::bump_history();
     append_record_to(&history_dir(app), rec);
 }
 

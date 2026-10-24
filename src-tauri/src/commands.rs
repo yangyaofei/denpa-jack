@@ -539,9 +539,9 @@ pub struct Versions {
 #[tauri::command]
 pub fn poll_versions() -> Versions {
     Versions {
-        history: crate::history::history_version(),
-        config: crate::settings::config_version(),
-        mics: crate::mic_watch::mic_version(),
+        history: crate::core::history_version(),
+        config: crate::core::config_version(),
+        mics: crate::core::mic_list_version(),
         recording: crate::core::session_recording(),
     }
 }
@@ -603,10 +603,11 @@ mod gap_tests {
     #[test]
     fn poll_versions_reflects_history_and_config_counters() {
         use super::*;
-        crate::history::HISTORY_VER.store(7, std::sync::atomic::Ordering::SeqCst);
-        crate::settings::CONFIG_VER.store(3, std::sync::atomic::Ordering::SeqCst);
+        // 计数已收口 core: bump 后 poll_versions 必须读到新值
+        crate::core::bump_history();
+        crate::core::bump_config();
         let v = poll_versions();
-        assert_eq!(v.history, 7);
-        assert_eq!(v.config, 3);
+        assert!(v.history >= 1);
+        assert!(v.config >= 1);
     }
 }

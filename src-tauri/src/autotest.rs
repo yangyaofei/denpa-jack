@@ -27,7 +27,16 @@ pub fn maybe_spawn(app: &AppHandle) {
     }
     if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("ui") {
         let app2 = app.clone();
-        std::thread::spawn(move || run_ui_chain(app2));
+        std::thread::spawn(move || {
+            // 断言 panic 不许挂死 app: 捕获后记 FAIL 并以非零码退出
+            // (实测教训: 历史超 500 条后 assert_eq panic → 线程死 → app 挂到超时)
+            let app3 = app2.clone();
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_ui_chain(app3)));
+            if let Err(e) = r {
+                crate::log::elog(&format!("[ui-chain] FAIL: 断言 panic {e:?}"));
+                app2.exit(1);
+            }
+        });
         return;
     }
     // 应用内更新自测：check 只检查；VOICEMAC_AUTOTEST_UPDATE=install 时连下载安装一起跑（成功后应用会重启）
@@ -337,16 +346,18 @@ fn run_e2e(app: tauri::AppHandle) {
 fn run_ui_chain(app: tauri::AppHandle) {
     std::thread::sleep(std::time::Duration::from_millis(1200));
     let dir = crate::settings::data_dir(&app);
-    // 1) 历史链: 函数返回 vs jsonl 行数
+    // 1) 历史链: 函数返回 vs jsonl 行数(recent 有 500 条上限, 历史超限时按 min 比较)
     let jsonl = dir.join("history.jsonl");
     let disk_lines = std::fs::read_to_string(&jsonl)
         .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
     let got = crate::history::recent(&app, 500);
-    crate::log::elog(&format!("[ui-chain] history: 函数返回 {} 条, 磁盘 {} 行", got.len(), disk_lines));
-    assert_eq!(got.len(), disk_lines, "recent() 与 history.jsonl 行数不一致");
+    let expect = disk_lines.min(500);
+    crate::log::elog(&format!("[ui-chain] history: 函数返回 {} 条, 磁盘 {} 行(比较基准 {})", got.len(), disk_lines, expect));
+    assert_eq!(got.len(), expect, "recent() 与 history.jsonl 行数不一致");
     if let Some(last) = got.first() {
-        crate::log::elog(&format!("[ui-chain] 最新一条: {} final={}", last.ts, &last.final_text[..last.final_text.len().min(30)]));
+        let preview: String = last.final_text.chars().take(30).collect();
+        crate::log::elog(&format!("[ui-chain] 最新一条: {} final={}", last.ts, preview));
     }
     // 2) 配置链: dict/keys/档案
     let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
@@ -355,11 +366,9 @@ fn run_ui_chain(app: tauri::AppHandle) {
         cfg.dict.len(), cfg.keys.len(), cfg.llm_profiles.len(), cfg.active_asr_id
     ));
     assert!(!cfg.asr_profiles.is_empty(), "asr_profiles 为空——页面引擎下拉会空");
-    // 3) poll_versions 递增
-    let v0 = crate::history::history_version();
-    crate::history::HISTORY_VER.fetch_add(0, std::sync::atomic::Ordering::SeqCst);
-    let _ = v0;
-    // 4) 实时性: append→版本递增→recent 立即可见(pipeline 交付后前端 800ms 轮询的实际数据源)
+    // 3) 实时性: append→版本递增→recent 立即可见(pipeline 交付后前端 800ms 轮询的实际数据源)
+    //    (旧的"poll_versions 递增"测试项是 fetch_add(0) 空操作假测试, 已删——版本断言由
+    //     commands::gap_tests::poll_versions_reflects_history_and_config_counters 覆盖)
     let v0 = crate::history::history_version();
     let probe = crate::history::HistoryRecord {
         ts: "PROBE".into(), engine: "uitest".into(), raw: "实时性探针".into(),
