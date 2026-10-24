@@ -46,6 +46,26 @@ pub fn maybe_spawn(app: &AppHandle) {
     }
 }
 
+/// resolve ASR 档案, 内置引擎未就绪时等待其启动完成(模型加载约 40s)——
+/// 文件回放/e2e 的入口都走它; 档案本身有问题则立刻失败, 不空等。
+fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::settings::Config) -> Result<(crate::settings::AsrProfile, String), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        match crate::recording::resolve_asr(cfg) {
+            Ok(x) => return Ok(x),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("还在启动") && std::time::Instant::now() < deadline {
+                    log::log(app, &format!("AUTOTEST: 内置引擎启动中, 5s 后重试({msg})"));
+                    std::thread::sleep(std::time::Duration::from_millis(5000));
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
 /// 多文件回放: 把多个 wav 当作"连续按下又松开"依次注入(每段一个独立会话),
 /// 段间隔只有 400ms —— 故意让后一段在前一段还在转写时进来, 用来端到端验证分段队列:
 /// 队列状态(排队/转写中)、FIFO 交付顺序、不丢段、失败不阻塞、浮窗多段显示。
@@ -74,7 +94,7 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
         log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段 pcm {}B ({path})", idx + 1, pcm.len()));
         // 每段一个独立会话(等价于一次"按下→说话→松开"), 自建会话与 ctrl_start 隔离(无双输入)
         let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
-        let (profile, key) = match crate::recording::resolve_asr(&cfg) {
+        let (profile, key) = match resolve_asr_wait_gateway(&app, &cfg) {
             Ok(x) => x,
             Err(e) => {
                 log::log(&app, &format!("AUTOTEST-FILES: resolve 失败: {e}"));

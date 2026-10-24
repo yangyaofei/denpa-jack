@@ -167,10 +167,11 @@ check(
   "队列不丢段: 失败/清空都先写历史",
   /delivered: "failed"/.test(segQ) && /delivered: "cancelled"/.test(segQ),
 );
-// 串行机制: 单 worker 用 Condvar 等 Queued 段, 一次只把一段置为 Transcribing(交付顺序=FIFO)
+// 串行机制: 单 worker 轮询 core 里的 Queued 段, 一次只把一段置为 Transcribing(交付顺序=FIFO)。
+// core 化(第 1 步): 段数据搬进 core 唯一事实源, Condvar 换 100ms 定时轮询(共享锁跨锁无法精准唤醒, 见 segment_queue.rs 线程模型节)
 check(
-  "队列串行保证顺序(单 worker + Condvar)",
-  /Condvar/.test(segQ) && /CV\.wait\(/.test(segQ) && /state = SegState::Transcribing/.test(segQ),
+  "队列串行保证顺序(单 worker + core 唯一事实源)",
+  /std::thread::sleep/.test(segQ) && /crate::core::lock\(\)/.test(segQ) && /state = SegState::Transcribing/.test(segQ) && /c\.version \+= 1/.test(segQ),
 );
 
 // 5) 版本号清单一致性

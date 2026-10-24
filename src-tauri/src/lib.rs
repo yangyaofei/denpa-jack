@@ -3,6 +3,8 @@ mod audio_feedback;
 mod autotest;
 mod commands;
 pub mod crash_log;
+/// 应用核心状态(唯一事实源, 见 docs/CORE-DESIGN.md)——执行模块只连 core
+pub mod core;
 /// 活动目标探测（焦点窗口/指针窗口 + 显示器；截图与浮窗共用）
 pub mod active_target;
 mod deliver;

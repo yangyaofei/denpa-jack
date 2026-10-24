@@ -80,6 +80,10 @@ static HUD: Mutex<Snapshot> = Mutex::new(Snapshot {
 /// 浮窗最近一次显示的时刻(毫秒, UNIX_EPOCH); 0 = 从未显示
 static LAST_SHOW_MS: AtomicU64 = AtomicU64::new(0);
 
+/// 上一次 poll() 见到的 core 版本号: 队列迁移(重试/清空/入队/出队)发生在 core,
+/// HUD 自身的 update() 感知不到——不对比就会漏刷(浮窗停在旧队列, 审核 a5)
+static LAST_CORE_VER: AtomicU64 = AtomicU64::new(0);
+
 /// 最短显示时长(毫秒): 显示后这段时间内的隐藏请求一律忽略
 pub const MIN_SHOW_MS: u64 = 400;
 
@@ -256,8 +260,10 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
 /// 队列派生的三个字段在这里现算(分段队列的规则见 `segment_queue.rs`):
 ///   左栏 = 录音中显示实时文字; 没在录音时 = 正在转写的那段
 ///   右栏 = 队列里其余段(录音时, 正在转写的那段退到右栏)
+/// 队列数据一律取自 core(唯一事实源); 队列有迁移时推进 version 让前端重绘。
 pub fn poll() -> Snapshot {
-    let (cur, mut queue) = crate::segment_queue::views();
+    let (cur, queue) = crate::segment_queue::views();
+    let core_ver = crate::core::version();
     let mut g = HUD.lock().unwrap();
     let recording = is_recording(&g);
     g.seg_current = if recording {
@@ -266,17 +272,24 @@ pub fn poll() -> Snapshot {
             text: g.partial.clone(),
         })
     } else {
-        cur
+        cur.clone()
     };
     g.seg_queue = if recording {
-        if let Some(c) = crate::segment_queue::views().0 {
-            queue.insert(0, c);
+        // 录音时正在转写的那段退到右栏队首(与 views() 单次调用保持同一份快照, 不再二次取)
+        let mut q = Vec::with_capacity(queue.len() + 1);
+        if let Some(c) = cur {
+            q.push(c);
         }
-        queue
+        q.extend(queue);
+        q
     } else {
         queue
     };
     g.seg_failed = crate::segment_queue::has_failed();
+    if core_ver != LAST_CORE_VER.load(Ordering::SeqCst) {
+        LAST_CORE_VER.store(core_ver, Ordering::SeqCst);
+        g.version += 1;
+    }
     let snap = g.clone();
     // 一次性字段取后清(前端拿到即消费)
     g.finished = None;
@@ -371,5 +384,41 @@ mod tests {
         apply_error(&mut g, "引擎会话异常中断");
         assert!(g.status.is_empty());
         assert_eq!(g.err.as_deref(), Some("引擎会话异常中断"));
+    }
+
+    // 队列迁移发生在 core(不在 HUD 的 update() 路径上), poll() 必须通过 core.version
+    // 感知并推进自身 version——否则重试/清空后浮窗停在旧队列(审核 a5 的回归测试)。
+    // 用大唯一 id 构造/清理, 不 reset——与其他并行测试共享 core 互不干扰。
+    #[test]
+    fn poll_reflects_queue_changes_via_core_version() {
+        const MARK_ID: u64 = 987_654;
+        // 入队一段(模拟 enqueue 的迁移)
+        {
+            let mut c = crate::core::lock();
+            c.queue.items.push_back(crate::core::SegmentEntry {
+                id: MARK_ID,
+                raw: "漏刷回归标记段".into(),
+                ho: Default::default(),
+                state: crate::core::SegState::Queued,
+                reason: None,
+                asr_failed: false,
+            });
+            c.version += 1;
+        }
+        let s1 = poll();
+        let seen = s1.seg_queue.iter().any(|v| v.text.contains("漏刷回归标记段"));
+        // 出队这段(迁移), poll 的 version 必须推进——这是前端重绘的唯一信号
+        {
+            let mut c = crate::core::lock();
+            c.queue.items.retain(|s| s.id != MARK_ID);
+            c.version += 1;
+        }
+        let s2 = poll();
+        let gone = !s2.seg_queue.iter().any(|v| v.text.contains("漏刷回归标记段"));
+        assert!(
+            (seen && gone && s2.version > s1.version),
+            "队列变化未反映到 poll: seen={seen} gone={gone} v {}→{}",
+            s1.version, s2.version
+        );
     }
 }

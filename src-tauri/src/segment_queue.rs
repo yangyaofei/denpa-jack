@@ -1,4 +1,5 @@
-//! 分段转写队列(async transcribe queue)
+//! 分段转写队列(执行者)。段队列的**数据**住在 `core`(唯一事实源, 见 core.rs /
+//! docs/CORE-DESIGN.md), 本模块只做三件事: 入队迁移、串行执行、结果回写。
 //!
 //! # 为什么需要它
 //!
@@ -33,41 +34,17 @@
 //!   引擎事件重新入队 → 仍然按队列顺序交付。
 //!   这类段的音频在入队时就落盘, 保证"能重试"不是空话。
 //!
-//! # 线程模型
+//! # 线程模型(core 化之后)
 //!
-//! - `enqueue*()` 由引擎事件线程调用: 只加锁入队 + 唤醒 worker, 不做重活。
-//! - worker 是一条常驻线程: 取最早一个 Queued 段 → 置 Transcribing → 释放锁后
-//!   执行 `pipeline::post_process`(同步阻塞) → 回写结果(成功出队/失败标 Failed)。
-//! - 浮窗状态由 `views()` 加锁拷贝快照, 不跨线程持有锁。
-//! - 托盘"转写中"指示在每次状态变化后统一刷新(有活=黄, 无活=默认)。
+//! - `enqueue*()` 由引擎事件线程调用: 只进 core 短临界区做迁移 + 版本递增。
+//! - worker 是一条常驻线程: 每 100ms 醒来查 core 有无 Queued 段(无活时 CPU≈0)。
+//!   旧实现的 Condvar 精准唤醒在数据搬进 core 共享锁后无法跨锁使用;
+//!   定时轮询是等价替代——调度延迟 ≤100ms, 语音场景无感(转写本身以百毫秒计)。
+//! - 每次状态迁移都递增 `core.version`: 轮询方(浮窗)据此感知队列变化——
+//!   这是"重试/清空后浮窗不刷新"(审核 a5)的结构性修复。
+//! - 浮窗状态由 `views()` 进 core 短临界区拷贝快照, 不跨线程持有锁。
 
-use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex};
-
-/// 段状态(浮窗右栏/存活规则都基于它)
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SegState {
-    /// 已入队, 等 worker 取
-    Queued,
-    /// worker 正在跑这段(同一时刻最多一段)
-    Transcribing,
-    /// 后处理失败, 保留在队列里等重试
-    Failed,
-}
-
-/// 一个待转写段(音频 + 原文 + 会话上下文)
-pub struct Segment {
-    pub id: u64,
-    /// ASR 原文; ASR 阶段失败时为空
-    pub raw: String,
-    /// 会话交接(音频路径/PCM/焦点/时长/截图/代) —— 重试所需的全部上下文
-    pub ho: crate::pipeline::SessionHandoff,
-    pub state: SegState,
-    /// 失败原因(浮窗提示 + 历史 warning)
-    pub reason: Option<String>,
-    /// true = ASR 阶段就失败(没有 raw): 重试要重跑识别而不是重跑后处理
-    pub asr_failed: bool,
-}
+use crate::core::{SegState, SegmentEntry};
 
 /// 给前端的段视图(浮窗渲染用; 只有 state + text, 不带段号等多余信息——用户定则)
 #[derive(Clone, Debug, serde::Serialize)]
@@ -77,28 +54,25 @@ pub struct SegView {
     pub text: String,
 }
 
-struct Queue {
-    items: VecDeque<Segment>,
-    next_id: u64,
-}
-
-static Q: Mutex<Queue> = Mutex::new(Queue { items: VecDeque::new(), next_id: 1 });
-static CV: Condvar = Condvar::new();
-
 /// 启动 worker 线程(在 lib.rs setup 调用一次)
 pub fn start(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
-        // 1) 取一段(取不到就睡在条件变量上, 不忙等)
+        // 1) 取一段: FIFO——最早的 Queued(重试回队的段也按它在队列里的位置参与排序)
         let run = {
-            let mut g = Q.lock().unwrap();
-            loop {
-                // FIFO: 最早的 Queued(重试回队的段也按它在队列里的位置参与排序)
-                if let Some(pos) = g.items.iter().position(|s| s.state == SegState::Queued) {
-                    g.items[pos].state = SegState::Transcribing;
-                    let s = &g.items[pos];
-                    break (s.id, s.raw.clone(), s.ho.clone(), s.asr_failed);
+            let mut c = crate::core::lock();
+            match c.queue.items.iter().position(|s| s.state == SegState::Queued) {
+                Some(pos) => {
+                    let s = &mut c.queue.items[pos];
+                    s.state = SegState::Transcribing;
+                    let taken = (s.id, s.raw.clone(), s.ho.clone(), s.asr_failed);
+                    c.version += 1;
+                    taken
                 }
-                g = CV.wait(g).unwrap();
+                None => {
+                    drop(c);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
             }
         };
         let (id, raw, ho, asr_failed) = run;
@@ -116,19 +90,22 @@ pub fn start(app: tauri::AppHandle) {
         // 3) 回写: 成功出队; 失败保留(可重试), 并把音频与原文补进历史(不丢段)
         let mut fail_record: Option<(String, crate::pipeline::SessionHandoff, String)> = None;
         {
-            let mut g = Q.lock().unwrap();
-            if let Some(pos) = g.items.iter().position(|s| s.id == id) {
+            let mut c = crate::core::lock();
+            if let Some(pos) = c.queue.items.iter().position(|s| s.id == id) {
                 match outcome {
                     Ok(()) => {
-                        g.items.remove(pos);
+                        c.queue.items.remove(pos);
+                        c.version += 1;
                     }
                     Err(e) => {
-                        g.items[pos].state = SegState::Failed;
-                        g.items[pos].reason = Some(e.clone());
+                        let s = &mut c.queue.items[pos];
+                        s.state = SegState::Failed;
+                        s.reason = Some(e.clone());
                         // ASR 阶段失败的段在入队时已经落盘+写过历史, 这里只处理后处理失败
-                        if !g.items[pos].asr_failed {
-                            fail_record = Some((g.items[pos].raw.clone(), g.items[pos].ho.clone(), e));
+                        if !s.asr_failed {
+                            fail_record = Some((s.raw.clone(), s.ho.clone(), e));
                         }
+                        c.version += 1;
                     }
                 }
             }
@@ -145,21 +122,19 @@ pub fn start(app: tauri::AppHandle) {
 ///
 /// 注意: 这里不再需要 app —— 队列只做入队与唤醒, 后处理由 worker 执行(见 start)。
 pub fn enqueue(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
-    let id = {
-        let mut g = Q.lock().unwrap();
-        let id = g.next_id;
-        g.next_id += 1;
-        g.items.push_back(Segment {
-            id,
-            raw,
-            ho: ho.unwrap_or_default(),
-            state: SegState::Queued,
-            reason: None,
-            asr_failed: false,
-        });
-        id
-    };
-    CV.notify_all();
+    let mut c = crate::core::lock();
+    let id = c.queue.next_id;
+    c.queue.next_id += 1;
+    c.queue.items.push_back(SegmentEntry {
+        id,
+        raw,
+        ho: ho.unwrap_or_default(),
+        state: SegState::Queued,
+        reason: None,
+        asr_failed: false,
+    });
+    c.version += 1;
+    drop(c);
     log_debug("入队");
     id
 }
@@ -172,15 +147,21 @@ pub fn enqueue_asr_failed(app: &tauri::AppHandle, reason: String, ho: Option<cra
     let ho = ho.unwrap_or_default();
     // 落盘音频 + 写历史(delivered="failed") —— 保证"能重试"不是空话
     let audio = record_failed(app, "", &ho, &reason);
-    let id = {
-        let mut g = Q.lock().unwrap();
-        let id = g.next_id;
-        g.next_id += 1;
-        let mut seg_ho = ho.clone();
-        seg_ho.audio_path = audio;
-        g.items.push_back(Segment { id, raw: String::new(), ho: seg_ho, state: SegState::Failed, reason: Some(reason), asr_failed: true });
-        id
-    };
+    let mut seg_ho = ho.clone();
+    seg_ho.audio_path = audio;
+    let mut c = crate::core::lock();
+    let id = c.queue.next_id;
+    c.queue.next_id += 1;
+    c.queue.items.push_back(SegmentEntry {
+        id,
+        raw: String::new(),
+        ho: seg_ho,
+        state: SegState::Failed,
+        reason: Some(reason),
+        asr_failed: true,
+    });
+    c.version += 1;
+    drop(c);
     log_debug("ASR 失败段入队(已落盘+入历史)");
     id
 }
@@ -255,17 +236,18 @@ pub fn record_no_speech(
 /// 重试一段失败(浮窗按钮/历史页调用)
 pub fn retry(app: &tauri::AppHandle, id: u64) -> Result<(), String> {
     let (path, asr_failed) = {
-        let mut g = Q.lock().unwrap();
-        let pos = g.items.iter().position(|s| s.id == id).ok_or("该段已不在队列中")?;
-        if g.items[pos].state != SegState::Failed {
+        let mut c = crate::core::lock();
+        let pos = c.queue.items.iter().position(|s| s.id == id).ok_or("该段已不在队列中")?;
+        if c.queue.items[pos].state != SegState::Failed {
             return Err("该段不是在失败状态".into());
         }
-        if g.items[pos].asr_failed {
+        if c.queue.items[pos].asr_failed {
             // ASR 阶段失败 → 重跑识别(rerun_history 读已落盘 WAV); 结果会作为新段重新入队
-            (g.items[pos].ho.audio_path.clone().unwrap_or_default(), true)
+            (c.queue.items[pos].ho.audio_path.clone().unwrap_or_default(), true)
         } else {
-            g.items[pos].state = SegState::Queued;
-            g.items[pos].reason = None;
+            c.queue.items[pos].state = SegState::Queued;
+            c.queue.items[pos].reason = None;
+            c.version += 1;
             (String::new(), false)
         }
     };
@@ -275,8 +257,6 @@ pub fn retry(app: &tauri::AppHandle, id: u64) -> Result<(), String> {
         }
         remove(id);
         crate::commands::rerun_history(app.clone(), path)?;
-    } else {
-        CV.notify_all();
     }
     log_debug("重试");
     Ok(())
@@ -288,19 +268,22 @@ pub fn retry(app: &tauri::AppHandle, id: u64) -> Result<(), String> {
 /// (delivered="cancelled", warning="队列已清空"), 再出队;
 /// 正在转写的那一段不受影响(它已经跑起来了, 让它交付完)。
 pub fn clear(app: &tauri::AppHandle) -> usize {
-    // 出队 + 备份要清掉的段(用 pop_front 逐个搬运, 段是不可 Clone 的持有权对象)
-    let dropped: Vec<Segment> = {
-        let mut g = Q.lock().unwrap();
-        let mut keep: VecDeque<Segment> = VecDeque::new();
-        let mut dropped: Vec<Segment> = Vec::new();
-        while let Some(s) = g.items.pop_front() {
+    // 出队 + 备份要清掉的段(段是不可 Clone 的持有权对象, 逐个搬运)
+    let dropped: Vec<SegmentEntry> = {
+        let mut c = crate::core::lock();
+        let mut keep = std::collections::VecDeque::new();
+        let mut dropped: Vec<SegmentEntry> = Vec::new();
+        while let Some(s) = c.queue.items.pop_front() {
             if s.state == SegState::Queued {
                 dropped.push(s);
             } else {
                 keep.push_back(s);
             }
         }
-        g.items = keep;
+        c.queue.items = keep;
+        if !dropped.is_empty() {
+            c.version += 1;
+        }
         dropped
     };
     let n = dropped.len();
@@ -333,10 +316,14 @@ pub fn clear(app: &tauri::AppHandle) -> usize {
 /// 已交付/正在转写的段不受影响。
 pub fn dismiss_failed() -> usize {
     let n = {
-        let mut g = Q.lock().unwrap();
-        let before = g.items.len();
-        g.items.retain(|s| s.state != SegState::Failed);
-        before - g.items.len()
+        let mut c = crate::core::lock();
+        let before = c.queue.items.len();
+        c.queue.items.retain(|s| s.state != SegState::Failed);
+        let removed = before - c.queue.items.len();
+        if removed > 0 {
+            c.version += 1;
+        }
+        removed
     };
     log_debug("失败段已关闭提示");
     n
@@ -347,12 +334,13 @@ pub fn dismiss_failed() -> usize {
 /// 当前段 = 正在转写的那段(录音中的"当前"由浮窗用 HUD 快照里的 partial 表示,
 /// 见 commands::hud_poll —— 录音中的段还不属于队列)。
 pub fn views() -> (Option<SegView>, Vec<SegView>) {
-    let g = Q.lock().unwrap();
-    let cur = g.items.iter().find(|s| s.state == SegState::Transcribing).map(|s| SegView {
+    let c = crate::core::lock();
+    let cur = c.queue.items.iter().find(|s| s.state == SegState::Transcribing).map(|s| SegView {
         state: "transcribing".into(),
         text: s.raw.clone(),
     });
-    let queue: Vec<SegView> = g
+    let queue: Vec<SegView> = c
+        .queue
         .items
         .iter()
         .filter(|s| s.state != SegState::Transcribing)
@@ -366,50 +354,68 @@ pub fn views() -> (Option<SegView>, Vec<SegView>) {
 
 /// 队列里是否还有活(排队或转写中)——浮窗存活规则与托盘都用它
 pub fn busy() -> bool {
-    let g = Q.lock().unwrap();
-    g.items.iter().any(|s| s.state == SegState::Queued || s.state == SegState::Transcribing)
+    let c = crate::core::lock();
+    c.queue.items.iter().any(|s| s.state == SegState::Queued || s.state == SegState::Transcribing)
 }
 
 /// 队列里是否有未处理的失败段
 pub fn has_failed() -> bool {
-    let g = Q.lock().unwrap();
-    g.items.iter().any(|s| s.state == SegState::Failed)
+    let c = crate::core::lock();
+    c.queue.items.iter().any(|s| s.state == SegState::Failed)
 }
 
 /// 队列里失败段中最早的一个 id(浮窗"重试"按钮用)
 pub fn first_failed_id() -> Option<u64> {
-    let g = Q.lock().unwrap();
-    g.items.iter().find(|s| s.state == SegState::Failed).map(|s| s.id)
+    let c = crate::core::lock();
+    c.queue.items.iter().find(|s| s.state == SegState::Failed).map(|s| s.id)
 }
 
 /// 出队一段(重试用; ASR 重跑前把原段移掉)
 fn remove(id: u64) {
-    let mut g = Q.lock().unwrap();
-    if let Some(pos) = g.items.iter().position(|s| s.id == id) {
-        g.items.remove(pos);
+    let mut c = crate::core::lock();
+    if let Some(pos) = c.queue.items.iter().position(|s| s.id == id) {
+        c.queue.items.remove(pos);
+        c.version += 1;
     }
 }
 
 /// 测试辅助: 队列长度/段 id 列表(单测用, 不参与运行时逻辑)
 #[cfg(test)]
 pub fn debug_ids() -> Vec<(u64, SegState)> {
-    let g = Q.lock().unwrap();
-    g.items.iter().map(|s| (s.id, s.state)).collect()
+    let c = crate::core::lock();
+    c.queue.items.iter().map(|s| (s.id, s.state)).collect()
 }
 
 #[cfg(test)]
 pub fn debug_reset() {
-    let mut g = Q.lock().unwrap();
-    g.items.clear();
-    g.next_id = 1;
+    let mut c = crate::core::lock();
+    c.queue.items.clear();
+    c.queue.next_id = 1;
+}
+
+#[cfg(test)]
+fn debug_push(id: u64, state: SegState) {
+    let mut c = crate::core::lock();
+    c.queue.items.push_back(SegmentEntry {
+        id,
+        raw: format!("seg{id}"),
+        ho: Default::default(),
+        state,
+        reason: None,
+        asr_failed: false,
+    });
+    c.version += 1;
 }
 
 fn log_debug(what: &str) {
-    let g = Q.lock().unwrap();
-    let queued = g.items.iter().filter(|s| s.state == SegState::Queued).count();
-    let trans = g.items.iter().filter(|s| s.state == SegState::Transcribing).count();
-    let failed = g.items.iter().filter(|s| s.state == SegState::Failed).count();
-    drop(g);
+    let (queued, trans, failed) = {
+        let c = crate::core::lock();
+        (
+            c.queue.items.iter().filter(|s| s.state == SegState::Queued).count(),
+            c.queue.items.iter().filter(|s| s.state == SegState::Transcribing).count(),
+            c.queue.items.iter().filter(|s| s.state == SegState::Failed).count(),
+        )
+    };
     crate::log::elog(&format!("[queue] {what}: queued={queued} transcribing={trans} failed={failed}"));
 }
 
@@ -420,21 +426,17 @@ mod tests {
     #[test]
     fn fifo_order_and_states() {
         debug_reset();
-        // 直接构造 Segment 不依赖 AppHandle: 只验证队列的排序/状态机部分
-        {
-            let mut g = Q.lock().unwrap();
-            for id in 1..=3u64 {
-                g.items.push_back(Segment { id, raw: format!("seg{id}"), ho: Default::default(), state: SegState::Queued, reason: None, asr_failed: false });
-            }
-            g.next_id = 4;
+        for id in 1..=3u64 {
+            debug_push(id, SegState::Queued);
         }
         let ids = debug_ids();
         assert_eq!(ids, vec![(1, SegState::Queued), (2, SegState::Queued), (3, SegState::Queued)]);
         // 取最早的一个 → Transcribing
         {
-            let mut g = Q.lock().unwrap();
-            let pos = g.items.iter().position(|s| s.state == SegState::Queued).unwrap();
-            g.items[pos].state = SegState::Transcribing;
+            let mut c = crate::core::lock();
+            let pos = c.queue.items.iter().position(|s| s.state == SegState::Queued).unwrap();
+            c.queue.items[pos].state = SegState::Transcribing;
+            c.version += 1;
         }
         let ids = debug_ids();
         assert_eq!(ids, vec![(1, SegState::Transcribing), (2, SegState::Queued), (3, SegState::Queued)]);
@@ -447,11 +449,8 @@ mod tests {
     #[test]
     fn failed_segment_keeps_position_and_does_not_block() {
         debug_reset();
-        {
-            let mut g = Q.lock().unwrap();
-            g.items.push_back(Segment { id: 1, raw: "a".into(), ho: Default::default(), state: SegState::Failed, reason: Some("boom".into()), asr_failed: false });
-            g.items.push_back(Segment { id: 2, raw: "b".into(), ho: Default::default(), state: SegState::Queued, reason: None, asr_failed: false });
-        }
+        debug_push(1, SegState::Failed);
+        debug_push(2, SegState::Queued);
         // 失败段留在队列里(可重试), 后面的段照常可被取走(不阻塞)
         assert!(has_failed());
         assert_eq!(first_failed_id(), Some(1));
@@ -460,6 +459,27 @@ mod tests {
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].state, "failed");
         assert_eq!(q[1].state, "queued");
+        debug_reset();
+    }
+
+    // 队列状态迁移必须递增 core.version —— 浮窗漏刷修复的根基:
+    // 轮询方(hud::poll)靠版本号变化才知道队列变了要重绘
+    #[test]
+    fn queue_migration_bumps_core_version() {
+        debug_reset();
+        let v0 = crate::core::version();
+        debug_push(1, SegState::Queued);
+        assert_eq!(crate::core::version(), v0 + 1);
+        {
+            let mut c = crate::core::lock();
+            c.queue.items[0].state = SegState::Failed;
+            c.version += 1;
+        }
+        assert_eq!(crate::core::version(), v0 + 2);
+        // 纯读取不递增
+        let _ = views();
+        let _ = busy();
+        assert_eq!(crate::core::version(), v0 + 2);
         debug_reset();
     }
 }
