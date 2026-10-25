@@ -300,9 +300,16 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         }
     }
     let (ho, cmd_tx, handoff) = sess.finish(&engine);
-    // B3 判据改为实际音频字节数(9600B=0.3s@16k)——duration_ms 含引擎/采集启动开销,
-    // 200ms 的音频会因 duration 达到 300ms 被误判为有效语音而交付
-    if ho.pcm.len() < 9600 {
+    // B3 判据=实际音频字节数(默认 0.3s): duration_ms 含引擎/采集启动开销,
+    // 200ms 的音频会因 duration 达到 300ms 被误判为有效语音而交付。
+    // D5: 下限接配置 min_recording_seconds(16k mono i16le = 32000 B/s),
+    // floor 0.05s 与 serde 缺字段保护一致; 旧实现硬编码 9600B, 配置形同摆设。
+    let min_secs = settings::get_config(app.clone())
+        .map(|c| c.min_recording_seconds)
+        .unwrap_or(0.3)
+        .max(0.05);
+    let min_bytes = (min_secs * 32000.0) as usize;
+    if ho.pcm.len() < min_bytes {
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
         let _ = cmd_tx.try_send(engine::Cmd::Abort);
         session_cleanup(&app, None);
@@ -373,11 +380,12 @@ mod gap_tests {
     use crate::settings::Config;
 
     #[test]
-    fn min_duration_floor_never_zero() {
-        // serde 缺字段时 min=0 会让 B3 失效——floor 保护
-        let mut c = Config::default();
-        c.min_recording_seconds = 0.0;
-        let ms = (c.min_recording_seconds.max(0.05) * 1000.0) as u64;
-        assert_eq!(ms, 50);
+    fn min_bytes_floor_never_zero() {
+        // D5: 太短判据 = min_recording_seconds × 32000 B/s; default_config() 0.3s → 9600B(与旧硬编码等值);
+        // derive Default/serde 缺字段时为 0.0 → floor 0.05s(1600B), 判据永不失效
+        assert_eq!(Config::default().min_recording_seconds, 0.0, "derive Default 无默认时长");
+        assert_eq!(crate::settings::default_config().min_recording_seconds, 0.3);
+        assert_eq!((0.3f64 * 32000.0) as usize, 9600);
+        assert_eq!((0.0f64.max(0.05) * 32000.0) as usize, 1600, "floor 0.05s");
     }
 }
