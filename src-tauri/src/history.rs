@@ -402,3 +402,16 @@ pub fn bump_second(ts: &str) -> String {
     }
     t
 }
+
+#[cfg(test)]
+mod rerun_tests {
+    use super::*;
+
+    #[test]
+    fn parse_real_failed_line() {
+        // 真机 bug 复现: 2026-10-25 失败段行在 find_by_ts 解析不出来?
+        let line = r#"{"ts":"2026-10-25 21:36:53","engine":"","raw":"","final_text":"","llm_used":false,"llm_thinking":null,"delivered":"failed","audio_path":"/x/rec.wav","duration_ms":30997,"warning":"w"}"#;
+        let r: HistoryRecord = serde_json::from_str(line).expect("这行必须能解析");
+        assert_eq!(r.ts, "2026-10-25 21:36:53");
+    }
+}

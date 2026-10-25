@@ -268,8 +268,33 @@ fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
 }
 
 fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::history::HistoryRecord, String> {
-    let recs = crate::history::read_all_from(&crate::config::data_dir(app).join("history.jsonl"));
-    recs.into_iter().find(|r| r.ts == ts).ok_or_else(|| format!("未找到 ts={ts}"))
+    let path = crate::config::data_dir(app).join("history.jsonl");
+    let recs = crate::history::read_all_from(&path);
+    if let Some(r) = recs.iter().find(|r| r.ts == ts) {
+        return Ok(r.clone());
+    }
+    // 防御性兜底(真机 2026-10-25 出现过"文件里有这行但强类型解析后找不到"):
+    // 用 Value 逐行匹配 ts, 绕过 HistoryRecord 字段级解析差异; 命中再转强类型
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        for line in raw.lines() {
+            if !line.contains(ts) { continue; }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if v["ts"].as_str() == Some(ts) {
+                    if let Ok(r) = serde_json::from_str::<crate::history::HistoryRecord>(line) {
+                        crate::log::elog("[rerun] 强类型未命中但 Value 兜底命中(版本迁移期字段差异?)");
+                        return Ok(r);
+                    }
+                }
+            }
+        }
+    }
+    let first = recs.first().map(|r| r.ts.clone()).unwrap_or_default();
+    let last = recs.last().map(|r| r.ts.clone()).unwrap_or_default();
+    crate::log::elog(&format!(
+        "[rerun] find_by_ts 未命中: path={} 共{}条 首={} 尾={}",
+        path.display(), recs.len(), first, last
+    ));
+    Err(format!("未找到 ts={ts}"))
 }
 
 pub fn spawn_session(

@@ -227,6 +227,11 @@ h1 { font-size: 17px; font-weight: 600; }          /* Title2 */
 /* content-in 已是 flex 列容器: 普通页 min-height:auto 可超出→整页滚动照旧;
    历史页 flex:1+min-height:0 受限于视口 → 左右两栏各自独立滚动,
    不再跟着 content-in 一同滚(用户反馈: 左栏滚到底点条目, 右栏详情还停在底部) */
+/* 高度链: content-in(flex列) → div[data-page](必须也是受限 flex 子项, 否则
+   section.page-wide 的 flex:1 参照一个无约束的普通 div, 独立滚动不生效——
+   2026-10-25 用户复测仍联动, 根因就是这层断链) */
+.content-in > [data-page] { min-height: 0; }
+.content-in > [data-page="history"] { flex: 1; display: flex; flex-direction: column; }
 .page-wide { max-width: none !important; width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .page-wide .split { flex: 1; min-height: 0; }
 .page-wide .pane-left { width: 460px; }
