@@ -165,6 +165,24 @@ impl TextCorrector {
     }
 }
 
+/// 热词预算(豆包 corpus 上限 100 token; cost = 字数 + 2, 装不下跳过, 按 boost 降序装)
+/// 从 recording.rs 归位(阶段A 第2步): 热词怎么选是词典域的事, 录音域只管消费
+pub fn budget_hotwords(dict: &[crate::settings::DictEntry]) -> Vec<String> {
+    let mut sorted: Vec<&crate::settings::DictEntry> = dict.iter().collect();
+    sorted.sort_by(|a, b| b.boost.cmp(&a.boost));
+    let mut used = 0usize;
+    let mut out = vec![];
+    for e in sorted {
+        let cost = e.term.chars().count() + 2;
+        if used + cost > 100 {
+            continue;
+        }
+        used += cost;
+        out.push(e.term.clone());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +242,31 @@ mod gap_tests {
 
     fn entry(term: &str, variants: &[&str]) -> DictEntry {
         DictEntry { term: term.into(), variants: variants.iter().map(|s| s.to_string()).collect(), guard_words: vec![], boost: 5 }
+    }
+
+    #[test]
+    fn budget_hotwords_respects_100_token_budget() {
+        // C8: cost = 字数 + 2; 装不下跳过(随 budget_hotwords 从 recording.rs 迁来)
+        let d = vec![
+            DictEntry { term: "谢克数学".into(), variants: vec![], guard_words: vec![], boost: 10 },
+            DictEntry { term: "a".repeat(90), variants: vec![], guard_words: vec![], boost: 9 },
+            DictEntry { term: "腾讯云".into(), variants: vec![], guard_words: vec![], boost: 5 },
+        ];
+        let out = budget_hotwords(&d);
+        // 92 token 的词装不下跳过, 后面的还能继续装
+        assert_eq!(out.len(), 2);
+        assert!(out[0].contains("谢克数学"));
+    }
+
+    #[test]
+    fn budget_hotwords_boost_desc_and_token_cap() {
+        let mk = |t: &str, b: u8| DictEntry { term: t.into(), variants: vec![], guard_words: vec![], boost: b };
+        let dict = vec![mk("低权重", 1), mk("高权重长词条", 5), mk("中", 3)];
+        let out = budget_hotwords(&dict);
+        assert_eq!(out.first().map(|s| s.as_str()), Some("高权重长词条"));
+        // 全部 cost=字数+2, 总预算 100
+        let cost: usize = out.iter().map(|w| w.chars().count() + 2).sum();
+        assert!(cost <= 100);
     }
 
     #[test]

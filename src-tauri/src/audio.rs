@@ -79,6 +79,72 @@ pub fn list_mics() -> Vec<(String, String)> {
     out
 }
 
+/// 麦克风解析(存储键=CoreAudio DeviceUID 稳定硬件 ID)——从 recording.rs 归位(阶段A 第2步):
+/// 设备怎么选是音频域的事, 会话域只管消费。优先级按序取第一个在线 uid;
+/// 旧配置里存的名字在此迁移为 uid; 都不中回落指定设备/默认。
+/// 上次命中的麦克风 uid 缓存: 按下→录音的关键路径少一次全枚举(Handy cached_device)
+static MIC_CACHE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn resolve_mic(app: &tauri::AppHandle, cfg: &mut crate::settings::Config) -> Option<String> {
+    if let Some(uid) = MIC_CACHE.lock().unwrap().clone() {
+        // 缓存命中: 不枚举, open 失败由 ctrl_start 的自愈重试全量重解析
+        return Some(uid);
+    }
+    let online = list_mics();
+    let mut migrated = false;
+    for item in cfg.mic_priority.iter_mut() {
+        if let Some((uid, _)) = online.iter().find(|(_, n)| n == item).cloned() {
+            *item = uid;
+            migrated = true;
+        }
+    }
+    if !cfg.mic_device_uid.is_empty() {
+        if let Some((uid, _)) = online.iter().find(|(_, n)| *n == cfg.mic_device_uid).cloned() {
+            cfg.mic_device_uid = uid;
+            migrated = true;
+        }
+    }
+    if migrated {
+        crate::log::elog("[mic] 旧名字配置已迁移为硬件 uid");
+        let _ = crate::settings::save_config(app.clone(), cfg.clone());
+    }
+    let picked = cfg
+        .mic_priority
+        .iter()
+        .find(|uid| online.iter().any(|(u, _)| u == *uid))
+        .cloned()
+        .or_else(|| {
+            if !cfg.mic_device_uid.is_empty() && online.iter().any(|(u, _)| u == &cfg.mic_device_uid) {
+                Some(cfg.mic_device_uid.clone())
+            } else {
+                None
+            }
+        })
+        .or_else(|| start_input_default(&online));
+    if let Some(uid) = &picked {
+        *MIC_CACHE.lock().unwrap() = Some(uid.clone());
+    }
+    picked
+}
+
+/// 设备失效时清缓存(自愈重试路径调用)
+pub fn invalidate_mic_cache() {
+    *MIC_CACHE.lock().unwrap() = None;
+}
+
+fn start_input_default(online: &[(String, String)]) -> Option<String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    if let Some(d) = cpal::default_host().default_input_device() {
+        if let Ok(uid) = d.id() {
+            let u = uid.to_string();
+            if online.iter().any(|(x, _)| *x == u) {
+                return Some(u);
+            }
+        }
+    }
+    online.first().map(|(u, _)| u.clone())
+}
+
 pub fn start_input(device: Option<String>, tx: Sender<Vec<u8>>) -> Result<Recording, String> {
     let host = cpal::default_host();
     // device 语义 = CoreAudio DeviceUID(稳定硬件 ID); 找不到时回落默认设备

@@ -596,6 +596,51 @@ pub fn data_url_prefix(data_url: &str) -> String {
     data_url.chars().take(32).collect()
 }
 
+/// 会话截图采集编排(从 recording.rs ctrl_start 下沉, 阶段A 第2步):
+/// 按下时后台线程采一次屏, 结果写入共享槽(采集未完成/失败= None)。
+/// 权限预检/落盘/清理/指纹日志都是截图域的事; 会话域只消费槽。
+pub fn spawn_session_capture(
+    app: &tauri::AppHandle,
+    target: &crate::active_target::ActiveTarget,
+    cfg_target: &str,
+) -> std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>> {
+    let slot: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mode = parse_target(cfg_target);
+    if mode == ShotTarget::Off {
+        return slot;
+    }
+    let app = app.clone();
+    let target = target.clone();
+    let slot_out = slot.clone();
+    std::thread::spawn(move || {
+        if !preflight() {
+            crate::log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
+            return;
+        }
+        let dir = crate::settings::data_dir(&app);
+        match capture_and_prune(&dir, "ctx", &target, mode) {
+            Ok(shot) => {
+                // sha256 与后续 [llm] 带图请求里的指纹对照 → 证明发出去的图就是这一张
+                let fp = std::fs::read(&shot.path)
+                    .map(|raw| sha256_short_of(&raw))
+                    .unwrap_or_else(|_| "读取失败".into());
+                crate::log::elog(&format!(
+                    "[ctx] 截图已采集 path={} bytes={} ms={} sha256={} target={}",
+                    shot.path.display(),
+                    shot.bytes,
+                    shot.elapsed_ms,
+                    fp,
+                    shot.desc
+                ));
+                *slot_out.lock().unwrap() = Some(shot.path);
+            }
+            Err(e) => crate::log::elog(&format!("[ctx] 截图失败, 本次不带图纠错: {e}")),
+        }
+    });
+    slot
+}
+
 /// 原始字节的 sha256 前 16 位十六进制
 pub fn sha256_short_of(raw: &[u8]) -> String {
     use sha2::{Digest, Sha256};

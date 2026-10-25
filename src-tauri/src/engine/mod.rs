@@ -57,6 +57,81 @@ pub fn settle(emit: &impl Fn(AsrEvent), text: &str) {
     }
 }
 
+/// ASR 档案解析: 从配置选出本会话引擎与 key——从 recording.rs 归位(阶段A 第2步),
+/// "哪个引擎可用什么参数跑"是引擎域的事(engine→settings/local_service 单向依赖)。
+pub fn resolve_asr(cfg: &crate::settings::Config) -> Result<(crate::settings::AsrProfile, String), String> {
+    // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
+    // 不占档案列表、零配置, 地址来自 local_service 登记的随机端口(联动)
+    if cfg.active_asr_id == crate::local_service::BUILTIN_ID {
+        let base = crate::local_service::builtin_base_url()?;
+        let p = crate::settings::AsrProfile {
+            id: crate::local_service::BUILTIN_ID.into(),
+            name: "内置本地引擎".into(),
+            provider: "local".into(),
+            api_key: String::new(),
+            base_url: base,
+            hotwords_enabled: true,
+        };
+        return Ok((p, String::new()));
+    }
+    let profile = cfg
+        .asr_profiles
+        .iter()
+        .find(|p| p.id == cfg.active_asr_id)
+        .cloned()
+        .or_else(|| cfg.asr_profiles.first().cloned())
+        .ok_or("没有 ASR 档案, 请先在设置中添加")?;
+    if !["volcengine", "zhipu", "openai", "local"].contains(&profile.provider.as_str()) {
+        return Err(format!("未知引擎: {}", profile.provider));
+    }
+    // 本地/内置网关无鉴权：不需要 Key(空 Key 池也能用)
+    if profile.provider == "local" {
+        return Ok((profile, String::new()));
+    }
+    let key = if profile.api_key.is_empty() {
+        cfg.keys.first().cloned().ok_or("没有 API Key")?
+    } else {
+        profile.api_key.clone()
+    };
+    Ok((profile, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_asr;
+
+    #[test]
+    fn resolve_asr_rejects_unknown_provider() {
+        let mut cfg = crate::settings::default_config();
+        cfg.active_asr_id = "x".into();
+        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(), hotwords_enabled: true,
+        }];
+        assert!(resolve_asr(&cfg).is_err());
+    }
+    #[test]
+    fn resolve_asr_falls_back_to_first_profile() {
+        let mut cfg = crate::settings::default_config();
+        cfg.active_asr_id = "nope".into();
+        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(), hotwords_enabled: true,
+        }];
+        let (p, k) = resolve_asr(&cfg).unwrap();
+        assert_eq!(p.id, "p1");
+        assert_eq!(k, "k1");
+    }
+    #[test]
+    fn resolve_asr_empty_key_uses_pool() {
+        let mut cfg = crate::settings::default_config();
+        cfg.keys = vec!["pool-key".into()];
+        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(), hotwords_enabled: true,
+        }];
+        let (_, k) = resolve_asr(&cfg).unwrap();
+        assert_eq!(k, "pool-key");
+    }
+}
+
 pub fn spawn_session(
     app: tauri::AppHandle,
     provider: String,

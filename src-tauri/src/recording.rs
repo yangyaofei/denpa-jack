@@ -65,124 +65,6 @@ impl RecordingSession {
     }
 }
 
-pub fn budget_hotwords(dict: &[settings::DictEntry]) -> Vec<String> {
-    let mut sorted: Vec<&settings::DictEntry> = dict.iter().collect();
-    sorted.sort_by(|a, b| b.boost.cmp(&a.boost));
-    let mut used = 0usize;
-    let mut out = vec![];
-    for e in sorted {
-        let cost = e.term.chars().count() + 2;
-        if used + cost > 100 {
-            continue;
-        }
-        used += cost;
-        out.push(e.term.clone());
-    }
-    out
-}
-
-/// 麦克风解析(存储键=CoreAudio DeviceUID 稳定硬件 ID):
-/// 优先级按序取第一个在线 uid; 旧配置里存的名字在此迁移为 uid; 都不中回落指定设备/默认
-/// 上次命中的麦克风 uid 缓存: 按下→录音的关键路径少一次全枚举(Handy cached_device)
-static MIC_CACHE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-pub fn resolve_mic(app: &tauri::AppHandle, cfg: &mut Config) -> Option<String> {
-    if let Some(uid) = MIC_CACHE.lock().unwrap().clone() {
-        // 缓存命中: 不枚举, open 失败由 ctrl_start 的自愈重试全量重解析
-        return Some(uid);
-    }
-    let online = audio::list_mics();
-    let mut migrated = false;
-    for item in cfg.mic_priority.iter_mut() {
-        if let Some((uid, _)) = online.iter().find(|(_, n)| n == item).cloned() {
-            *item = uid;
-            migrated = true;
-        }
-    }
-    if !cfg.mic_device_uid.is_empty() {
-        if let Some((uid, _)) = online.iter().find(|(_, n)| *n == cfg.mic_device_uid).cloned() {
-            cfg.mic_device_uid = uid;
-            migrated = true;
-        }
-    }
-    if migrated {
-        crate::log::elog("[mic] 旧名字配置已迁移为硬件 uid");
-        let _ = settings::save_config(app.clone(), cfg.clone());
-    }
-    let picked = cfg
-        .mic_priority
-        .iter()
-        .find(|uid| online.iter().any(|(u, _)| u == *uid))
-        .cloned()
-        .or_else(|| {
-            if !cfg.mic_device_uid.is_empty() && online.iter().any(|(u, _)| u == &cfg.mic_device_uid) {
-                Some(cfg.mic_device_uid.clone())
-            } else {
-                None
-            }
-        })
-        .or_else(|| start_input_default(&online));
-    if let Some(uid) = &picked {
-        *MIC_CACHE.lock().unwrap() = Some(uid.clone());
-    }
-    picked
-}
-
-/// 设备失效时清缓存(自愈重试路径调用)
-pub fn invalidate_mic_cache() {
-    *MIC_CACHE.lock().unwrap() = None;
-}
-
-fn start_input_default(online: &[(String, String)]) -> Option<String> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-    if let Some(d) = cpal::default_host().default_input_device() {
-        if let Ok(uid) = d.id() {
-            let u = uid.to_string();
-            if online.iter().any(|(x, _)| *x == u) {
-                return Some(u);
-            }
-        }
-    }
-    online.first().map(|(u, _)| u.clone())
-}
-
-pub fn resolve_asr(cfg: &Config) -> Result<(settings::AsrProfile, String), String> {
-    // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
-    // 不占档案列表、零配置, 地址来自 local_service 登记的随机端口(联动)
-    if cfg.active_asr_id == crate::local_service::BUILTIN_ID {
-        let base = crate::local_service::builtin_base_url()?;
-        let p = settings::AsrProfile {
-            id: crate::local_service::BUILTIN_ID.into(),
-            name: "内置本地引擎".into(),
-            provider: "local".into(),
-            api_key: String::new(),
-            base_url: base,
-            hotwords_enabled: true,
-        };
-        return Ok((p, String::new()));
-    }
-    let profile = cfg
-        .asr_profiles
-        .iter()
-        .find(|p| p.id == cfg.active_asr_id)
-        .cloned()
-        .or_else(|| cfg.asr_profiles.first().cloned())
-        .ok_or("没有 ASR 档案, 请先在设置中添加")?;
-    if !["volcengine", "zhipu", "openai", "local"].contains(&profile.provider.as_str()) {
-        return Err(format!("未知引擎: {}", profile.provider));
-    }
-    // 本地/内置网关无鉴权：不需要 Key(空 Key 池也能用)
-    if profile.provider == "local" {
-        return Ok((profile, String::new()));
-    }
-    let key = if profile.api_key.is_empty() {
-        cfg.keys.first().cloned().ok_or("没有 API Key")?
-    } else {
-        profile.api_key.clone()
-    };
-    Ok((profile, key))
-}
-
 /// 录音中实时音量 → hud 浮窗; 持会话取消令牌, 会话结束后自动退出。
 /// 顺带承担"录音中静音提醒"(用户要求: 没听清不该等松手才说, 过程中就该知道):
 /// level 是 RMS 0-1000 定点; 连续约 2.5s(21 帧 × 120ms)低于阈值就提示一次,
@@ -273,7 +155,7 @@ pub fn recording_abort() -> Result<(), String> {
 pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> Result<(), String> {
     // C54: 录制期间绑定已真注销(suspend), 触发不可达——此守卫防御性保留
     let mut cfg: Config = settings::get_config(app.clone())?;
-    let (profile, key) = resolve_asr(&cfg)?;
+    let (profile, key) = engine::resolve_asr(&cfg)?;
     {
         let st = state.lock().unwrap();
         if st.session.is_some() {
@@ -295,7 +177,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         crate::hud::notify(&app, msg);
         return Err(msg.into());
     }
-    let mic = resolve_mic(&app, &mut cfg);
+    let mic = audio::resolve_mic(&app, &mut cfg);
     let mic_name = mic.clone();
     let (tx, rx) = ttx::channel::<engine::Cmd>(64);
     let (atx, arx) = mpsc::channel::<Vec<u8>>();
@@ -304,8 +186,8 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         Ok(r) => r,
         Err(first_err) => {
             log::elog(&format!("[audio] open 失败: {first_err}, 清缓存重试一次"));
-            invalidate_mic_cache();
-            let mic = resolve_mic(&app, &mut cfg);
+            audio::invalidate_mic_cache();
+            let mic = audio::resolve_mic(&app, &mut cfg);
             std::thread::sleep(std::time::Duration::from_millis(120));
             match audio::start_input(mic, atx) {
                 Ok(r) => r,
@@ -330,7 +212,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         profile.provider.clone(),
         key,
         profile.base_url.clone(),
-        budget_hotwords(&cfg.dict),
+        crate::dict::budget_hotwords(&cfg.dict),
         handoff.clone(),
         rx,
     );
@@ -353,40 +235,9 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     let level = rec.level_handle();
     let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     // 屏幕上下文: 按下时探测一次活动目标（焦点窗口 → 指针窗口 → 指针所在屏），
-    // 截图与浮窗共用；配置在该消费端决定截窗口还是截屏
-    let shot_mode = crate::screen_context::parse_target(&cfg.detect_active_target);
+    // 截图与浮窗共用；采集编排在 screen_context(阶段A 第2步下沉), 这里只拿结果槽
     let target = crate::active_target::detect_active_target();
-    let shot_slot: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::new(Mutex::new(None));
-    if shot_mode != crate::screen_context::ShotTarget::Off {
-        let app_shot = app.clone();
-        let slot = shot_slot.clone();
-        let target_shot = target.clone();
-        std::thread::spawn(move || {
-            if !crate::screen_context::preflight() {
-                log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
-            } else {
-                let dir = crate::settings::data_dir(&app_shot);
-                match crate::screen_context::capture_and_prune(&dir, "ctx", &target_shot, shot_mode) {
-                    Ok(shot) => {
-                        // sha256 与后续 [llm] 带图请求里的指纹对照 → 证明发出去的图就是这一张
-                        let fp = std::fs::read(&shot.path)
-                            .map(|raw| crate::screen_context::sha256_short_of(&raw))
-                            .unwrap_or_else(|_| "读取失败".into());
-                        log::elog(&format!(
-                            "[ctx] 截图已采集 path={} bytes={} ms={} sha256={} target={}",
-                            shot.path.display(),
-                            shot.bytes,
-                            shot.elapsed_ms,
-                            fp,
-                            shot.desc
-                        ));
-                        *slot.lock().unwrap() = Some(shot.path);
-                    }
-                    Err(e) => log::elog(&format!("[ctx] 截图失败, 本次不带图纠错: {e}")),
-                }
-            }
-        });
-    }
+    let shot_slot = crate::screen_context::spawn_session_capture(&app, &target, &cfg.detect_active_target);
     {
         let mut st = state.lock().unwrap();
         st.engine_mirror = Some(tx.clone());
@@ -510,137 +361,16 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     Ok(())
 }
 
-/// 取 wav 的 data chunk(自测回放用)
-pub fn wav_data_chunk(raw: &[u8]) -> Option<Vec<u8>> {
-    if raw.len() < 44 || &raw[0..4] != b"RIFF" {
-        return None;
-    }
-    let mut i = 12usize;
-    while i + 8 <= raw.len() {
-        let id = &raw[i..i + 4];
-        let size = u32::from_le_bytes([raw[i + 4], raw[i + 5], raw[i + 6], raw[i + 7]]) as usize;
-        if id == b"data" {
-            let end = (i + 8 + size).min(raw.len());
-            return Some(raw[i + 8..end].to_vec());
-        }
-        i += 8 + size + (size % 2);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn wav_data_chunk_skips_fllr_padding() {
-        // C40 回归: 真实录音 wav 有 FLLR 填充块, data 不在 offset 44
-        let mut w = Vec::new();
-        w.extend_from_slice(b"RIFF");
-        w.extend_from_slice(&(1000u32).to_le_bytes());
-        w.extend_from_slice(b"WAVE");
-        w.extend_from_slice(b"fmt ");
-        w.extend_from_slice(&(16u32).to_le_bytes());
-        w.extend_from_slice(&[0u8; 16]);
-        w.extend_from_slice(b"FLLR");
-        w.extend_from_slice(&(4044u32).to_le_bytes());
-        w.extend_from_slice(&vec![0xEEu8; 4044]);
-        w.extend_from_slice(b"data");
-        w.extend_from_slice(&(10u32).to_le_bytes());
-        w.extend_from_slice(b"0123456789");
-        let pcm = wav_data_chunk(&w).unwrap();
-        assert_eq!(pcm, b"0123456789");
-    }
-    #[test]
-    fn wav_data_chunk_rejects_garbage() {
-        assert!(wav_data_chunk(b"").is_none());
-        assert!(wav_data_chunk(b"RIFFshort").is_none());
-        assert!(wav_data_chunk(b"NOTAWAVE........").is_none());
-    }
-    #[test]
-    fn budget_hotwords_respects_100_token_budget() {
-        // C8: cost = 字数 + 2; 装不下跳过
-        let d = vec![
-            crate::settings::DictEntry { term: "谢克数学".into(), variants: vec![], guard_words: vec![], boost: 10 },
-            crate::settings::DictEntry { term: "a".repeat(90), variants: vec![], guard_words: vec![], boost: 9 },
-            crate::settings::DictEntry { term: "腾讯云".into(), variants: vec![], guard_words: vec![], boost: 5 },
-        ];
-        let out = budget_hotwords(&d);
-        // 92 token 的词装不下跳过, 后面的还能继续装
-        assert_eq!(out.len(), 2);
-        assert!(out[0].contains("谢克数学"));
-    }
-    #[test]
-    fn resolve_asr_rejects_unknown_provider() {
-        let mut cfg = crate::settings::default_config();
-        cfg.active_asr_id = "x".into();
-        cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(), hotwords_enabled: true,
-        }];
-        assert!(resolve_asr(&cfg).is_err());
-    }
-    #[test]
-    fn resolve_asr_falls_back_to_first_profile() {
-        let mut cfg = crate::settings::default_config();
-        cfg.active_asr_id = "nope".into();
-        cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(), hotwords_enabled: true,
-        }];
-        let (p, k) = resolve_asr(&cfg).unwrap();
-        assert_eq!(p.id, "p1");
-        assert_eq!(k, "k1");
-    }
-    #[test]
-    fn resolve_asr_empty_key_uses_pool() {
-        let mut cfg = crate::settings::default_config();
-        cfg.keys = vec!["pool-key".into()];
-        cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(), hotwords_enabled: true,
-        }];
-        let (_, k) = resolve_asr(&cfg).unwrap();
-        assert_eq!(k, "pool-key");
-    }
+    // 已搬函数的用例随迁(阶段A 第2步): budget_hotwords→dict.rs, resolve_asr→engine/mod.rs, wav_data_chunk→history.rs
 }
 
 #[cfg(test)]
 mod gap_tests {
     use super::*;
-    use crate::settings::{AsrProfile, Config};
-
-    #[test]
-    fn resolve_asr_rejects_unknown_provider() {
-        let mut c = Config::default();
-        c.asr_profiles = vec![AsrProfile { id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(), hotwords_enabled: true }];
-        c.active_asr_id = "x".into();
-        assert!(resolve_asr(&c).is_err());
-    }
-
-    #[test]
-    fn resolve_asr_empty_key_falls_back_to_pool() {
-        let mut c = Config::default();
-        c.keys = vec!["pool-key".into()];
-        c.asr_profiles = vec![AsrProfile { id: "a".into(), name: "a".into(), provider: "volcengine".into(), api_key: String::new(), base_url: String::new(), hotwords_enabled: true }];
-        c.active_asr_id = "a".into();
-        let (_, key) = resolve_asr(&c).unwrap();
-        assert_eq!(key, "pool-key");
-    }
-
-    #[test]
-    fn budget_hotwords_boost_desc_and_token_cap() {
-        let mk = |t: &str, b: u8| crate::settings::DictEntry { term: t.into(), variants: vec![], guard_words: vec![], boost: b };
-        let dict = vec![mk("低权重", 1), mk("高权重长词条", 5), mk("中", 3)];
-        let out = budget_hotwords(&dict);
-        assert_eq!(out.first().map(|s| s.as_str()), Some("高权重长词条"));
-        // 全部 cost=字数+2, 总预算 100
-        let cost: usize = out.iter().map(|w| w.chars().count() + 2).sum();
-        assert!(cost <= 100);
-    }
-
-    #[test]
-    fn wav_data_chunk_rejects_non_riff() {
-        assert!(wav_data_chunk(b"not a wav file at all....").is_none());
-        assert!(wav_data_chunk(&[]).is_none());
-    }
+    use crate::settings::Config;
 
     #[test]
     fn min_duration_floor_never_zero() {

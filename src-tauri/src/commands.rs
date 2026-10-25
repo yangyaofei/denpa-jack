@@ -8,7 +8,7 @@ use crate::history;
 use crate::pipeline;
 use crate::settings::Config;
 use tokio::sync::mpsc as ttx;
-use crate::recording::{budget_hotwords, resolve_asr};
+use crate::dict::budget_hotwords;
 use crate::settings;
 
 #[tauri::command]
@@ -112,12 +112,12 @@ pub fn rerun_history(app: tauri::AppHandle, audio_path: String) -> Result<(), St
 
 fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), String> {
     let cfg: Config = settings::get_config(app.clone())?;
-    let (profile, key) = resolve_asr(&cfg)?;
+    let (profile, key) = crate::engine::resolve_asr(&cfg)?;
     let raw = std::fs::read(&audio_path).map_err(|e| format!("读音频失败: {e}"))?;
     // 剥 WAV 头取 PCM: 复用 wav_data_chunk(遍历 chunk, 跳过 FLLR 填充块)——
     // 旧的 raw[44..] 假设 data 固定在 44 偏移, 含 FLLR 的历史音频会把 fmt 头
     // 当 PCM 喂给引擎(C40 教训的重演, 审核a-9)
-    let pcm = crate::recording::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
+    let pcm = crate::history::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
     let (tx, rx) = ttx::channel::<engine::Cmd>(64);
     // 重跑也是一次会话: 交接箱随会话走, 与主链路同构
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
@@ -256,7 +256,7 @@ pub fn hud_resize(app: tauri::AppHandle, width: f64) {
 pub fn get_active_mic(app: tauri::AppHandle) -> Option<(String, String)> {
     // 每次都按当前配置解析(优先级→指定→默认): 配置一改, 显示立即跟手
     let mut cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
-    let uid = crate::recording::resolve_mic(&app, &mut cfg)?;
+    let uid = crate::audio::resolve_mic(&app, &mut cfg)?;
     let name = crate::audio::list_mics()
         .into_iter()
         .find(|(u, _)| *u == uid)

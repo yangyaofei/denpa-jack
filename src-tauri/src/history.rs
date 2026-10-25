@@ -197,6 +197,26 @@ fn chrono_like_ts() -> String {
     format!("rec_{now}")
 }
 
+/// 取 wav 的 data chunk(自测回放用)——从 recording.rs 归位(阶段A 第2步):
+/// WAV 封装(wav_header)与解封装同住。遍历 chunk 跳过 FLLR 填充块(C40 教训:
+/// 真实录音 wav 的 data 不在固定 offset 44)。
+pub fn wav_data_chunk(raw: &[u8]) -> Option<Vec<u8>> {
+    if raw.len() < 44 || &raw[0..4] != b"RIFF" {
+        return None;
+    }
+    let mut i = 12usize;
+    while i + 8 <= raw.len() {
+        let id = &raw[i..i + 4];
+        let size = u32::from_le_bytes([raw[i + 4], raw[i + 5], raw[i + 6], raw[i + 7]]) as usize;
+        if id == b"data" {
+            let end = (i + 8 + size).min(raw.len());
+            return Some(raw[i + 8..end].to_vec());
+        }
+        i += 8 + size + (size % 2);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +283,39 @@ mod tests {
         let back: HistoryRecord = serde_json::from_str(&line).unwrap();
         assert_eq!(back.final_text, "谢克数学");
         assert_eq!(back.duration_ms, 1200);
+    }
+}
+
+#[cfg(test)]
+mod wav_tests {
+    use super::wav_data_chunk;
+
+    #[test]
+    fn wav_data_chunk_skips_fllr_padding() {
+        // C40 回归: 真实录音 wav 有 FLLR 填充块, data 不在 offset 44(随 wav_data_chunk 从 recording.rs 迁来)
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(1000u32).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&(16u32).to_le_bytes());
+        w.extend_from_slice(&[0u8; 16]);
+        w.extend_from_slice(b"FLLR");
+        w.extend_from_slice(&(4044u32).to_le_bytes());
+        w.extend_from_slice(&vec![0xEEu8; 4044]);
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&(10u32).to_le_bytes());
+        w.extend_from_slice(b"0123456789");
+        let pcm = wav_data_chunk(&w).unwrap();
+        assert_eq!(pcm, b"0123456789");
+    }
+
+    #[test]
+    fn wav_data_chunk_rejects_garbage() {
+        assert!(wav_data_chunk(b"").is_none());
+        assert!(wav_data_chunk(b"RIFFshort").is_none());
+        assert!(wav_data_chunk(b"NOTAWAVE........").is_none());
+        assert!(wav_data_chunk(b"not a wav file at all....").is_none());
     }
 }
 
