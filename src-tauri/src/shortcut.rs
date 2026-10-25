@@ -13,36 +13,50 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
-// ── Esc 取消热键(录音期间动态注册, global-shortcut 插件; 回调只发信号 C13/C26) ──
-use tauri::Manager;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState as GsState};
+use tauri::Manager; // suspend_all/resume_all 的 app.state::<ShortcutState>()
 
-use crate::{transcription_coordinator::CoordCmd, CTRL_TX};
+// ── Esc 取消热键(录音期间动态起停) ──
+// 根因修复(2026-10-24 用户真机反馈"Esc 没反应"): 旧实现用 global_shortcut 注册
+// 单键 "escape"——Carbon 热键精确匹配, 而 hold 模式按住热键说话时手不离
+// ctrl+option+cmd, 此时按 Esc 是"带修饰键的 Esc", 永远匹配不上单键注册,
+// Cancel 根本发不出去(日志零痕迹)。改 handy-keys KeyboardListener 全键观察:
+// 任意修饰键状态下识别 Esc key_down 即取消(capture 录制同款监听器)。
+static ESC_STOP: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
 
-pub static ESC_SHORTCUT: Mutex<Option<Shortcut>> = Mutex::new(None);
-
-pub fn register_esc(app: &tauri::AppHandle) {
-    if let Ok(esc) = "escape".parse::<Shortcut>() {
-        let gs = app.global_shortcut();
-        if gs
-            .on_shortcut(esc.clone(), |_app, _sc, event| {
-                if event.state == GsState::Pressed {
-                    let tx = CTRL_TX.lock().unwrap().clone();
-                    if let Some(tx) = tx {
-                        let _ = tx.send(CoordCmd::Cancel);
-                    }
-                }
-            })
-            .is_ok()
-        {
-            *ESC_SHORTCUT.lock().unwrap() = Some(esc);
+pub fn esc_listen_begin() {
+    let listener = match handy_keys::KeyboardListener::new() {
+        Ok(l) => l,
+        Err(e) => {
+            crate::log::elog(&format!("[shortcut] Esc 监听创建失败(需辅助功能): {e}"));
+            return;
         }
-    }
+    };
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    *ESC_STOP.lock().unwrap() = Some(stop_tx);
+    std::thread::spawn(move || {
+        loop {
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+            while let Some(ev) = listener.try_recv() {
+                if ev.is_key_down && ev.key == Some(handy_keys::Key::Escape) {
+                    crate::log::elog(&format!(
+                        "[shortcut] Esc 取消命中(修饰键={:?})",
+                        ev.modifiers
+                    ));
+                    crate::send_cancel();
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        crate::log::elog("[shortcut] Esc 监听退出");
+    });
+    crate::log::elog("[shortcut] Esc 监听开始");
 }
 
-pub fn unregister_esc(app: &tauri::AppHandle) {
-    if let Some(esc) = ESC_SHORTCUT.lock().unwrap().take() {
-        let _ = app.global_shortcut().unregister(esc);
+pub fn esc_listen_end() {
+    if let Some(tx) = ESC_STOP.lock().unwrap().take() {
+        let _ = tx.send(());
     }
 }
 

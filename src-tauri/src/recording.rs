@@ -14,7 +14,7 @@ use crate::delivery;
 use crate::engine;
 use crate::pipeline;
 use crate::settings::{self, Config};
-use crate::shortcut::{register_esc, unregister_esc};
+use crate::shortcut::{esc_listen_begin, esc_listen_end};
 use crate::{log, AppState};
 
 /// 一次录音会话的完整状态——生命周期与按住-松开严格一致
@@ -116,7 +116,7 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
 
 /// 会话清理: stop/abort 共用——注销 esc/提示音, 一个不漏
 fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cue>) {
-    unregister_esc(app);
+    esc_listen_end();
     if let Some(cue) = cue {
         let _ = settings::get_config(app.clone()).map(|c| {
             if c.audio_feedback {
@@ -251,7 +251,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             screenshot: shot_slot,
         });
     }
-    register_esc(&app);
+    esc_listen_begin();
     // 按下即显示浮窗（截图在后台进行，不参与显示顺序）
     show_recording_ui(&app, &target.display);
     spawn_level_loop(app.clone(), cancel.clone(), level);
