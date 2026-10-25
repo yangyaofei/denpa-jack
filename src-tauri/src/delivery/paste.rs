@@ -270,17 +270,36 @@ fn spawn_waiter(pending: Arc<Mutex<Pending>>, app_handle: AppHandle) {
     });
 }
 
-/// 回执式粘贴入口(主线程调用)。Ok = 已发布+已注入, 恢复异步完成。
-pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Result<(), String> {
-    flush_pending(app_handle);
+/// 进入交付前的原剪贴板快照(D3): 必须在 deliver() 第一次写剪贴板之前取——
+/// reliable_paste 时点的剪贴板已被无条件写入的转写文本占据,
+/// 在那里快照再"恢复"等于把转写文本恢复回去, restore_clipboard 形同虚设。
+pub struct ClipboardSnapshot {
+    pub text: Option<String>,
+    pub image: Option<tauri::image::Image<'static>>,
+}
 
-    let clipboard = app_handle.clipboard();
-    let saved_text = clipboard.read_text().ok().filter(|t| !t.is_empty());
-    let saved_image = if saved_text.is_none() {
-        clipboard.read_image().ok().map(|image| image.to_owned())
-    } else {
-        None
-    };
+impl ClipboardSnapshot {
+    pub fn take(app_handle: &AppHandle) -> Self {
+        let clipboard = app_handle.clipboard();
+        let text = clipboard.read_text().ok().filter(|t| !t.is_empty());
+        let image = if text.is_none() {
+            clipboard.read_image().ok().map(|image| image.to_owned())
+        } else {
+            None
+        };
+        Self { text, image }
+    }
+}
+
+/// 回执式粘贴入口(主线程调用)。Ok = 已发布+已注入, 恢复异步完成。
+/// `saved`: 交付前的原剪贴板快照(调用方在写剪贴板前取, 见 ClipboardSnapshot)。
+pub fn reliable_paste(
+    text: &str,
+    app_handle: &AppHandle,
+    cfg: &Config,
+    saved: ClipboardSnapshot,
+) -> Result<(), String> {
+    flush_pending(app_handle);
 
     let state = Arc::new(Mutex::new(TxState::new()));
     let provider = PasteProvider::new(state.clone(), text.to_string());
@@ -314,8 +333,8 @@ pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Resul
 
     let pending = Arc::new(Mutex::new(Pending {
         state,
-        saved_text,
-        saved_image,
+        saved_text: saved.text,
+        saved_image: saved.image,
         change_count,
         provider: Some(provider),
         preserve_transcript: !cfg.restore_clipboard,

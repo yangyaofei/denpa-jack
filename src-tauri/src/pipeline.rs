@@ -262,6 +262,9 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         "[deliver] ax_trusted={ax_ok} focus_bundle={:?} focus_ok={focus_ok}",
         focus.bundle
     ));
+    // D3: 原剪贴板快照必须在第一次写剪贴板之前取——粘贴回执后的"恢复"恢复的是这份,
+    // 旧实现在 reliable_paste 内部快照, 读到的是已写入的转写文本, 恢复=没恢复。
+    let saved = crate::delivery::paste::ClipboardSnapshot::take(app);
     // 焦点是本 app(设置窗等) → 只复制, 粘贴到自身无意义
     if focus.bundle.as_deref() == Some(crate::settings::APP_ID) {
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
@@ -298,8 +301,9 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     }
     // 5) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
     let text2 = text.to_string();
+    let saved2 = saved;
     let r = app.run_on_main_thread(move || {
-        let _ = crate::delivery::paste::reliable_paste(&text2, &app2_h, &cfg_h);
+        let _ = crate::delivery::paste::reliable_paste(&text2, &app2_h, &cfg_h, saved2);
     });
     if r.is_err() {
         // 审计#11: 兜底也先写文本再注入(Handy clipboard.rs:74 注入失败路径同样先写)
