@@ -1,7 +1,10 @@
 // 按键→录音的极简映射(用户定则, 替换 Handy 状态机):
 //   Pressed  → Idle 时开始录音
 //   Released → 录音中则停止并转写
-//   Cancel(Esc) → 录音中则丢弃
+//   Cancel(Esc) → 录音中则丢弃; 不在录音中则取消最近一个在途段(R2:
+//                 取消窗口=按下热键到交付完成, 不是只限录音中——
+//                 用户实际用法是松开热键后看它转写/润色时反悔才按 Esc,
+//                 旧实现监听窗口绑在录音期, 用户按 Esc 时监听器已退出)
 //   转写中的下一次按下: 直接允许开新录音(交付各自独立, 不互相阻塞)
 // 线程模型不变: 快捷键回调只发信号, 本线程执行效果(C13/C26)
 use std::sync::mpsc::{Receiver, Sender};
@@ -23,6 +26,9 @@ pub enum Effect {
     Start,
     Stop,
     Abort,
+    /// R2: 不在录音中收到 Cancel → 请求取消最近一个在途段。
+    /// 协调器是纯状态机, 不知道队列——是否真有在途段由效果线程查队列决定(空则 no-op)。
+    CancelQueued,
 }
 
 pub fn spawn(
@@ -69,7 +75,8 @@ pub fn spawn(
                         recording = false;
                         Some(Effect::Abort)
                     } else {
-                        None
+                        // R2: 松开后到交付完成之间, Esc 逐段取消在途段
+                        Some(Effect::CancelQueued)
                     }
                 }
                 CoordCmd::StartResult { started } => {
@@ -202,8 +209,35 @@ mod tests {
         );
     }
     #[test]
-    fn cancel_when_idle_noop() {
-        assert_eq!(drive(vec![CoordCmd::Cancel]), vec![]);
+    fn cancel_when_idle_fires_cancel_queued() {
+        // R2: 松开后到交付完成之间, Esc 也要能取消在途段——协调器无从知道队列,
+        // 无条件发 CancelQueued, 由效果线程查队列决定实际动作
+        assert_eq!(drive(vec![CoordCmd::Cancel]), vec![Effect::CancelQueued]);
+    }
+    #[test]
+    fn cancel_after_stop_cancels_queued_segment() {
+        // 录一段松手(段进队列在途)再按 Esc: 取消该段, 不是 no-op
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
+                CoordCmd::Cancel,
+            ]),
+            vec![Effect::Start, Effect::Stop, Effect::CancelQueued]
+        );
+    }
+    #[test]
+    fn cancel_while_recording_still_aborts() {
+        // 语义不回归: 录音中 Esc 仍然是丢弃当前段(Abort)
+        assert_eq!(
+            drive(vec![
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Input { pressed: false, activation: "hold".into() },
+                CoordCmd::Input { pressed: true, activation: "hold".into() },
+                CoordCmd::Cancel,
+            ]),
+            vec![Effect::Start, Effect::Stop, Effect::Start, Effect::Abort]
+        );
     }
 
     // B5 超长到期: 录音中 → 等价松开(Stop); 空闲 → 忽略

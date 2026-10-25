@@ -183,6 +183,7 @@ pub fn run() {
                         Effect::Start => recording::ctrl_start(app_ctrl.clone(), &st),
                         Effect::Stop => recording::ctrl_stop(app_ctrl.clone(), &st),
                         Effect::Abort => recording::ctrl_abort(&app_ctrl, &st),
+                        Effect::CancelQueued => recording::ctrl_cancel_queued(&app_ctrl),
                     };
                     if let Err(e) = &r {
                         log::log(&app_ctrl, &format!("effect {effect:?} 失败: {e}"));

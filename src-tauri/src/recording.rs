@@ -114,9 +114,12 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
     });
 }
 
-/// 会话清理: stop/abort 共用——注销 esc/提示音, 一个不漏
+/// 会话清理: stop/abort 共用——提示音一个不漏。
+/// Esc 监听不再在这里关(R2): 正常 stop 后段还在途(取消窗口=到交付完成),
+/// 由段终态出队/NoSpeech 时的 esc_maybe_end() 收尾; abort/太短路径同样
+/// 调 esc_maybe_end(它自己判断队列与录音态)。
 fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cue>) {
-    esc_listen_end();
+    esc_maybe_end();
     if let Some(cue) = cue {
         let _ = config::get_config(app.clone()).map(|c| {
             if c.audio_feedback {
@@ -339,6 +342,42 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     Ok(())
 }
 
+/// R2: 取消最近一个在途段(排队/转写中)。多段在途时只取消最新一段——
+/// 浮窗当前显示的就是它; 连按 Esc 逐段往回取消。无在途段时 no-op。
+/// 标记进 CANCELLED_GENS, 消费由 post_process 两道闸完成(短路或拦交付)。
+pub fn ctrl_cancel_queued(app: &tauri::AppHandle) -> Result<(), String> {
+    let gen = {
+        let c = crate::core::lock();
+        c.queue
+            .items
+            .iter()
+            .rev()
+            .find(|s| {
+                matches!(s.state, crate::core::SegState::Queued | crate::core::SegState::Transcribing)
+                    && s.ho.gen != 0
+            })
+            .map(|s| s.ho.gen)
+    };
+    let Some(gen) = gen else {
+        log::elog("[queue] Esc: 无在途段, 忽略");
+        return Ok(());
+    };
+    crate::pipeline::mark_cancelled(gen);
+    log::elog(&format!("[queue] Esc: 已标记取消段 gen={gen}"));
+    crate::hud::notify(app, "已取消");
+    Ok(())
+}
+
+/// R2: Esc 监听收尾的统一判据——"既没在录音, 队列也没活"才真正停监听。
+/// 旧实现把监听窗口绑在录音期(松手即停), 而取消窗口是"到交付完成",
+/// 两个窗口不一致导致用户的 Esc 永远没人听(R2 根因)。
+/// 调用点: 段终态出队/NoSpeech/abort/太短丢弃。
+pub fn esc_maybe_end() {
+    if !crate::segment_queue::busy() && !crate::core::session_recording() {
+        esc_listen_end();
+    }
+}
+
 pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> Result<(), String> {
     let sess = {
         let mut st = state.lock().unwrap();
@@ -349,11 +388,11 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     crate::core::session_ended();
     // 转写中 esc: 标记本代被取消——若 Result 已在途, 交付层据此跳过粘贴
     if let Some(s) = sess.as_ref() {
-        pipeline::CANCELLED_GEN.store(s.gen, std::sync::atomic::Ordering::SeqCst);
+        pipeline::mark_cancelled(s.gen);
     } else {
         // 审计#4: session 已 take(Result 在途/post_process 已跑)——用最近一代 gen 兜底取消
         if let Some(g) = LAST_GEN.lock().unwrap().take() {
-            pipeline::CANCELLED_GEN.store(g, std::sync::atomic::Ordering::SeqCst);
+            pipeline::mark_cancelled(g);
         }
     }
     // 会话 drop=cancel 置位; 无论有无会话, 清理路径一致
@@ -363,6 +402,7 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
         crate::engine::send_current(app, engine::Cmd::Abort);
     }
     session_cleanup(app, None);
+    crate::hud::notify(app, "已取消");
     crate::hud::hide(app);
     crate::tray_events::refresh_status(app);
     log::log(app, "录音取消(esc)");
@@ -371,13 +411,11 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     // 已搬函数的用例随迁(阶段A 第2步): budget_hotwords→dict.rs, resolve_asr→engine/mod.rs, wav_data_chunk→history.rs
 }
 
 #[cfg(test)]
 mod gap_tests {
-    use super::*;
     use crate::config::Config;
 
     #[test]

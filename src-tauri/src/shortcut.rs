@@ -24,6 +24,11 @@ use tauri::Manager; // suspend_all/resume_all 的 app.state::<ShortcutState>()
 static ESC_STOP: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
 
 pub fn esc_listen_begin() {
+    // 幂等(R2): 多段连续录音时, 前一段的监听还开着(取消窗口=到交付完成),
+    // 二次 begin 不能再起线程——ESC_STOP 单槽被覆盖后旧线程泄漏
+    if ESC_STOP.lock().unwrap().is_some() {
+        return;
+    }
     let listener = match handy_keys::KeyboardListener::new() {
         Ok(l) => l,
         Err(e) => {

@@ -17,7 +17,41 @@ pub struct SessionHandoff {
 }
 
 /// 转写中取消: abort 时写入被放弃的会话代, 交付前校验(Handy cancel_generation 等价)
-pub static CANCELLED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 被取消的会话代集合(R2: 多段连续取消——旧单槽 AtomicU64 在"取消A→再录B→再取消B"时
+/// 把 A 的标记冲掉, A 照样交付, 审核a-3)。消费即删, 上限 16 防御性截断。
+pub static CANCELLED_GENS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+/// 标记一代被取消(Esc)。段在队列里被标记 → post_process 开头闸直接短路;
+/// 段已开跑 → 交付前闸拦截。
+pub fn mark_cancelled(gen: u64) {
+    if gen == 0 {
+        return; // 0=不参与取消的会话(rerun 构造), 不标记
+    }
+    let mut g = CANCELLED_GENS.lock().unwrap();
+    if !g.contains(&gen) {
+        g.push(gen);
+    }
+    let len = g.len();
+    if len > 16 {
+        g.drain(0..len - 16);
+    }
+}
+
+/// 该代是否被取消——**消费即删**: 两道闸谁先到谁消费, 第二道闸不再命中,
+/// 集合不会随时间膨胀。
+fn take_cancelled(gen: u64) -> bool {
+    if gen == 0 {
+        return false;
+    }
+    let mut g = CANCELLED_GENS.lock().unwrap();
+    match g.iter().position(|&x| x == gen) {
+        Some(pos) => {
+            g.remove(pos);
+            true
+        }
+        None => false,
+    }
+}
 pub static SESSION_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 后处理结果 —— 分段队列据此决定"出队"还是"保留为失败段等重试"(见 segment_queue.rs)
@@ -38,6 +72,30 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     crate::log::elog(&format!("[pipeline] begin raw={:.40}", raw));
     #[cfg(not(debug_assertions))]
     crate::log::elog("[pipeline] begin");
+
+    // R2 第一道闸(段还没开跑就被 Esc): 直接短路到"cancelled 入历史",
+    // 不跑词典/LLM/交付——被取消的段连算都不用算。第二道闸在交付前(LLM 进行中标记的场景)。
+    if take_cancelled(ho.gen) {
+        // 引擎名: 取消短路发生在 cfg 读取前, 这里单独解析(配置坏了取消语义照样成立)
+        let engine_name = crate::config::get_config(app.clone())
+            .ok()
+            .map(|c| if ho.engine.is_empty() { c.active_asr_id.clone() } else { ho.engine.clone() })
+            .unwrap_or_else(|| ho.engine.clone());
+        crate::log::elog("[pipeline] 会话已被取消(esc): 队列段短路, 只入历史");
+        crate::history::append(&app, &crate::history::HistoryRecord {
+            llm_thinking: None,
+            ts: now_local_pub(),
+            engine: engine_name,
+            raw: raw.clone(),
+            final_text: String::new(),
+            llm_used: false,
+            delivered: "cancelled".to_string(),
+            audio_path: ho.audio_path.clone().unwrap_or_default(),
+            warning: None,
+            duration_ms: ho.duration_ms,
+        });
+        return Outcome::Delivered;
+    }
     let cfg: Config = match crate::config::get_config(app.clone()) {
         Ok(c) => c,
         Err(e) => {
@@ -159,7 +217,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     //    因为它是"输出形态"而不是"识别结果"。发真回车键是另一回事(会把内容直接提交出去), 不做。
     let out_text = trailing_newlines_text(&final_text, cfg.trailing_newlines);
     crate::log::elog(&format!("[pipeline] deliver begin clip_only={}", cfg.clipboard_only));
-    let cancelled = ho.gen != 0 && ho.gen == CANCELLED_GEN.load(std::sync::atomic::Ordering::SeqCst);
+    // R2 第二道闸(段开跑后才被 Esc——典型: LLM 进行中按取消): 交付前拦截, 只入历史。
+    // 消费即删: 与第一道闸互斥, 先到者消费后另一道不再命中。
+    let cancelled = take_cancelled(ho.gen);
     let delivered = if cancelled {
         crate::log::elog("[pipeline] 会话已被取消(esc): 只入历史不粘贴");
         "cancelled".to_string()
@@ -372,7 +432,7 @@ fn trailing_newlines_text(text: &str, n: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ax_paste_only, format_epoch_utc8, trailing_newlines_text};
+    use super::{ax_paste_only, format_epoch_utc8, mark_cancelled, take_cancelled, trailing_newlines_text, CANCELLED_GENS};
 
     #[test]
     fn utc8_crosses_midnight_correctly() {
@@ -404,5 +464,30 @@ mod tests {
         assert!(!ax_paste_only(&apps, Some("com.apple.Preview")), "未命中");
         assert!(!ax_paste_only(&apps, None), "拿不到 bundle 不拦截");
         assert!(!ax_paste_only(&[], Some("com.google.GeminiMacOS")), "空名单不拦截");
+    }
+
+    #[test]
+    fn cancelled_gens_consume_once_and_cap() {
+        // R2: 取消集合消费即删(两道闸互斥), 容量上限 16 防御性截断, gen=0 不参与
+        let mut g = CANCELLED_GENS.lock().unwrap();
+        g.clear();
+        drop(g);
+        mark_cancelled(0);
+        assert!(!take_cancelled(0), "gen=0 不参与取消(rerun 会话)");
+        mark_cancelled(7);
+        assert!(take_cancelled(7), "标记后可消费");
+        assert!(!take_cancelled(7), "消费即删: 第二道闸不再命中");
+        mark_cancelled(7);
+        assert!(!take_cancelled(8), "未标记的代不误伤");
+        {
+            let mut g = CANCELLED_GENS.lock().unwrap();
+            g.clear();
+            for i in 1..=20 { g.push(i); }
+            drop(g);
+        }
+        mark_cancelled(21);
+        let g = CANCELLED_GENS.lock().unwrap();
+        assert_eq!(g.len(), 16, "上限 16: 超出截断最旧");
+        assert!(*g.last().unwrap() == 21, "最新标记保留");
     }
 }

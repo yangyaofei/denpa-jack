@@ -98,6 +98,7 @@ pub fn start(app: tauri::AppHandle) {
         // 3) 回写: 成功出队; 失败保留(可重试), 并把音频与原文补进历史(不丢段)。
         //    失败留痕由这里统一写(pipeline 交付失败不再自写历史——修双写, 审核a-6)
         let mut fail_record: Option<(String, String, bool, crate::pipeline::SessionHandoff, String)> = None;
+        let mut esc_check = false;
         {
             let mut c = crate::core::lock();
             if let Some(pos) = c.queue.items.iter().position(|s| s.id == id) {
@@ -105,6 +106,9 @@ pub fn start(app: tauri::AppHandle) {
                     WorkOutcome::Done => {
                         c.queue.items.remove(pos);
                         c.version += 1;
+                        // R2: 段终态后可能要收 Esc 监听(取消窗口=到交付完成)。
+                        // 判断放临界区外(esc_maybe_end 自己加锁读队列与录音态)
+                        esc_check = true;
                     }
                     WorkOutcome::Failed { reason, final_text, llm_used } => {
                         let s = &mut c.queue.items[pos];
@@ -122,6 +126,9 @@ pub fn start(app: tauri::AppHandle) {
         if let Some((raw, final_text, llm_used, ho, reason)) = fail_record {
             let p = record_failed(&app, &raw, &final_text, llm_used, &ho, &reason);
             log_debug(&format!("后处理失败已入历史 audio={:?}", p));
+        }
+        if esc_check {
+            crate::recording::esc_maybe_end();
         }
         log_debug("队列状态变化");
     });
@@ -247,6 +254,8 @@ pub fn record_no_speech(
     };
     crate::history::append(app, &rec);
     log_debug("空转写已入历史(不进队列)");
+    // R2: NoSpeech 也是段终态(不进队列)——收 Esc 监听(统一判据: 队列无活+不在录)
+    crate::recording::esc_maybe_end();
     audio
 }
 
@@ -440,8 +449,15 @@ fn log_debug(what: &str) {
 mod tests {
     use super::*;
 
+    /// 队列域测试互斥: 多个测试并行操作同一个 core.queue(push/reset 竞争),
+    /// 不加锁会在并发窗口下互相清空——曾因新增测试改变调度时序而暴露
+    fn queue_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::core::TEST_SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn fifo_order_and_states() {
+        let _g = queue_guard();
         debug_reset();
         for id in 1..=3u64 {
             debug_push(id, SegState::Queued);
@@ -465,6 +481,7 @@ mod tests {
 
     #[test]
     fn failed_segment_keeps_position_and_does_not_block() {
+        let _g = queue_guard();
         debug_reset();
         debug_push(1, SegState::Failed);
         debug_push(2, SegState::Queued);
@@ -483,6 +500,7 @@ mod tests {
     // 轮询方(hud::poll)靠版本号变化才知道队列变了要重绘
     #[test]
     fn queue_migration_bumps_core_version() {
+        let _g = queue_guard();
         debug_reset();
         let v0 = crate::core::version();
         debug_push(1, SegState::Queued);
