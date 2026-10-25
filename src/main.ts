@@ -35,7 +35,10 @@ import { aboutPage } from "./app/about";
 const pageHtml: Record<string, string> = { asr: pageAsr, history: pageHistory, general: pageGeneral, dict: pageDict, llm: pageLlm, about: pageAbout };
 for (const [name, html] of Object.entries(pageHtml)) {
   const slot = document.querySelector(`[data-page="${name}"]`);
-  if (slot) { slot.innerHTML = html; slot.removeAttribute("data-page"); }
+  // data-page 属性保留(不 removeAttribute): 它是布局钩子——历史页的独立滚动链
+  // .content-in > [data-page="history"] 依赖它; 一度被删导致选择器永不命中,
+  // 两栏滚动联动两轮修复无效(2026-10-25 ui 自测探针 dp=false 抓到)
+  if (slot) { slot.innerHTML = html; }
 }
 // 实测(2026-09-15): 同一个窗口里 app() 被求值两次 → 两个组件实例, 轮询与 [ui] 日志成对出现。
 // 第二次实例的来源没有定位到, 这里加两道幂等守卫: 每个窗口只启动一次 Alpine, 且只初始化一次。

@@ -386,6 +386,64 @@ fn run_ui_chain(app: tauri::AppHandle) {
     let kept: Vec<&str> = raw
         .lines().filter(|l| !l.contains("\"ts\":\"PROBE\"")).collect();
     std::fs::write(&jsonl, kept.join("\n") + "\n").ok();
+    // 4) 滚动链(真机渲染断言): 历史页两栏必须各自独立滚动, content-in 不滚。
+    //    CSS 链 content-in(flex列)→[data-page](受限)→page-wide→split→两栏
+    //    断一层都会表现为"左右联动"(用户两轮反馈复现)——纯静态分析证明不了,
+    //    必须真机渲染环境量高度
+    {
+        use tauri::Manager;
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.eval(r#"
+              (function () {
+                const send = (m) => { try { window.__TAURI_INTERNALS__.invoke('ui_log', { msg: m }); } catch (e) { console.log(m); } };
+                // 等 Alpine 渲染完(section 注入且可查), 最多 8s——eval 可能落在模块加载前,
+                // 固定延时会在页面没渲染完时就判定 missing(前两轮 missing 即此)
+                const wait = (n) => {
+                  const sec = document.querySelector('section.page-wide');
+                  const list = document.querySelector('.hist-list');
+                  const right = document.querySelector('.pane-right');
+                  const ci = document.querySelector('.content-in');
+                  const dp = document.querySelector('[data-page="history"]');
+                  if ((!sec || !list || !right || !ci || !dp) && n < 80) return setTimeout(() => wait(n + 1), 100);
+                  if (!sec || !list || !right || !ci || !dp) {
+                    send('SCROLL-PROBE missing ready=' + document.readyState +
+                         ' sec=' + !!sec + ' list=' + !!list + ' right=' + !!right + ' ci=' + !!ci + ' dp=' + !!dp);
+                    return;
+                  }
+                  for (let i = 0; i < 60; i++) {
+                    const d = document.createElement('div'); d.className = 'hist-item'; d.textContent = 'probe ' + i; list.appendChild(d);
+                  }
+                  for (let i = 0; i < 40; i++) {
+                    const p = document.createElement('p'); p.textContent = 'detail ' + i; (right.querySelector('.detail') || right).appendChild(p);
+                  }
+                  list.scrollTop = list.scrollHeight; right.scrollTop = 300;
+                  const r = {
+                    secDisplay: getComputedStyle(sec).display,
+                    dpDisplay: getComputedStyle(dp).display,
+                    listScrollable: list.scrollHeight > list.clientHeight,
+                    rightScrollable: right.scrollHeight > right.clientHeight,
+                    ciScrollable: ci.scrollHeight > ci.clientHeight,
+                    listAtBottom: list.scrollTop + list.clientHeight >= list.scrollHeight - 2,
+                    ciStayed: ci.scrollTop === 0,
+                  };
+                  send('SCROLL-PROBE ' + JSON.stringify(r));
+                };
+                wait(0);
+              })();
+            "#);
+            std::thread::sleep(std::time::Duration::from_millis(9500));
+            let log = std::fs::read_to_string(dir.join("app.log")).unwrap_or_default();
+            let line = log.lines().rev().find(|l| l.contains("SCROLL-PROBE")).unwrap_or("");
+            crate::log::elog(&format!("[ui-chain] 滚动链: {}", line.trim()));
+            assert!(line.contains("SCROLL-PROBE {"), "滚动探针未回传");
+            assert!(!line.contains("missing"), "滚动探针找不到元素");
+            assert!(line.contains("\"listScrollable\":true"), "左栏不可独立滚动");
+            assert!(line.contains("\"rightScrollable\":true"), "右栏不可独立滚动");
+            assert!(line.contains("\"ciScrollable\":false"), "content-in 仍在整页滚(两栏联动根因)");
+            assert!(line.contains("\"listAtBottom\":true"), "左栏滚不到底");
+            assert!(line.contains("\"ciStayed\":true"), "滚左栏时整页跟着动");
+        }
+    }
     crate::log::elog("[ui-chain] PASS: 数据链与磁盘一致+实时性 OK");
     app.exit(0);
 }
