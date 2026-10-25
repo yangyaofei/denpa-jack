@@ -73,7 +73,7 @@ async fn run(
                     // 中途取消：告诉网关丢弃会话再关（不出结果，与 doubao Abort 同语义）
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(
                         json!({"type": "response.cancel"}).to_string().into())).await;
-                    let _ = sink.close().await;
+                    let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
                     break;
                 }
                 Some(Cmd::Feed(pcm16)) => {
@@ -103,26 +103,26 @@ async fn run(
                             "conversation.item.input_audio_transcription.completed" => {
                                 let t = v["transcript"].as_str().unwrap_or("");
                                 super::settle(&emit, t);
-                                let _ = sink.close().await;
+                                let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
                                 return;
                             }
                             "conversation.item.input_audio_transcription.failed" => {
                                 let m = v["error"].as_str().unwrap_or("未知错误");
                                 emit(AsrEvent::Error(format!("本地 ASR 转写失败: {m}")));
-                                let _ = sink.close().await;
+                                let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
                                 return;
                             }
                             "error" => {
                                 let m = v["message"].as_str().unwrap_or("未知错误");
                                 emit(AsrEvent::Error(m.to_string()));
-                                let _ = sink.close().await;
+                                let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
                                 return;
                             }
                             _ => {}
                         }
                     }
                     emit(AsrEvent::Error("本地 ASR 收尾超时（未收到最终结果）".into()));
-                    let _ = sink.close().await;
+                    let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
                     break;
                 }
             },
