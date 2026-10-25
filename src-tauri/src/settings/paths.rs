@@ -52,12 +52,9 @@ pub fn resolve_data_dir(base: &std::path::Path, configured: &str) -> PathBuf {
 
 static DATA_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
-/// 配置变更后必须清缓存（否则数据仍写到旧目录）
-pub fn invalidate_data_dir_cache() {
-    *DATA_ROOT.lock().unwrap() = None;
-}
-
-/// 数据根目录（带缓存；save_config 时失效）。history/recordings/llm_logs/app.log 都从这里派生。
+/// 数据根目录（带缓存，启动后恒定——D10: 配置改 data_dir 不中途切换，重启才生效；
+/// app.log 句柄/history.jsonl 正在写的文件不该被切到新目录造成两边各半）。
+/// history/recordings/llm_logs/app.log 都从这里派生。
 pub fn data_dir(app: &tauri::AppHandle) -> PathBuf {
     if let Some(p) = DATA_ROOT.lock().unwrap().clone() {
         return p;

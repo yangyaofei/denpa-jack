@@ -51,6 +51,8 @@ export interface AppThis {
   // —— 公共状态(common) ——
   section: string; search: string; recording: boolean; partial: string; result: string;
   error: string; finalInfo: any; cfg: Config | null;
+  /** 保存前快照的 data_dir(D10 提示用) */
+  _prevDataDir: string;
   permWarning: string; perms: any[]; version: string;
   settingsOpen: boolean; prioSel: number;
   autostartOn: boolean; // 未在数据里声明的动态字段(toggleAutostart 用, 保留现状)

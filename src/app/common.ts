@@ -15,6 +15,8 @@ export function common(this: AppThis) {
     error: "",
     finalInfo: null as any,
     cfg: null as AppThis["cfg"],
+    /** 保存前快照的 data_dir: saveCfg 比对, 变了提示重启生效(D10——后端缓存不中途切换) */
+    _prevDataDir: "" as string,
     permWarning: "",
     // 权限总检查(麦克风 + 辅助功能): 启动即查, 缺项顶部横幅 + 通用页卡片
     perms: [] as any[],
@@ -121,6 +123,7 @@ export function common(this: AppThis) {
       try {
         this.cfg = await invoke("get_config");
         this.axPasteOnlyText = (this.cfg.ax_paste_only_apps ?? []).join("\n");
+        this._prevDataDir = this.cfg.data_dir ?? "";
         if (typeof this.refreshHotwords === "function") this.refreshHotwords();
       } catch (e) { this.error = String(e); }
     },
@@ -131,6 +134,11 @@ export function common(this: AppThis) {
         new Set(this.axPasteOnlyText.split("\n").map((s) => s.trim()).filter((s) => s.length > 0)),
       );
       try { await invoke("save_config", { config: this.cfg });
+      // D10: 数据目录变更不中途切换(app.log/历史写到一半分叉), 重启后生效
+      if ((this.cfg.data_dir ?? "") !== this._prevDataDir) {
+        alert("数据目录已更改：将在重启应用后生效，当前会话仍使用原目录。");
+        this._prevDataDir = this.cfg.data_dir ?? "";
+      }
       try { this.activeMic = await invoke<[string, string] | null>("get_active_mic"); } catch {} }
       catch (e) { this.error = String(e); }
     },

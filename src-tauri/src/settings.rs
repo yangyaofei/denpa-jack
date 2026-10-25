@@ -9,7 +9,7 @@ mod migrate;
 pub mod paths;
 
 pub use paths::{
-    base_dir, config_path, data_dir, data_dir_no_app, invalidate_data_dir_cache,
+    base_dir, config_path, data_dir, data_dir_no_app,
     resolve_data_dir, APP_ID,
 };
 pub(crate) use paths::write_config_atomic;
@@ -424,8 +424,9 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
     // 配置变更可能改麦克风选择(优先级/指定设备): 必须清解析缓存, 否则仍用旧设备
     // (此前 MIC_CACHE 只在 open 失败时失效 → 改优先级后实际仍录旧麦, 用户报“设了 USB 优先却还用内置麦”)
     crate::audio::invalidate_mic_cache();
-    // 配置变更可能改数据目录: 同样必须清缓存, 否则新数据仍写到旧目录
-    invalidate_data_dir_cache();
+    // D10: 数据目录**不**在此失效——中途切换会让 app.log(已打开的句柄)/history.jsonl
+    // 写到一半分叉到新目录, 两边各半。data_dir 缓存只在启动解析一次, 改配置后
+    // 由前端提示"重启生效"(common.ts saveCfg 比对 data_dir 变化)。
     let p = config_path(&app);
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     write_config_atomic(&p, &json).map_err(|e| e.to_string())
