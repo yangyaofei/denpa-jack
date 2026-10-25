@@ -1,0 +1,66 @@
+// 历史页域(阶段A 第5步从 main.ts 拆出): 列表/过滤/重跑/清空/打开音频。
+import { invoke } from "@tauri-apps/api/core";
+import type { AppThis, HistoryRecord } from "./types";
+
+export function historyPage(this: AppThis) {
+  return {
+    history: [] as HistoryRecord[],
+    selHist: null as HistoryRecord | null,
+    histSearch: "",
+    clearArm: false,
+
+    // ── 历史 ──
+    async refreshHistory(this: AppThis) {
+      // E: 详情是快照——列表刷新时按 ts 重找, 保证重转/重跑后详情同步
+      if (this.selHist) {
+        const fresh = (this.history || []).find((h: any) => h.ts === this.selHist.ts);
+        if (fresh) this.selHist = fresh;
+      }
+      try { this.history = await invoke("get_history", { limit: 500 }); }
+      catch (e) { console.error("get_history:", e); }
+    },
+    filteredHist(this: AppThis) {
+      const q = this.histSearch.trim().toLowerCase();
+      if (!q) return this.history;
+      return this.history.filter((h: any) =>
+        (h.raw || "").toLowerCase().includes(q) || (h.final_text || "").toLowerCase().includes(q));
+    },
+    async copyHist(this: AppThis, h: HistoryRecord) {
+      try { await invoke("copy_text", { text: h.final_text }); } catch (e) { console.error(e); }
+    },
+    async openAudio(this: AppThis, h: HistoryRecord) {
+      if (!h.audio_path) return;
+      try {
+        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+        await revealItemInDir(h.audio_path);
+      } catch (e) { console.error(e); }
+    },
+    async playHist(this: AppThis, h: HistoryRecord) {
+      if (!h.audio_path) return;
+      try {
+        const { openPath } = await import("@tauri-apps/plugin-opener");
+        await openPath(h.audio_path);
+      } catch (e) { console.error(e); }
+    },
+    async rerunHist(this: AppThis, h: HistoryRecord) {
+      if (!h.audio_path) { this.error = "该记录无音频, 无法重转"; return; }
+      try {
+        await invoke("rerun_history", { audioPath: h.audio_path });
+        this.error = "";
+      } catch (e: any) { this.error = String(e); }
+    },
+    async clearHist(this: AppThis) {
+      if (!this.clearArm) {
+        this.clearArm = true
+        setTimeout(() => { this.clearArm = false }, 3000)
+        return
+      }
+      if (!confirm("清空全部历史记录?")) return;
+      try {
+        await invoke("clear_history");
+        this.history = [];
+        this.selHist = null;
+      } catch (e) { console.error(e); }
+    },
+  };
+}

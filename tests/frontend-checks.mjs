@@ -18,7 +18,9 @@ if (mainJs) {
 }
 
 // 2) 源码作用域断言: 组件方法不得在模块顶层(深度<=1)被裸调
-const src = readFileSync("src/main.ts", "utf8");
+// (阶段A 第5步后组件逻辑住在 src/app/*.ts, 检查目标跟随)
+const appSrcFiles = ["src/main.ts", ...readdirSync("src/app").filter((f) => f.endsWith(".ts") && f !== "types.ts").map((f) => `src/app/${f}`)];
+const src = appSrcFiles.map((f) => readFileSync(f, "utf8")).join("\n");
 // 去字符串/模板串/注释, 防误计大括号
 const cleaned = src
   .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -50,7 +52,7 @@ for (const m of methods) {
 check("组件方法无模块顶层裸调(C46 根因)", bareCalls === 0);
 
 // 2.5) 死事件监听残留(C43: 事件通道不可达, listen 即死代码)
-for (const f of ["src/main.ts", "src/hud.ts"]) {
+for (const f of appSrcFiles.concat(["src/hud.ts"])) {
   const t = readFileSync(f, "utf8");
   check(`${f} 无 listen 残留`, !/\blisten\s*</.test(t));
 }
@@ -94,7 +96,7 @@ const rsFields = (name) => {
   const body = rs.match(new RegExp(`pub struct ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
   return [...body.matchAll(/pub\s+(\w+)\s*:/g)].map((m) => m[1]);
 };
-const tsBody = (name) => src.match(new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
+const tsBody = (name) => readFileSync("src/app/types.ts", "utf8").match(new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
 for (const name of ["Config", "LlmProfile", "AsrProfile", "DictEntry"]) {
   const body = tsBody(name);
   const missing = rsFields(name).filter((f) => !new RegExp(`\\b${f}\\??\\s*:`).test(body));
@@ -117,7 +119,7 @@ check(
     /"pubkey"/.test(readFileSync("src-tauri/tauri.conf.json", "utf8")) &&
     /createUpdaterArtifacts/.test(readFileSync("src-tauri/tauri.conf.json", "utf8")),
 );
-check("前端用 app_version 取版本", /invoke<string>\("app_version"\)/.test(readFileSync("src/main.ts", "utf8")));
+check("前端用 app_version 取版本", /invoke<string>\("app_version"\)/.test(src));
 check(
   "关于页版本为运行时渲染(非硬编码)",
   /x-text="version/.test(readFileSync("src/pages/about.html", "utf8")),
