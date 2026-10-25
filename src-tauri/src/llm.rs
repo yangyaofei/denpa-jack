@@ -178,6 +178,80 @@ pub struct LlmOut {
     pub text: String,
     /// C50: 思考模型链路(reasoning_content), 存入历史供人工审查
     pub thinking: Option<String>,
+    /// 本次是否走 submit_corrected_text 工具调用(自测展示; 主链路不消费)
+    pub tool_used: bool,
+}
+
+/// LLM 链路自测: 固定测试输入 → 词典纠错 → 真实 LLM 调用 → 各阶段结果。
+/// 业务住 LLM 域(commands 只做参数桥); tool_used 从调用结果直接读, 不再翻日志目录。
+pub struct SelftestReport {
+    pub dict_text: String,
+    pub llm_text: String,
+    pub thinking: Option<String>,
+    pub tool_used: bool,
+    pub latency_ms: u128,
+}
+
+pub async fn selftest(
+    cfg: &crate::config::Config,
+    override_profile: Option<crate::config::LlmProfile>,
+) -> Result<SelftestReport, String> {
+    let raw = "根据配置文件里面我加的 你第一次把把配置不齐。";
+    let (dict_text, _) = crate::dict::TextCorrector {
+        entries: cfg.dict.clone(),
+        normalizations: cfg
+            .normalizations
+            .iter()
+            .map(|r| (r.pattern.clone(), r.replacement.clone()))
+            .collect(),
+    }
+    .correct(raw);
+
+    let prof = match override_profile {
+        Some(p) => p,
+        None => cfg
+            .llm_profiles
+            .iter()
+            .find(|p| p.id == cfg.active_llm_id)
+            .cloned()
+            .ok_or("未找到启用的 LLM 档案")?,
+    };
+    let key = if prof.api_key.is_empty() {
+        cfg.keys.first().cloned().unwrap_or_default()
+    } else {
+        prof.api_key.clone()
+    };
+    if key.is_empty() {
+        return Err("LLM 档案缺 Key(且 Key 池为空)".into());
+    }
+    let opts = LlmOpts {
+        provider: prof.provider.clone(),
+        base_url: prof.base_url.clone(),
+        model: prof.model.clone(),
+        api_key: key,
+        prompt: if prof.prompt.is_empty() {
+            DEFAULT_LLM_PROMPT.to_string()
+        } else {
+            prof.prompt.clone()
+        },
+        thinking: prof.thinking,
+        effort: if prof.effort.is_empty() { "low".into() } else { prof.effort.clone() },
+        timeout_secs: cfg.llm_timeout_secs,
+        max_tokens: cfg.llm_max_tokens,
+        retries: cfg.llm_retries,
+    };
+    let terms: Vec<String> = cfg.dict.iter().map(|d| d.term.clone()).collect();
+    let t0 = std::time::Instant::now();
+    let out = polish(&dict_text.clone(), &terms, &opts, None)
+        .await
+        .map_err(|e| format!("LLM 调用失败: {e}"))?;
+    Ok(SelftestReport {
+        dict_text,
+        llm_text: out.text,
+        thinking: out.thinking,
+        tool_used: out.tool_used,
+        latency_ms: t0.elapsed().as_millis(),
+    })
 }
 
 /// 构造 user 消息内容。
@@ -308,7 +382,7 @@ pub async fn polish(
                 if attempt > 1 {
                     crate::log::elog(&format!("[llm] 第 {attempt} 次尝试成功（共 {attempts} 次机会）"));
                 }
-                return Ok(LlmOut { text: out.text, thinking: out.thinking });
+                return Ok(LlmOut { text: out.text, thinking: out.thinking, tool_used: out.tool_used });
             }
             Err(e) => {
                 dump_call(
@@ -338,6 +412,8 @@ pub async fn polish(
 struct AttemptOk {
     raw: String,
     text: String,
+    /// 本次输出是否走 submit_corrected_text 工具调用(false=content 降级路径)
+    tool_used: bool,
     thinking: Option<String>,
 }
 
@@ -394,8 +470,9 @@ async fn attempt_once(
         });
     }
     let thinking = extract_thinking(&body);
+    let tool_used = used_tool(&body);
     match extract_text(&body) {
-        Some(t) => Ok(AttemptOk { raw, text: t, thinking }),
+        Some(t) => Ok(AttemptOk { raw, text: t, thinking, tool_used }),
         None => Err(AttemptErr {
             kind: "无有效输出".into(),
             detail: body.to_string(),
@@ -413,6 +490,17 @@ fn extract_thinking(body: &Value) -> Option<String> {
 }
 
 /// 从响应体提取修正文本: tool_calls[0].args.corrected_text 优先, 降级 message.content
+/// tool_used 判定(自测展示"是否真走了工具"): 与 extract_text 同一判据, 从调用结果
+/// 直接拿——旧实现读 llm_logs 目录猜最新一条, 既绕路又受并发落盘干扰
+fn used_tool(body: &Value) -> bool {
+    if let Some(args) = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"].as_str() {
+        if let Ok(v) = serde_json::from_str::<Value>(args) {
+            return v["corrected_text"].as_str().is_some();
+        }
+    }
+    false
+}
+
 fn extract_text(body: &Value) -> Option<String> {
     let choice = &body["choices"][0];
     if let Some(args) = choice["message"]["tool_calls"][0]["function"]["arguments"].as_str() {

@@ -254,7 +254,7 @@ pub fn ui_log(app: tauri::AppHandle, msg: String) {
     crate::log::log(&app, &format!("[ui] {msg}"));
 }
 
-/// LLM 链路自检: 固定测试输入 → 词典纠错 → LLM 润色(真实 tool_calls) → 各阶段结果
+/// LLM 链路自检(薄壳): 业务在 llm::selftest——词典纠错+真实调用+tool_used 判定
 #[derive(serde::Serialize)]
 pub struct LlmSelftestResult {
     dict_text: String,
@@ -262,7 +262,6 @@ pub struct LlmSelftestResult {
     pub thinking: Option<String>,
     tool_used: bool,
     latency_ms: u128,
-    error: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -290,93 +289,24 @@ pub async fn llm_selftest(
     profile: Option<LlmSelftestOverride>,
 ) -> Result<LlmSelftestResult, String> {
     let cfg = crate::config::get_config(app.clone())?;
-    let raw = "根据配置文件里面我加的 你第一次把把配置不齐。";
-    let (dict_text, _) = crate::dict::TextCorrector {
-        entries: cfg.dict.clone(),
-        normalizations: cfg
-            .normalizations
-            .iter()
-            .map(|r| (r.pattern.clone(), r.replacement.clone()))
-            .collect(),
-    }
-    .correct(raw);
-
-    let prof = match profile {
-        Some(o) => crate::config::LlmProfile {
-            id: "selftest".into(),
-            name: "selftest".into(),
-            provider: if o.provider.is_empty() { "deepseek".into() } else { o.provider },
-            base_url: o.base_url,
-            model: o.model,
-            api_key: o.api_key,
-            prompt: o.prompt,
-            thinking: o.thinking,
-            effort: if o.effort.is_empty() { "low".into() } else { o.effort },
-        },
-        None => cfg
-            .llm_profiles
-            .iter()
-            .find(|p| p.id == cfg.active_llm_id)
-            .cloned()
-            .ok_or("未找到启用的 LLM 档案")?,
-    };
-    let key = if prof.api_key.is_empty() {
-        cfg.keys.first().cloned().unwrap_or_default()
-    } else {
-        prof.api_key.clone()
-    };
-    if key.is_empty() {
-        return Err("LLM 档案缺 Key(且 Key 池为空)".into());
-    }
-    let opts = crate::llm::LlmOpts {
-        provider: prof.provider.clone(),
-        base_url: prof.base_url.clone(),
-        model: prof.model.clone(),
-        api_key: key,
-        prompt: if prof.prompt.is_empty() {
-            crate::llm::DEFAULT_LLM_PROMPT.to_string()
-        } else {
-            prof.prompt.clone()
-        },
-        thinking: prof.thinking,
-        effort: if prof.effort.is_empty() { "low".into() } else { prof.effort.clone() },
-        timeout_secs: cfg.llm_timeout_secs,
-        max_tokens: cfg.llm_max_tokens,
-        retries: cfg.llm_retries,
-    };
-    let terms: Vec<String> = cfg.dict.iter().map(|d| d.term.clone()).collect();
-    let input = dict_text.clone();
-    let t0 = std::time::Instant::now();
-    let llm_out = crate::llm::polish(&input, &terms, &opts, None)
-        .await
-        .map_err(|e| format!("LLM 调用失败: {e}"))?;
-    let llm_text = llm_out.text;
-    let latency_ms = t0.elapsed().as_millis();
-    // tool_used 判定: 看 llm_logs 最新一条响应里有没有 tool_calls
-    let home = std::env::var("HOME").unwrap_or_default();
-    let log_dir = std::path::PathBuf::from(home)
-        .join("Library/Application Support")
-        .join(crate::config::APP_ID)
-        .join("llm_logs");
-    let mut tool_used = false;
-    if let Ok(files) = std::fs::read_dir(&log_dir) {
-        let mut paths: Vec<_> = files
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .collect();
-        paths.sort();
-        if let Some(latest) = paths.pop() {
-            if let Ok(body) = std::fs::read_to_string(&latest) {
-                tool_used = body.contains("submit_corrected_text") && body.contains("tool_calls");
-            }
-        }
-    }
+    let o = profile.map(|o| crate::config::LlmProfile {
+        id: "selftest".into(),
+        name: "selftest".into(),
+        provider: if o.provider.is_empty() { "deepseek".into() } else { o.provider },
+        base_url: o.base_url,
+        model: o.model,
+        api_key: o.api_key,
+        prompt: o.prompt,
+        thinking: o.thinking,
+        effort: if o.effort.is_empty() { "low".into() } else { o.effort },
+    });
+    let r = crate::llm::selftest(&cfg, o).await?;
     Ok(LlmSelftestResult {
-        dict_text,
-        thinking: llm_out.thinking,
-        llm_text,
-        tool_used,
-        latency_ms,
-        error: None,
+        dict_text: r.dict_text,
+        llm_text: r.llm_text,
+        thinking: r.thinking,
+        tool_used: r.tool_used,
+        latency_ms: r.latency_ms,
     })
 }
 
