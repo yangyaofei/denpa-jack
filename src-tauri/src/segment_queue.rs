@@ -44,13 +44,15 @@
 //!   这是"重试/清空后浮窗不刷新"(审核 a5)的结构性修复。
 //! - 浮窗状态由 `views()` 进 core 短临界区拷贝快照, 不跨线程持有锁。
 
-use crate::core::{SegState, SegmentEntry};
+use crate::core::{SegSource, SegState, SegmentEntry};
 
 /// 给前端的段视图(浮窗渲染用; 只有 state + text, 不带段号等多余信息——用户定则)
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SegView {
     /// 录音中 | transcribing | queued | failed
     pub state: String,
+    /// live | rerun —— 段来源(展示端自决怎么显示, 如重转段标 ↻)
+    pub source: String,
     pub text: String,
 }
 
@@ -143,6 +145,8 @@ pub fn enqueue(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline:
     c.queue.next_id += 1;
     c.queue.items.push_back(SegmentEntry {
         id,
+        source: SegSource::Live,
+        rerun_ts: None,
         raw,
         ho: ho.unwrap_or_default(),
         state: SegState::Queued,
@@ -153,6 +157,37 @@ pub fn enqueue(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline:
     drop(c);
     log_debug("入队");
     id
+}
+
+/// Rerun 任务入队(历史页"重转"): 状态直接 Transcribing——它自带引擎会话
+/// (重放喂入), 不经 worker 调度(worker 只取 Queued, 天然跳过); 结算由
+/// rerun 事件桥完成(词典→LLM→回写条目)后出队。入队=登记"这个重转在途",
+/// 让 core 投影(HUD/主窗)能看到它。
+pub fn enqueue_rerun(ts: &str, ho: crate::pipeline::SessionHandoff) -> u64 {
+    let mut c = crate::core::lock();
+    let id = c.queue.next_id;
+    c.queue.next_id += 1;
+    c.queue.items.push_back(SegmentEntry {
+        id,
+        source: SegSource::Rerun,
+        rerun_ts: Some(ts.to_string()),
+        raw: String::new(),
+        ho,
+        state: SegState::Transcribing,
+        reason: None,
+        asr_failed: false,
+    });
+    c.version += 1;
+    drop(c);
+    log_debug("重转任务入队");
+    id
+}
+
+/// Rerun 任务出队(结算完成/失败时由 rerun 桥调用)
+pub fn finish_rerun(id: u64) {
+    let mut c = crate::core::lock();
+    c.queue.items.retain(|s| s.id != id);
+    c.version += 1;
 }
 
 /// 入队一段 ASR 失败的段(引擎 Error 事件调用)
@@ -170,6 +205,8 @@ pub fn enqueue_asr_failed(app: &tauri::AppHandle, reason: String, ho: Option<cra
     c.queue.next_id += 1;
     c.queue.items.push_back(SegmentEntry {
         id,
+        source: SegSource::Live,
+        rerun_ts: None,
         raw: String::new(),
         ho: seg_ho,
         state: SegState::Failed,
@@ -361,17 +398,27 @@ pub fn dismiss_failed() -> usize {
 /// 见 commands::hud_poll —— 录音中的段还不属于队列)。
 pub fn views() -> (Option<SegView>, Vec<SegView>) {
     let c = crate::core::lock();
-    let cur = c.queue.items.iter().find(|s| s.state == SegState::Transcribing).map(|s| SegView {
-        state: "transcribing".into(),
-        text: s.raw.clone(),
-    });
+    let src = |s: &SegmentEntry| if s.source == SegSource::Rerun { "rerun".to_string() } else { "live".to_string() };
+    // cur 位(正在结算的主链路段)只给 Live——Rerun 段虽是 Transcribing 但
+    // 自带会话不占交付位, 显示进队列列表(带 rerun 标记, 展示端自决)
+    let cur = c
+        .queue
+        .items
+        .iter()
+        .find(|s| s.state == SegState::Transcribing && s.source == SegSource::Live)
+        .map(|s| SegView { state: "transcribing".into(), source: src(s), text: s.raw.clone() });
     let queue: Vec<SegView> = c
         .queue
         .items
         .iter()
-        .filter(|s| s.state != SegState::Transcribing)
+        .filter(|s| !(s.state == SegState::Transcribing && s.source == SegSource::Live))
         .map(|s| SegView {
-            state: if s.state == SegState::Failed { "failed".into() } else { "queued".into() },
+            state: match s.state {
+                SegState::Failed => "failed".into(),
+                SegState::Transcribing => "transcribing".into(),
+                SegState::Queued => "queued".into(),
+            },
+            source: src(s),
             text: s.raw.clone(),
         })
         .collect();
@@ -424,6 +471,8 @@ fn debug_push(id: u64, state: SegState) {
     let mut c = crate::core::lock();
     c.queue.items.push_back(SegmentEntry {
         id,
+        source: SegSource::Live,
+        rerun_ts: None,
         raw: format!("seg{id}"),
         ho: Default::default(),
         state,
@@ -515,6 +564,36 @@ mod tests {
         let _ = views();
         let _ = busy();
         assert_eq!(crate::core::version(), v0 + 2);
+        debug_reset();
+    }
+
+    #[test]
+    fn rerun_segment_lives_in_queue_and_projects() {
+        // Rerun 任务进队列模型: 入队即 Transcribing(自带会话不经 worker),
+        // 投影带 source=rerun 且不占 cur 位(cur 是 Live 专用); 出队即消失
+        let _g = queue_guard();
+        debug_reset();
+        crate::core::lock().queue.items.push_back(SegmentEntry {
+            id: 100,
+            source: SegSource::Rerun,
+            rerun_ts: Some("ts-x".into()),
+            raw: String::new(),
+            ho: Default::default(),
+            state: SegState::Transcribing,
+            reason: None,
+            asr_failed: false,
+        });
+        crate::core::lock().version += 1;
+        assert!(busy(), "Rerun 段算在途");
+        let (cur, q) = views();
+        assert!(cur.is_none(), "Rerun 段不占 cur 位");
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].source, "rerun");
+        assert_eq!(q[0].state, "transcribing");
+        assert_eq!(crate::core::rerun_active(), vec!["ts-x".to_string()], "进行中重转=队列投影");
+        finish_rerun(100);
+        assert!(!busy());
+        assert!(crate::core::rerun_active().is_empty(), "出队即从投影消失");
         debug_reset();
     }
 }

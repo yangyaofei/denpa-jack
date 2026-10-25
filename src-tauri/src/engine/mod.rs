@@ -143,33 +143,45 @@ pub fn spawn_rerun_session(
     api_key: String,
     base_url: String,
     hotwords: Vec<String>,
+    ts: String,
     handoff: HandoffBox,
     rx: tokio::sync::mpsc::Receiver<Cmd>,
 ) {
     crate::log::elog(&format!("[rerun] spawn provider={provider} key_len={}", api_key.len()));
+    // 任务登记: Rerun 段入 core 队列(Transcribing 态, 自带会话不经 worker)。
+    // 状态推进全收在本会话: 入队→结算→出队, 投影端(HUD/主窗)从 core 看全程。
+    // ts 走显式参数(rerun_ts 字段), audio_path 回归纯语义(wav 路径)——
+    // 不再用 R1 时期的 audio_path 双关
+    let seg_id = crate::segment_queue::enqueue_rerun(
+        &ts,
+        handoff.lock().unwrap().clone().unwrap_or_default(),
+    );
+    let ts_for_settle = ts.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("rerun rt");
         rt.block_on(async move {
+        let ts = ts_for_settle;
         let emit = move |ev: AsrEvent| match ev {
             AsrEvent::Partial(_) => {}
             AsrEvent::Result(raw) => {
-                let ho = handoff.lock().unwrap().take().unwrap_or_default();
-                rerun_settle_ok(&app, &raw, &ho);
+                drop(handoff.lock().unwrap().take());
+                rerun_settle_ok(&app, &raw, &ts);
             }
             AsrEvent::NoSpeech(m) => {
-                let ho = handoff.lock().unwrap().take().unwrap_or_default();
-                rerun_settle_fail(&app, &ho, &format!("重转未识别到内容: {m}"));
+                drop(handoff.lock().unwrap().take());
+                rerun_settle_fail(&app, &ts, &format!("重转未识别到内容: {m}"));
             }
             AsrEvent::Error(e) => {
-                let ho = handoff.lock().unwrap().take().unwrap_or_default();
-                rerun_settle_fail(&app, &ho, &format!("重转失败: {e}"));
+                drop(handoff.lock().unwrap().take());
+                rerun_settle_fail(&app, &ts, &format!("重转失败: {e}"));
             }
         };
         let ctx = EngineCtx { api_key, base_url, hotwords };
         run_engine(provider, ctx, rx, emit).await;
+        crate::segment_queue::finish_rerun(seg_id);
         });
     });
 }
@@ -187,9 +199,7 @@ async fn run_engine<E: Fn(AsrEvent) + Send + 'static>(provider: String, ctx: Eng
 
 /// R1: 重转成功结算——词典纠错 → 可选 LLM(失败降级词典版, 与主链路 D1 一致) → 回写条目。
 /// 完成后 bump history 版本(前端轮询刷新)。
-fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ho: &crate::pipeline::SessionHandoff) {
-    // ts 定位藏在 audio_path 字段里传递(rerun_blocking 构造时塞入)——比加字段改动面小
-    let ts = ho.audio_path.clone().unwrap_or_default();
+fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
     let Ok(mut rec) = find_by_ts(app, &ts) else {
         crate::log::elog(&format!("[rerun] 回写失败: 未找到 ts={ts} 的条目"));
         return;
@@ -242,22 +252,19 @@ fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ho: &crate::pipeline::Sess
         }
         Err(e) => crate::log::elog(&format!("[rerun] 回写失败: {e}")),
     }
-    crate::core::rerun_finished(&ts);
 }
 
 /// R1: 重转失败/未识别结算——原条目加 warning(原文保留, 用户可再试)
-fn rerun_settle_fail(app: &tauri::AppHandle, ho: &crate::pipeline::SessionHandoff, msg: &str) {
-    let ts = ho.audio_path.clone().unwrap_or_default();
-    if let Ok(mut rec) = find_by_ts(app, &ts) {
+fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
+    if let Ok(mut rec) = find_by_ts(app, ts) {
         rec.warning = Some(msg.to_string());
-        if let Err(e) = crate::history::update_by_ts(app, &ts, &rec) {
+        if let Err(e) = crate::history::update_by_ts(app, ts, &rec) {
             crate::log::elog(&format!("[rerun] 回写失败: {e}"));
             return;
         }
         crate::core::bump_history();
     }
     crate::log::elog(&format!("[rerun] {msg} ts={ts}"));
-    crate::core::rerun_finished(&ts);
 }
 
 fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::history::HistoryRecord, String> {

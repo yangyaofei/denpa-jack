@@ -84,7 +84,6 @@ pub fn rerun_history(app: tauri::AppHandle, ts: String, audio_path: String) -> R
     if audio_path.is_empty() {
         return Err("该条目没有保留音频, 无法重转".into());
     }
-    crate::core::rerun_started(&ts);
     std::thread::spawn(move || rerun_blocking(app, ts, audio_path));
     Ok(())
 }
@@ -101,7 +100,7 @@ fn rerun_blocking(app: tauri::AppHandle, ts: String, audio_path: String) -> Resu
 }
 
 /// 重放公共骨架: 读 wav → 剥头 → 引擎会话 → 180ms/6400B 节奏 Feed → Finish。
-/// locate_ts=Some ⇒ R1 重转(spawn_rerun_session, ts 塞交接箱定位, 回写不交付);
+/// locate_ts=Some ⇒ R1 重转(spawn_rerun_session, 队列可见, 回写不交付);
 /// locate_ts=None ⇒ 失败段重试(spawn_session, 走主链路入队交付)。
 fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: String) -> Result<(), String> {
     let cfg: Config = config::get_config(app.clone())?;
@@ -112,7 +111,7 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
     let pcm = crate::history::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
     let (tx, rx) = ttx::channel::<engine::Cmd>(64);
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
-        audio_path: locate_ts.clone().or(Some(audio_path.clone())),
+        audio_path: Some(audio_path.clone()),
         pcm: std::sync::Arc::new(Vec::new()),
         focus: delivery::FocusLock::snapshot(),
         duration_ms: 0,
@@ -122,7 +121,7 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
         screenshot: None,
     })));
     match locate_ts {
-        Some(_) => engine::spawn_rerun_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
+        Some(ts) => engine::spawn_rerun_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), ts, handoff, rx),
         None => engine::spawn_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
     }
     // 重放节奏与真实录音相当(200ms 分片×~0.9), 过快会塞爆通道或触发流式限速

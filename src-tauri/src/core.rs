@@ -20,20 +20,34 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
 
 /// 段状态(FIFO 顺序 / 失败重试 / 浮窗展示都基于它)
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
 pub enum SegState {
     /// 已入队, 等 worker 取
     Queued,
-    /// worker 正在跑这段(同一时刻最多一段)
+    /// worker 正在跑这段(同一时刻最多一段); Rerun 任务也用此态(自带会话, worker 跳过)
     Transcribing,
     /// 后处理失败, 保留在队列里等重试
     Failed,
+}
+
+/// 段的来源(类型区分, 用户定则): 重试不是来源——是 Failed→Queued 的状态回退。
+/// 去向由来源决定: Live→交付管线; Rerun→回写历史条目(不交付不弹 HUD)
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum SegSource {
+    /// 首次转换: 热键录音(含失败段重试的重放)
+    Live,
+    /// 重新转换: 历史页"重转"的后台重算(rerun_ts 定位目标条目)
+    Rerun,
 }
 
 /// 段实体: 展示态与干活所需的交接上下文是同一段实体的两面, 不拆存——
 /// 段的真相只有 core 这一处(segment_queue.rs 是它的执行者, 不再自持队列)。
 pub struct SegmentEntry {
     pub id: u64,
+    /// 段来源(Live/Rerun)——投影端据此决定展示; 结算端据此决定去向
+    pub source: SegSource,
+    /// Rerun 段的目标条目定位(其他段 None)
+    pub rerun_ts: Option<String>,
     /// ASR 原文; ASR 阶段失败时为空
     pub raw: String,
     /// 会话交接(音频/焦点/代际/截图) —— 重试所需的全部上下文
@@ -71,9 +85,6 @@ pub struct CtrlState {
     pub config_version: u64,
     pub history_version: u64,
     pub mic_list_version: u64,
-    /// R1: 进行中的历史重转 ts 集合(后台重算回写)——前端轮询镜像,
-    /// 完成/失败由 rerun_settle_* 移除并 bump history
-    pub rerun_active: Vec<String>,
 }
 
 /// 核心状态: 全部可投影的数据(投影函数只读这里)
@@ -92,7 +103,7 @@ static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     version: 0,
     queue: QueueState { items: VecDeque::new(), next_id: 1 },
     session: SessionState { recording: false, level: 0, partial: String::new() },
-    ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0, rerun_active: Vec::new() },
+    ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
 });
 
 /// 取 core 锁(中毒时取出数据继续——见模块头"锁中毒策略")
@@ -162,19 +173,10 @@ pub fn history_version() -> u64 {
 pub fn bump_history() {
     lock().ctrl.history_version += 1;
 }
-/// R1: 重转生命周期——开始登记 ts, 结束移除(成功/失败都算结束)
-pub fn rerun_started(ts: &str) {
-    let mut c = lock();
-    if !c.ctrl.rerun_active.iter().any(|t| t == ts) {
-        c.ctrl.rerun_active.push(ts.to_string());
-    }
-}
-pub fn rerun_finished(ts: &str) {
-    let mut c = lock();
-    c.ctrl.rerun_active.retain(|t| t != ts);
-}
+/// R1: 进行中的重转 ts 列表——从队列投影(source=Rerun 的在途段), 不再另持集合。
+/// 单一事实源: 重转任务入队/出队本身就是这个"集合"的增删
 pub fn rerun_active() -> Vec<String> {
-    lock().ctrl.rerun_active.clone()
+    lock().queue.items.iter().filter(|s| s.source == SegSource::Rerun).filter_map(|s| s.rerun_ts.clone()).collect()
 }
 pub fn mic_list_version() -> u64 {
     lock().ctrl.mic_list_version

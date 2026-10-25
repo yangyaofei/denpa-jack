@@ -262,6 +262,7 @@ pub fn poll() -> Snapshot {
     g.seg_current = if recording {
         Some(crate::segment_queue::SegView {
             state: "recording".into(),
+            source: "live".into(),
             text: partial,
         })
     } else {
@@ -427,6 +428,8 @@ mod tests {
             let mut c = crate::core::lock();
             c.queue.items.push_back(crate::core::SegmentEntry {
                 id: MARK_ID,
+                source: crate::core::SegSource::Live,
+                rerun_ts: None,
                 raw: "漏刷回归标记段".into(),
                 ho: Default::default(),
                 state: crate::core::SegState::Queued,
