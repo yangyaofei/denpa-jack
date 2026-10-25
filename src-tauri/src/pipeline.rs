@@ -77,7 +77,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 
     // 1) 词典纠错(毫秒级, 本地)
     let (dict_text, _matches) = crate::dict::TextCorrector { entries: cfg.dict.clone(), normalizations: cfg.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect() }.correct(&raw);
-    let mut final_text = raw.clone(); // 默认交付=ASR 原文; LLM 成功→润色版, 失败/超时→保持原文
+    // 默认交付=词典纠错版(D1): LLM 关闭/失败/超时都落到这一档, 不再退回 ASR 原文——
+    // 词典是本地毫秒级能力, 没理由在 LLM 缺席时丢弃它。raw 只进历史留痕。
+    let mut final_text = dict_text.clone();
     let mut llm_used = false;
     let mut warning: Option<String> = None;
     let mut history_thinking: Option<String> = None;
@@ -141,12 +143,12 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
                             }
                             Ok(Err(e)) => {
                                 warning = Some(format!("LLM 失败: {e}"));
-                                final_text = raw.clone(); // 降级=ASR 原文
+                                final_text = dict_text.clone(); // 降级=词典纠错版(D1)
                                 None
                             }
                             Err(_) => {
                                 warning = Some("LLM 超时(60s)".into());
-                                final_text = raw.clone(); // 降级=ASR 原文
+                                final_text = dict_text.clone(); // 降级=词典纠错版(D1)
                                 None
                             }
                         }
