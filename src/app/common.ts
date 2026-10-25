@@ -10,19 +10,14 @@ export function common(this: AppThis) {
     section: "history",
     search: "",
     recording: false,
-    partial: "",
-    result: "",
     error: "",
-    finalInfo: null as any,
     cfg: null as AppThis["cfg"],
     /** 保存前快照的 data_dir: saveCfg 比对, 变了提示重启生效(D10——后端缓存不中途切换) */
     _prevDataDir: "" as string,
-    permWarning: "",
     // 权限总检查(麦克风 + 辅助功能): 启动即查, 缺项顶部横幅 + 通用页卡片
     perms: [] as any[],
     // 应用版本(关于页显示): 从 tauri.conf.json 的 version 读, 避免页面上硬编码后与发布版本漂移
     version: "",
-    settingsOpen: false,
     prioSel: 0,
     mics: [] as { uid: string; name: string }[],
     activeMic: null as [string, string] | null,
@@ -148,7 +143,7 @@ export function common(this: AppThis) {
         this.recording = false;
         try { await invoke("recording_stop"); } catch (e: any) { this.error = String(e); }
       } else {
-        this.partial = ""; this.result = ""; this.error = ""; this.finalInfo = null;
+        this.error = "";
         try { await invoke("recording_start"); this.recording = true; }
         catch (e: any) { this.error = String(e); }
       }
@@ -157,10 +152,6 @@ export function common(this: AppThis) {
     switchSection(this: AppThis, id: string) {
       this.section = id;
       if (id === "asr" || id === "general") this.refreshMics();
-    },
-    // 主界面切换器
-    async openSettings(this: AppThis) {
-      this.section = "general";
     },
     // 顶栏状态条: 当前组合一眼可见
     statusLine(this: AppThis): string {

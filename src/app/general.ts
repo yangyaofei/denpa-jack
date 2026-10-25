@@ -5,7 +5,6 @@ import type { AppThis } from "./types";
 
 export function generalPage(this: AppThis) {
   return {
-    hotkeyHint: "",
     hkCapturing: false,
     hkCurrent: "",
     hkFinal: "",
@@ -39,7 +38,6 @@ export function generalPage(this: AppThis) {
       this.hkCapturing = true;
       this.hkCurrent = "";
       this.hkFinal = "";
-      this.hotkeyHint = "";
       const escWatch = (e: KeyboardEvent) => {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -69,14 +67,14 @@ export function generalPage(this: AppThis) {
       if (!this.hkFinal) return;
       try {
         await invoke("capture_end", { confirm: true, combo: this.hkFinal });
-        this.hkCapturing = false; this.hkFinal = ""; this.hkCurrent = ""; this.hotkeyHint = "";
+        this.hkCapturing = false; this.hkFinal = ""; this.hkCurrent = "";
         await this.loadCfg();
       } catch (x: any) { this.error = String(x); this.hkCapturing = false; }
     },
     async cancelHotkey(this: AppThis) {
       clearInterval(this._capTimer);
       try { await invoke("capture_end", { confirm: false, combo: null }); } catch {}
-      this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = ""; this.hotkeyHint = "";
+      this.hkCapturing = false; this.hkCurrent = ""; this.hkFinal = "";
     },
     async addFnPreset(this: AppThis, preset: string) {
       try {
@@ -90,11 +88,7 @@ export function generalPage(this: AppThis) {
       this.cfg.activation = (ev.target as HTMLSelectElement).value;
       await this.saveCfg();
     },
-    async setMicDevice(this: AppThis, uid: string) {
-      if (!this.cfg) return;
-      this.cfg.mic_device_uid = uid;
-      await this.saveCfg();
-    },
+
     async addToPriority(this: AppThis) {
       if (!this.cfg || !this.micToAdd) return;
       if (!this.cfg.mic_priority.includes(this.micToAdd)) {

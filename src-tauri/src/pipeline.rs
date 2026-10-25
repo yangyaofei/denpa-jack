@@ -43,7 +43,6 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         Err(e) => {
             let msg = format!("配置读取失败: {e}");
             let payload = serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg});
-            let _ = crate::emit_both(&app, "asr-final", payload.clone());
             // 交付完成只"报事实"给 HUD(它自己决定是否采纳——录音中不覆盖当前回显)
             crate::hud::delivered(&app, payload);
             return Outcome::Failed { reason: msg, final_text: raw, llm_used: false };
@@ -55,7 +54,6 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             "raw": raw, "final": "", "llm_used": false, "delivered": "none",
             "warning": "未识别到语音内容",
         });
-        let _ = crate::emit_both(&app, "asr-final", payload.clone());
         crate::hud::delivered(&app, payload);
         return Outcome::NoSpeech;
     }
@@ -235,7 +233,6 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         "raw": raw_for_payload, "final": final_text, "llm_used": llm_used,
         "delivered": delivered, "warning": warning,
     });
-    let _ = crate::emit_both(&app, "asr-final", fin_payload.clone());
     // 交付结束 = 报事实给 HUD: 它会清掉阶段并带上交付载荷; 若此刻正在录新一段,
     // 它不采纳(不会把新一段的回显清掉——旧实现在这里无条件 clear, 就是用户看到的"内容消失又重新出现")。
     crate::hud::delivered(&app, fin_payload);

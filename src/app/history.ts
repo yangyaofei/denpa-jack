@@ -7,7 +7,6 @@ export function historyPage(this: AppThis) {
     history: [] as HistoryRecord[],
     selHist: null as HistoryRecord | null,
     histSearch: "",
-    clearArm: false,
 
     // ── 历史 ──
     async refreshHistory(this: AppThis) {
@@ -48,19 +47,6 @@ export function historyPage(this: AppThis) {
         await invoke("rerun_history", { audioPath: h.audio_path });
         this.error = "";
       } catch (e: any) { this.error = String(e); }
-    },
-    async clearHist(this: AppThis) {
-      if (!this.clearArm) {
-        this.clearArm = true
-        setTimeout(() => { this.clearArm = false }, 3000)
-        return
-      }
-      if (!confirm("清空全部历史记录?")) return;
-      try {
-        await invoke("clear_history");
-        this.history = [];
-        this.selHist = null;
-      } catch (e) { console.error(e); }
     },
   };
 }

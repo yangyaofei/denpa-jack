@@ -197,7 +197,8 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
                         m.contains("permission") || m.contains("denied") || m.contains("0x80070005")
                     };
                     if perm {
-                        let _ = tauri::Emitter::emit_to(&app, "main", "recording-error", serde_json::json!({"error_type": "microphone_permission_denied", "message": e}));
+                        // 前端无监听通道(C43b): 权限事实走日志+主窗轮询 check_permissions
+                        crate::log::elog(&format!("[audio] 麦克风权限被拒: {e}"));
                     }
                     return Err(e);
                 }

@@ -83,7 +83,6 @@ body {
 }
 .rec-btn.on { background: #ff453a; }
 .live { color: var(--text-2); font-size: 12px; line-height: 1.5; }
-.result-text { font-size: 14px; line-height: 1.6; user-select: text; }
 .err { color: #ff453a; font-size: 12px; }
 
 /* ── 六页 UI 组件 ── */
@@ -140,8 +139,6 @@ body {
 .perm { position: fixed; top: 0; left: 220px; right: 0; z-index: 20; background: #fff3e0; color: #8a5a00; padding: 8px 20px; font-size: 12px; border-bottom: 1px solid #f0d0a0; }
 
 /* 快捷键录制按钮 */
-.rec-key { min-width: 110px; font-weight: 600; }
-.rec-key.recording { background: #fff3e0; color: #c53030; border-color: #f0a0a0; }
 
 /* 小表格(设备/优先级) */
 .mini-table { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
@@ -163,27 +160,15 @@ body {
 .md-preview pre { background: rgba(120,120,128,0.12); padding: 8px; border-radius: 6px; overflow-x: auto; }
 .md-preview strong { font-weight: 600; }
 .topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex: none; }
-.status-chip {
-  font-size: 12px; color: var(--fg-secondary, #6e6e73);
-  background: rgba(120,120,128,0.1); border-radius: 6px; padding: 5px 12px;
-  max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .rec-btn.small { padding: 4px 14px; font-size: 12px; }
 
-/* 主界面(使用中心) + 设置弹层 */
-.settings-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 50; display: flex; padding: 28px; }
-.settings-frame { flex: 1; background: var(--bg-window, #f5f5f7); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
-.settings-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid rgba(0,0,0,0.08); flex: none; }
-.settings-body { flex: 1; display: flex; min-height: 0; }
-.settings-body .sidebar { width: 200px; flex: none; }
+/* 主界面(使用中心): UI v6 单窗化后 settings-overlay/frame/head/body 弹层已废 */
 .content-in { flex: 1; overflow-y: auto; padding: 18px 22px; }
 .picker {
   font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.12);
   background: rgba(255,255,255,0.7); color: inherit; cursor: pointer; max-width: 170px;
 }
 .picker.on { background: #0a84ff; color: #fff; border-color: #0a84ff; }
-.gear { font-size: 16px; background: none; border: none; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
-.gear:hover { background: rgba(0,0,0,0.06); }
 
 /* 主窗双栏: 列表 | 详情 */
 .split { display: flex; gap: 14px; flex: 1; min-height: 0; }
@@ -230,7 +215,6 @@ body { background: var(--bg1); color: var(--label); }
 body.settings-win { display: flex; }
 body.settings-win .sidebar { width: 190px; flex: none; border-right: 1px solid var(--sep); background: var(--bg3); }
 body.settings-win .content-in { flex: 1; overflow-y: auto; padding: 20px 24px; background: var(--bg2); }
-.settings-head { display: none; }
 h1 { font-size: 17px; font-weight: 600; }          /* Title2 */
 .hi-text { font-size: 13px; }                       /* Body */
 .hi-meta, .d-meta, .row-hint { font-size: 11px; color: var(--label2); }  /* Footnote */

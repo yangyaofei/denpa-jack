@@ -1,5 +1,5 @@
 // Tauri command 层(对齐 Handy commands/): 薄壳, 业务在各自模块
-use tauri::{Emitter, Manager};
+use tauri::AppHandle;
 
 use crate::audio;
 use crate::delivery;
@@ -56,18 +56,6 @@ pub fn hud_hide(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-pub fn dev_nav(app: tauri::AppHandle, section: String) {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
-        let js = format!(
-            "location.hash='#{}'; window.dispatchEvent(new Event('hashchange'))",
-            section
-        );
-        let _ = w.eval(&js);
-    }
-}
-
-#[tauri::command]
 pub fn open_config_file(app: tauri::AppHandle) -> Result<(), String> {
     let p = config::config_path(&app);
     tauri_plugin_opener::open_path(p.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
@@ -86,21 +74,6 @@ pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
-}
-
-/// hud 失败重试: 用本次录音(AppState.last_audio)重跑整条管线; 前端控制只重试一次
-#[tauri::command]
-pub fn retry_last(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    let path = app
-        .state::<std::sync::Mutex<crate::AppState>>()
-        .lock()
-        .unwrap()
-        .last_audio
-        .clone()
-        .or_else(|| crate::history::recent(&app, 1).first().map(|r| r.audio_path.clone()).filter(|p| !p.is_empty()))
-        .ok_or("没有可重试的录音")?;
-    rerun_history(app, path)
 }
 
 #[tauri::command]
@@ -149,9 +122,9 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
     Ok(())
 }
 
-/// C54: 绑定变更后重注册(挂起态除外——录制中由 resume_all 统一恢复)
-#[tauri::command]
-pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
+/// C54: 绑定变更后重注册(挂起态除外——录制中由 resume_all 统一恢复)。
+/// command 注册已删(前端零调用); 保存配置处(use_config)是唯一消费者。
+pub(crate) fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let state = app
         .try_state::<crate::shortcut::ShortcutState>()
@@ -164,28 +137,13 @@ pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 录制期间挂起全部绑定(真注销)
-#[tauri::command]
-pub fn suspend_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
-    crate::shortcut::suspend_all(&app)
-}
-
-/// 录制结束恢复全部绑定(幂等)
-#[tauri::command]
-pub fn resume_all_bindings(app: tauri::AppHandle) -> Result<(), String> {
-    crate::shortcut::resume_all(&app)
-}
-
+/// 录制期间挂起全部绑定(真注销)——command 壳已删, Rust 侧直接调 shortcut::suspend_all
 /// 权限总检查: 返回全部必需权限(麦克风/辅助功能)的当前状态, 缺项时同时推事件给前端
 #[tauri::command]
-pub fn check_permissions(app: tauri::AppHandle) -> Vec<crate::permissions::PermState> {
+pub fn check_permissions(_app: AppHandle) -> Vec<crate::permissions::PermState> {
     // 列表含必需项与可选项(屏幕录制), 前端按 required 区分展示; 提示只看必需项
-    let list = crate::permissions::all();
-    if !crate::permissions::missing().is_empty() {
-        let _ = Emitter::emit_to(&app, "main", "permission-ax", false);
-    }
-    let _ = Emitter::emit_to(&app, "main", "permissions", &list);
-    list
+    // (事件广播通道 C43b 不可达且无监听者: 返回值就是前端数据源)
+    crate::permissions::all()
 }
 
 /// 主动请求屏幕录制权限(开关打开时调用; 首次会触发系统引导)
@@ -236,12 +194,6 @@ pub fn autostart_disable(app: tauri::AppHandle) -> Result<(), String> {
     app.autolaunch()
         .disable()
         .map_err(|e| format!("关闭自启动失败: {e}"))
-}
-
-#[tauri::command]
-pub fn autostart_status(app: tauri::AppHandle) -> bool {
-    use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().is_enabled().unwrap_or(false)
 }
 
 // 浮窗宽度切换(单栏 480 ↔ 两栏 664)。只改宽度: 高度由窗口固定, 长文本在框内滚动
@@ -434,17 +386,7 @@ pub fn get_default_prompt() -> String {
     crate::llm::DEFAULT_LLM_PROMPT.to_string()
 }
 
-/// UI v6 已废除独立设置窗: 此命令改为聚焦主窗(托盘"设置"入口)
-#[tauri::command]
-pub fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return Ok(());
-    }
-    Err("主窗口不存在".into())
-}
-
+/// UI v6 已废除独立设置窗: 托盘"设置"入口直接聚焦主窗(tray_events.rs 内联实现)
 /// C55 后端录制(用户定则): begin→poll→end(提交/取消), 轮询通道
 #[tauri::command]
 pub fn capture_begin(app: tauri::AppHandle) -> Result<(), String> {

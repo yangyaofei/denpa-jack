@@ -47,7 +47,7 @@ impl Default for AppState {
     }
 }
 
-pub(crate) static TRAY_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>> = std::sync::Mutex::new(None);
+pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 /// 触发模式全局缓存(save_config 同步更新; 引擎回调无 app handle 也能读; 空=hold)
 pub(crate) static ACTIVATION: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// 统一入口: 全部录音触发(快捷键/托盘/前端)都发协调器信号——单一真源
@@ -67,17 +67,6 @@ pub fn send_autostop() {
     let _ = CTRL_TX.lock().unwrap().as_ref()
         .map(|tx| tx.send(transcription_coordinator::CoordCmd::AutoStopDue));
 }
-
-/// C43: asr-final 类事件双发(main 历史页 + hud 浮窗), 替代全局广播
-/// C43b: Tauri 2 事件通道(Rust→webview)在本机打包版实测不可达(Any/AnyLabel 均不达, emit 返回 Ok)。
-/// HUD 的唯一读通道是 `hud::poll()`(前端 150ms 轮询, invoke 通道已证可靠)。
-pub fn emit_both(app: &tauri::AppHandle, event: &str, payload: serde_json::Value) {
-    use tauri::Emitter;
-    let _ = Emitter::emit_to(app, "main", event, payload.clone());
-    let _ = Emitter::emit_to(app, "hud", event, payload);
-}
-
-pub(crate) static CTRL_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<transcription_coordinator::CoordCmd>>> = std::sync::Mutex::new(None);
 
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
@@ -237,17 +226,18 @@ pub fn run() {
             commands::ping, commands::list_mics, commands::get_active_mic, commands::list_llm_models, commands::llm_selftest, commands::get_default_prompt, commands::ui_log, commands::get_history,
             commands::clear_history, commands::copy_text, commands::get_hotwords,
             recording::recording_start, recording::recording_stop,
-            recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::dev_nav, commands::app_version,
+            recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::app_version,
+
             commands::queue_retry, commands::queue_clear, commands::queue_dismiss,
             update::update_check, update::update_install,
             commands::open_config_file, commands::open_data_dir,
-            commands::rerun_history, commands::retry_last, commands::open_settings_window, commands::reapply_hotkey,
+            commands::rerun_history,
             commands::local_service_status, commands::local_service_start, commands::local_service_stop,
-            commands::add_binding, commands::remove_binding, commands::suspend_all_bindings, commands::resume_all_bindings,
+            commands::add_binding, commands::remove_binding,
             commands::capture_begin, commands::capture_poll, commands::capture_end,
             commands::check_permissions, commands::request_microphone, commands::open_system_settings,
             commands::request_screen_permission, commands::open_screen_context_dir,
-            commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
+            commands::autostart_enable, commands::autostart_disable,
             config::get_config, config::save_config,
         ])
         .build(tauri::generate_context!())

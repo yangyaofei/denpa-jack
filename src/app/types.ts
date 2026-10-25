@@ -49,27 +49,27 @@ export interface LocalSvcState {
 /// 组件完整形状: 状态字段 + 全部方法。各页域 partial 的 this 都是它。
 export interface AppThis {
   // —— 公共状态(common) ——
-  section: string; search: string; recording: boolean; partial: string; result: string;
-  error: string; finalInfo: any; cfg: Config | null;
+  section: string; search: string; recording: boolean;
+  error: string; cfg: Config | null;
   /** 保存前快照的 data_dir(D10 提示用) */
   _prevDataDir: string;
-  permWarning: string; perms: any[]; version: string;
-  settingsOpen: boolean; prioSel: number;
+  perms: any[]; version: string;
+  prioSel: number;
   autostartOn: boolean; // 未在数据里声明的动态字段(toggleAutostart 用, 保留现状)
   mics: { uid: string; name: string }[]; activeMic: [string, string] | null; micToAdd: string;
   sections: { id: string; title: string; keywords: string }[];
   // —— 热键录制(general) ——
-  hotkeyHint: string; hkCapturing: boolean; hkCurrent: string; hkFinal: string; _capTimer: any;
+  hkCapturing: boolean; hkCurrent: string; hkFinal: string; _capTimer: any;
   // —— ASR 页 ——
   asrEdit: AsrProfile | null; asrIsNew: boolean; builtinDirty: boolean;
   localSvc: LocalSvcState;
   // —— LLM 页 ——
   llmEdit: LlmProfile | null; llmIsNew: boolean; llmModels: string[]; llmModelsError: string;
-  selftesting: boolean; selftestResult: string; editLlmPromptPreview: boolean; defaultPrompt: string;
+  selftesting: boolean; selftestResult: string; editLlmPromptPreview: boolean;
   // —— 词典页 ——
   dictEdit: any; dictIsNew: boolean; dictSearch: string; hotwordsPreview: string[]; quickTerm: string;
   // —— 历史页 ——
-  history: HistoryRecord[]; selHist: HistoryRecord | null; histSearch: string; clearArm: boolean;
+  history: HistoryRecord[]; selHist: HistoryRecord | null; histSearch: string;
   // —— 通用页 ——
   axPasteOnlyText: string;
   // —— 关于页 ——
@@ -84,7 +84,6 @@ export interface AppThis {
   saveCfg(): Promise<void>;
   toggleRecording(): Promise<void>;
   switchSection(id: string): void;
-  openSettings(): Promise<void>;
   statusLine(): string;
   filteredSections(): { id: string; title: string; keywords: string }[];
   mdRender(src: string): string;
@@ -112,7 +111,6 @@ export interface AppThis {
   cancelHotkey(): Promise<void>;
   addFnPreset(preset: string): Promise<void>;
   setActivation(ev: Event): Promise<void>;
-  setMicDevice(uid: string): Promise<void>;
   addToPriority(): Promise<void>;
   movePriority(i: number, dir: -1 | 1): Promise<void>;
   removePriority(i: number): Promise<void>;
@@ -144,7 +142,6 @@ export interface AppThis {
   runLlmSelftest(): Promise<void>;
   togglePolish(): Promise<void>;
   // dict
-  stars(boost: number): string;
   weightStars(b: number): string;
   filteredDict(): DictEntry[];
   newDict(): void;
@@ -160,6 +157,5 @@ export interface AppThis {
   openAudio(h: HistoryRecord): Promise<void>;
   playHist(h: HistoryRecord): Promise<void>;
   rerunHist(h: HistoryRecord): Promise<void>;
-  clearHist(): Promise<void>;
   filteredHist(): HistoryRecord[];
 }

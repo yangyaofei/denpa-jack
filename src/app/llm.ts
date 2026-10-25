@@ -12,7 +12,6 @@ export function llmPage(this: AppThis) {
     selftesting: false,
     selftestResult: "",
     editLlmPromptPreview: false,
-    defaultPrompt: "",
 
     async togglePromptPreview(this: AppThis) {
       if (this.editLlmPromptPreview) {

@@ -3,7 +3,6 @@ use tauri::{Emitter, Manager};
 
 use crate::commands::{open_config_file, open_data_dir};
 use crate::config::{self, Config};
-use crate::TRAY_TX;
 use crate::tray;
 
 pub static TRAY: std::sync::Mutex<Option<tray::MacTray>> = std::sync::Mutex::new(None);
@@ -48,7 +47,6 @@ pub fn spawn_tray(app: &tauri::AppHandle) -> Result<(), String> {
         cfg.use_llm_correction,
         cfg.clipboard_only,
     )?;
-    *TRAY_TX.lock().unwrap() = Some(tx);
     *TRAY.lock().unwrap() = Some(t);
     let app2 = app.clone();
     std::thread::spawn(move || {

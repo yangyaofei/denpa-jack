@@ -10,10 +10,10 @@ export function dictPage(this: AppThis) {
     dictSearch: "",
     quickTerm: "",
 
-    stars(this: AppThis, boost: number): string {
-      return "★★★".slice(0, Math.max(0, boost)) + "☆☆☆".slice(0, Math.max(0, 3 - boost));
+    /// 星级展示(词典权重 boost 1-3): ★=已点亮, ☆=未点亮
+    weightStars(this: AppThis, b: number): string {
+      return "★★★".slice(0, Math.max(0, b)) + "☆☆☆".slice(0, Math.max(0, 3 - b));
     },
-    weightStars(this: AppThis, b: number): string { return this.stars(b); },
 
     filteredDict(this: AppThis): DictEntry[] {
       const d = this.cfg?.dict ?? [];
