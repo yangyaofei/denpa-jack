@@ -162,26 +162,44 @@ pub fn spawn_rerun_session(
             .enable_all()
             .build()
             .expect("rerun rt");
+        // 出队保护: Drop guard 保证任何退出路径(正常/panic——2026-10-25 真机
+        // block_on 嵌套 panic 曾让段永挂"重转中")都把段移出队列
+        struct RerunOut(u64);
+        impl Drop for RerunOut {
+            fn drop(&mut self) { crate::segment_queue::finish_rerun(self.0); }
+        }
+        let _out = RerunOut(seg_id);
         rt.block_on(async move {
         let ts = ts_for_settle;
+        let app_settle = app.clone();
         let emit = move |ev: AsrEvent| match ev {
             AsrEvent::Partial(_) => {}
             AsrEvent::Result(raw) => {
                 drop(handoff.lock().unwrap().take());
-                rerun_settle_ok(&app, &raw, &ts);
+                // 结算在独立线程: rerun_settle_ok 里有 tauri::async_runtime::block_on
+                // (LLM 调用), 而 emit 运行在引擎 runtime 的 async 线程——
+                // 在 async 上下文里 block_on 会 panic "Cannot start a runtime
+                // from within a runtime"(tokio 禁止), 真机已炸过一次
+                let app2 = app_settle.clone();
+                let ts2 = ts.clone();
+                std::thread::spawn(move || rerun_settle_ok(&app2, &raw, &ts2));
             }
             AsrEvent::NoSpeech(m) => {
                 drop(handoff.lock().unwrap().take());
-                rerun_settle_fail(&app, &ts, &format!("重转未识别到内容: {m}"));
+                let app2 = app_settle.clone();
+                let ts2 = ts.clone();
+                std::thread::spawn(move || rerun_settle_fail(&app2, &ts2, &format!("重转未识别到内容: {m}")));
             }
             AsrEvent::Error(e) => {
                 drop(handoff.lock().unwrap().take());
-                rerun_settle_fail(&app, &ts, &format!("重转失败: {e}"));
+                let app2 = app_settle.clone();
+                let ts2 = ts.clone();
+                std::thread::spawn(move || rerun_settle_fail(&app2, &ts2, &format!("重转失败: {e}")));
             }
         };
         let ctx = EngineCtx { api_key, base_url, hotwords };
         run_engine(provider, ctx, rx, emit).await;
-        crate::segment_queue::finish_rerun(seg_id);
+        // 出队由 _out guard 统一负责(含 panic 路径), 这里不再显式调
         });
     });
 }

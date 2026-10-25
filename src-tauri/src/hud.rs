@@ -252,6 +252,9 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
 ///   右栏 = 队列里其余段(录音时, 正在转写的那段退到右栏)
 pub fn poll() -> Snapshot {
     let (cur, queue) = crate::segment_queue::views();
+    // HUD 不显示重转段(用户定则: 重转是后台任务, 录音浮窗只管语音链路的段;
+    // 重转状态看主窗历史页)。views() 保持全量, 各投影端自决过滤
+    let queue: Vec<_> = queue.into_iter().filter(|s| s.source != "rerun").collect();
     let (core_ver, recording, level, partial) = {
         let c = crate::core::lock();
         (c.version, c.session.recording, c.session.level, c.session.partial.clone())

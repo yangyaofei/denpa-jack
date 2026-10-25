@@ -66,20 +66,20 @@ function pushWidth() {
 // 右栏: 队列列表(只有状态图标 + 文字; 失败行标红)
 let queueSig = "";
 function renderQueue(rows: any[]) {
-  // 键控签名: 状态 + 文本 + 来源; 一样就不动 DOM(避免 150ms 一次的重绘打断滚动/闪动)
-  const sig = rows.map((r) => `${r.state}|${r.source}|${r.text}`).join("\n");
+  // 键控签名: 状态 + 文本; 一样就不动 DOM(避免 150ms 一次的重绘打断滚动/闪动)。
+  // 重转段已在快照层被 HUD 过滤(展示端自决: 录音浮窗只管语音链路的段),
+  // 这里不会收到 source==="rerun" 的行
+  const sig = rows.map((r) => `${r.state}|${r.text}`).join("\n");
   if (sig === queueSig) return;
   queueSig = sig;
   qlist.innerHTML = rows
     .map((r) => {
       const icon = r.state === "failed" ? "✕" : r.state === "transcribing" ? "⟳" : "•";
-      // 重转段(历史页后台重算)加 ↻ 前缀——来源是数据维度, 展示端自决怎么画
-      const rmk = r.source === "rerun" ? "↻ " : "";
       // 失败段可能没有文本(ASR 阶段就失败, 没有原文) → 给一个可读短标签,
       // 否则那一行只剩一个 ✕, 用户看不出发生了什么(issue #3)
       const raw = String(r.text || "");
-      const label = raw || (r.state === "failed" ? "识别失败" : r.source === "rerun" ? "重转中…" : "");
-      const text = (rmk + label).replace(/[<>&]/g, (c: string) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
+      const label = raw || (r.state === "failed" ? "识别失败" : "");
+      const text = label.replace(/[<>&]/g, (c: string) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
       return `<div class="qrow ${r.state}"><span class="b">${icon}</span><span class="t">${text}</span></div>`;
     })
     .join("");
