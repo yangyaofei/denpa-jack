@@ -76,39 +76,56 @@ pub fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// R1: 历史条目重转——后台重算回写条目, 不入队/不交付/不弹 HUD。
+/// 音频按 180ms/6400B 节奏重放给引擎(与主链路同构), 结算在
+/// engine::spawn_rerun_session 的事件桥里(词典→可选 LLM→update_by_ts)。
 #[tauri::command]
-pub fn rerun_history(app: tauri::AppHandle, audio_path: String) -> Result<(), String> {
-    // 重放是长活(音频时长级), 必须后台线程——command 在主线程, 直接跑会冻结 UI
-    std::thread::spawn(move || rerun_blocking(app, audio_path));
+pub fn rerun_history(app: tauri::AppHandle, ts: String, audio_path: String) -> Result<(), String> {
+    if audio_path.is_empty() {
+        return Err("该条目没有保留音频, 无法重转".into());
+    }
+    crate::core::rerun_started(&ts);
+    std::thread::spawn(move || rerun_blocking(app, ts, audio_path));
     Ok(())
 }
 
-fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), String> {
+/// 失败段重试（queue_retry）专用: 全链路重放**含交付**——用户点重试就是
+/// 要结果出来。与 R1 的历史页"重转"(后台重算回写, 不交付)是两个语义,
+/// 共用重放节奏, 不共用结算通道。
+pub(crate) fn replay_for_delivery(app: tauri::AppHandle, audio_path: String) -> Result<(), String> {
+    replay_impl(app, None, audio_path)
+}
+
+fn rerun_blocking(app: tauri::AppHandle, ts: String, audio_path: String) -> Result<(), String> {
+    replay_impl(app, Some(ts), audio_path)
+}
+
+/// 重放公共骨架: 读 wav → 剥头 → 引擎会话 → 180ms/6400B 节奏 Feed → Finish。
+/// locate_ts=Some ⇒ R1 重转(spawn_rerun_session, ts 塞交接箱定位, 回写不交付);
+/// locate_ts=None ⇒ 失败段重试(spawn_session, 走主链路入队交付)。
+fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: String) -> Result<(), String> {
     let cfg: Config = config::get_config(app.clone())?;
     let (profile, key) = crate::engine::resolve_asr(&cfg)?;
     let raw = std::fs::read(&audio_path).map_err(|e| format!("读音频失败: {e}"))?;
-    // 剥 WAV 头取 PCM: 复用 wav_data_chunk(遍历 chunk, 跳过 FLLR 填充块)——
-    // 旧的 raw[44..] 假设 data 固定在 44 偏移, 含 FLLR 的历史音频会把 fmt 头
-    // 当 PCM 喂给引擎(C40 教训的重演, 审核a-9)
+    // 剥 WAV 头取 PCM: 复用 wav_data_chunk(跳过 FLLR 填充块)——旧 raw[44..]
+    // 假设会把 fmt 头当 PCM 喂引擎(C40 教训的重演, 审核a-9)
     let pcm = crate::history::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
     let (tx, rx) = ttx::channel::<engine::Cmd>(64);
-    // 重跑也是一次会话: 交接箱随会话走, 与主链路同构
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
-        audio_path: Some(audio_path.clone()),
+        audio_path: locate_ts.clone().or(Some(audio_path.clone())),
         pcm: std::sync::Arc::new(Vec::new()),
         focus: delivery::FocusLock::snapshot(),
         duration_ms: 0,
         engine: profile.provider.clone(),
         gen: 0,
-        // 重跑历史音频时不采集屏幕: 截图应当属于"当时那次录音"，事后重跑拿到的是现在的屏幕，会误导纠错
+        // 重放不采集屏幕: 截图属于"当时那次录音", 事后拿到的是现在的屏幕会误导纠错
         screenshot: None,
     })));
-    engine::spawn_session(app.clone(), profile.provider.clone(), key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx);
-    use tauri::Manager;
-    app.state::<std::sync::Mutex<crate::AppState>>()
-        .lock()
-        .unwrap()
-        .last_audio = Some(audio_path.clone());
+    match locate_ts {
+        Some(_) => engine::spawn_rerun_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
+        None => engine::spawn_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
+    }
+    // 重放节奏与真实录音相当(200ms 分片×~0.9), 过快会塞爆通道或触发流式限速
     tauri::async_runtime::spawn(async move {
         for chunk in pcm.chunks(6400) {
             if tx.try_send(engine::Cmd::Feed(chunk.to_vec())).is_err() {
@@ -118,7 +135,6 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
         }
         let _ = tx.try_send(engine::Cmd::Finish);
     });
-    crate::hud::notify(&app, "… 重新转写中");
     Ok(())
 }
 
@@ -407,6 +423,8 @@ pub struct Versions {
     pub mics: u64,
     /// 是否在录(core 事实投影)——主窗试音按钮跟随热键/托盘录音的同步源
     pub recording: bool,
+    /// R1: 进行中的历史重转 ts 列表(前端三态"重算中"的数据源)
+    pub reruns: Vec<String>,
 }
 
 #[tauri::command]
@@ -416,6 +434,7 @@ pub fn poll_versions() -> Versions {
         config: crate::core::config_version(),
         mics: crate::core::mic_list_version(),
         recording: crate::core::session_recording(),
+        reruns: crate::core::rerun_active(),
     }
 }
 

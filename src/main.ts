@@ -22,6 +22,7 @@ import { aboutPage } from "./app/about";
 (window as any).app = () => ({
   ...common(),
   ...historyPage(),
+  rerunning: new Set<string>() as Set<string>,
   ...dictPage(),
   ...generalPage(),
   ...asrPage(),

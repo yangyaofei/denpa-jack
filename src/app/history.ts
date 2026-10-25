@@ -43,8 +43,12 @@ export function historyPage(this: AppThis) {
     },
     async rerunHist(this: AppThis, h: HistoryRecord) {
       if (!h.audio_path) { this.error = "该记录无音频, 无法重转"; return; }
+      if (this.rerunning.has(h.ts)) return;
       try {
-        await invoke("rerun_history", { audioPath: h.audio_path });
+        // R1: 后台重算回写条目(不交付不弹 HUD)。"进行中"以后端 core 的
+        // rerun_active 为准(轮询镜像到 this.rerunning), 前端不做本地判定
+        await invoke("rerun_history", { ts: h.ts, audioPath: h.audio_path });
+        this.rerunning.add(h.ts);
         this.error = "";
       } catch (e: any) { this.error = String(e); }
     },

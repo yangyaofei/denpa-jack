@@ -70,6 +70,8 @@ export interface AppThis {
   dictEdit: any; dictIsNew: boolean; dictSearch: string; hotwordsPreview: string[]; quickTerm: string;
   // —— 历史页 ——
   history: HistoryRecord[]; selHist: HistoryRecord | null; histSearch: string;
+  /** R1: 进行中的历史重转 ts 集合(poll_versions.reruns 的镜像) */
+  rerunning: Set<string>;
   // —— 通用页 ——
   axPasteOnlyText: string;
   // —— 关于页 ——

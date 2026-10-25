@@ -71,6 +71,9 @@ pub struct CtrlState {
     pub config_version: u64,
     pub history_version: u64,
     pub mic_list_version: u64,
+    /// R1: 进行中的历史重转 ts 集合(后台重算回写)——前端轮询镜像,
+    /// 完成/失败由 rerun_settle_* 移除并 bump history
+    pub rerun_active: Vec<String>,
 }
 
 /// 核心状态: 全部可投影的数据(投影函数只读这里)
@@ -89,7 +92,7 @@ static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     version: 0,
     queue: QueueState { items: VecDeque::new(), next_id: 1 },
     session: SessionState { recording: false, level: 0, partial: String::new() },
-    ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
+    ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0, rerun_active: Vec::new() },
 });
 
 /// 取 core 锁(中毒时取出数据继续——见模块头"锁中毒策略")
@@ -158,6 +161,20 @@ pub fn history_version() -> u64 {
 }
 pub fn bump_history() {
     lock().ctrl.history_version += 1;
+}
+/// R1: 重转生命周期——开始登记 ts, 结束移除(成功/失败都算结束)
+pub fn rerun_started(ts: &str) {
+    let mut c = lock();
+    if !c.ctrl.rerun_active.iter().any(|t| t == ts) {
+        c.ctrl.rerun_active.push(ts.to_string());
+    }
+}
+pub fn rerun_finished(ts: &str) {
+    let mut c = lock();
+    c.ctrl.rerun_active.retain(|t| t != ts);
+}
+pub fn rerun_active() -> Vec<String> {
+    lock().ctrl.rerun_active.clone()
 }
 pub fn mic_list_version() -> u64 {
     lock().ctrl.mic_list_version

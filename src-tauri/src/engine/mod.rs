@@ -134,6 +134,137 @@ mod tests {
     }
 }
 
+/// R1: 历史重转专用会话——与主链路同构(专用 rt + 引擎 run), 但事件桥不同:
+/// Result/NoSpeech/Error **直接回写该历史条目**(词典→可选 LLM→update_by_ts),
+/// 不入队、不交付、不碰 HUD(用户定则: 重转是后台重算, 不是语音输入重放)。
+pub fn spawn_rerun_session(
+    app: tauri::AppHandle,
+    provider: String,
+    api_key: String,
+    base_url: String,
+    hotwords: Vec<String>,
+    handoff: HandoffBox,
+    rx: tokio::sync::mpsc::Receiver<Cmd>,
+) {
+    crate::log::elog(&format!("[rerun] spawn provider={provider} key_len={}", api_key.len()));
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rerun rt");
+        rt.block_on(async move {
+        let emit = move |ev: AsrEvent| match ev {
+            AsrEvent::Partial(_) => {}
+            AsrEvent::Result(raw) => {
+                let ho = handoff.lock().unwrap().take().unwrap_or_default();
+                rerun_settle_ok(&app, &raw, &ho);
+            }
+            AsrEvent::NoSpeech(m) => {
+                let ho = handoff.lock().unwrap().take().unwrap_or_default();
+                rerun_settle_fail(&app, &ho, &format!("重转未识别到内容: {m}"));
+            }
+            AsrEvent::Error(e) => {
+                let ho = handoff.lock().unwrap().take().unwrap_or_default();
+                rerun_settle_fail(&app, &ho, &format!("重转失败: {e}"));
+            }
+        };
+        let ctx = EngineCtx { api_key, base_url, hotwords };
+        run_engine(provider, ctx, rx, emit).await;
+        });
+    });
+}
+
+/// 引擎分派(spawn_session / spawn_rerun_session 共用)
+async fn run_engine<E: Fn(AsrEvent) + Send + 'static>(provider: String, ctx: EngineCtx, rx: tokio::sync::mpsc::Receiver<Cmd>, emit: E) {
+    match provider.as_str() {
+        "zhipu" => zhipu::Zhipu.run(ctx, rx, emit).await,
+        // 本地网关(local-asr/gateway.py): 无鉴权, 走 base_url;
+        // 热词经首帧 context 注入(网关同时用于流式与二遍全句重解)
+        "local" => local::LocalGateway.run(ctx, rx, emit).await,
+        _ => doubao::Doubao.run(ctx, rx, emit).await,
+    }
+}
+
+/// R1: 重转成功结算——词典纠错 → 可选 LLM(失败降级词典版, 与主链路 D1 一致) → 回写条目。
+/// 完成后 bump history 版本(前端轮询刷新)。
+fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ho: &crate::pipeline::SessionHandoff) {
+    // ts 定位藏在 audio_path 字段里传递(rerun_blocking 构造时塞入)——比加字段改动面小
+    let ts = ho.audio_path.clone().unwrap_or_default();
+    let Ok(mut rec) = find_by_ts(app, &ts) else {
+        crate::log::elog(&format!("[rerun] 回写失败: 未找到 ts={ts} 的条目"));
+        return;
+    };
+    let cfg = crate::config::get_config(app.clone()).ok();
+    let dict = cfg.as_ref().map(|c| crate::dict::TextCorrector {
+        entries: c.dict.clone(),
+        normalizations: c.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect(),
+    });
+    let (dict_text, _) = dict.as_ref().map(|d| d.correct(raw)).unwrap_or((raw.to_string(), Vec::new()));
+    let mut final_text = dict_text.clone();
+    let mut llm_used = false;
+    let mut thinking: Option<String> = None;
+    let mut warning: Option<String> = None;
+    if let Some(c) = cfg.as_ref().filter(|c| c.use_llm_correction) {
+        if let Some(p) = c.llm_profiles.iter().find(|p| p.id == c.active_llm_id).cloned() {
+            let key = if p.api_key.is_empty() { c.keys.first().cloned().unwrap_or_default() } else { p.api_key.clone() };
+            let opts = crate::llm::LlmOpts {
+                provider: p.provider.clone(),
+                base_url: p.base_url.clone(),
+                model: p.model.clone(),
+                api_key: key,
+                prompt: if p.prompt.is_empty() { crate::llm::DEFAULT_LLM_PROMPT.to_string() } else { p.prompt.clone() },
+                thinking: p.thinking,
+                effort: if p.effort.is_empty() { "low".into() } else { p.effort.clone() },
+                timeout_secs: c.llm_timeout_secs,
+                max_tokens: c.llm_max_tokens,
+                retries: c.llm_retries,
+            };
+            let terms: Vec<String> = c.dict.iter().map(|d| d.term.clone()).collect();
+            match tauri::async_runtime::block_on(crate::llm::polish(&dict_text, &terms, &opts, None)) {
+                Ok(out) => {
+                    final_text = out.text;
+                    thinking = out.thinking;
+                    llm_used = true;
+                }
+                Err(e) => warning = Some(format!("重转 LLM 失败, 已交付词典版: {e}")),
+            }
+        }
+    }
+    rec.raw = raw.to_string();
+    rec.final_text = final_text;
+    rec.llm_used = llm_used;
+    rec.llm_thinking = thinking;
+    rec.warning = warning;
+    match crate::history::update_by_ts(app, &ts, &rec) {
+        Ok(()) => {
+            crate::core::bump_history();
+            crate::log::elog(&format!("[rerun] 回写完成 ts={ts} llm_used={llm_used}"));
+        }
+        Err(e) => crate::log::elog(&format!("[rerun] 回写失败: {e}")),
+    }
+    crate::core::rerun_finished(&ts);
+}
+
+/// R1: 重转失败/未识别结算——原条目加 warning(原文保留, 用户可再试)
+fn rerun_settle_fail(app: &tauri::AppHandle, ho: &crate::pipeline::SessionHandoff, msg: &str) {
+    let ts = ho.audio_path.clone().unwrap_or_default();
+    if let Ok(mut rec) = find_by_ts(app, &ts) {
+        rec.warning = Some(msg.to_string());
+        if let Err(e) = crate::history::update_by_ts(app, &ts, &rec) {
+            crate::log::elog(&format!("[rerun] 回写失败: {e}"));
+            return;
+        }
+        crate::core::bump_history();
+    }
+    crate::log::elog(&format!("[rerun] {msg} ts={ts}"));
+    crate::core::rerun_finished(&ts);
+}
+
+fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::history::HistoryRecord, String> {
+    let recs = crate::history::read_all_from(&crate::config::data_dir(app).join("history.jsonl"));
+    recs.into_iter().find(|r| r.ts == ts).ok_or_else(|| format!("未找到 ts={ts}"))
+}
+
 pub fn spawn_session(
     app: tauri::AppHandle,
     provider: String,
@@ -200,13 +331,7 @@ pub fn spawn_session(
             }
         };
         let ctx = EngineCtx { api_key, base_url, hotwords };
-        match provider.as_str() {
-            "zhipu" => zhipu::Zhipu.run(ctx, rx, emit).await,
-            // 本地网关(local-asr/gateway.py): 无鉴权, 走 base_url;
-            // 热词经首帧 context 注入(网关同时用于流式与二遍全句重解)
-            "local" => local::LocalGateway.run(ctx, rx, emit).await,
-            _ => doubao::Doubao.run(ctx, rx, emit).await,
-        }
+        run_engine(provider, ctx, rx, emit).await;
         });
     });
 }

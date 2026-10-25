@@ -38,7 +38,7 @@
             <template x-if="selHist">
               <div class="detail">
                 <div class="d-row"><label>最终结果</label><div class="d-text strong" x-text="selHist.final_text || selHist.raw"></div>
-                  <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" @click="rerunHist(selHist)">重转</button></div></div>
+                  <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" :disabled="rerunning.has(selHist.ts)" @click="rerunHist(selHist)">{{ rerunning.has(selHist.ts) ? '重算中…' : '重转' }}</button></div></div>
                 <div class="d-row" x-show="selHist.raw && selHist.raw !== selHist.final_text"><label>原始转写</label><div class="d-text dim2" x-text="selHist.raw"></div></div>
                 <div class="d-row" x-show="selHist.llm_thinking"><label>LLM 思考</label>
                   <details class="think"><summary>展开思考链</summary><pre class="d-text dim2" x-text="selHist.llm_thinking"></pre></details>

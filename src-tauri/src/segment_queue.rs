@@ -282,7 +282,7 @@ pub fn retry(app: &tauri::AppHandle, id: u64) -> Result<(), String> {
             return Err("该段没有可用的音频文件".into());
         }
         remove(id);
-        crate::commands::rerun_history(app.clone(), path)?;
+        crate::commands::replay_for_delivery(app.clone(), path)?;
     }
     log_debug("重试");
     Ok(())

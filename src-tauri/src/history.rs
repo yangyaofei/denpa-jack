@@ -21,6 +21,40 @@ pub struct HistoryRecord {
     pub warning: Option<String>,
 }
 
+/// R1: 按 ts 定位原位更新一条历史记录(JSONL 逐行匹配替换, 原子写回)。
+/// 重转回写专用——append 之外唯一的写路径。ts 是毫秒时间戳, 同毫秒两条
+/// 概率极低且重转场景只会有一个在途。
+pub fn update_by_ts(app: &tauri::AppHandle, ts: &str, new_rec: &HistoryRecord) -> Result<(), String> {
+    let path = history_path(app);
+    if !path.exists() {
+        return Err("历史文件不存在".into());
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut replaced = false;
+    let mut out = String::with_capacity(content.len() + 256);
+    for line in content.lines() {
+        if !replaced && line.contains("\"ts\":\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if v["ts"].as_str() == Some(ts) {
+                    out.push_str(&serde_json::to_string(new_rec).map_err(|e| e.to_string())?);
+                    out.push('\n');
+                    replaced = true;
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !replaced {
+        return Err(format!("未找到 ts={ts} 的历史条目"));
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn history_path(app: &tauri::AppHandle) -> PathBuf {
     let dir = crate::config::data_dir(app);
     fs::create_dir_all(&dir).ok();
