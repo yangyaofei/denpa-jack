@@ -1,479 +1,143 @@
 # Denpa Jack 需求与架构文档（SPEC）
 
-> 依据：源码全量通读（src-tauri/src/ 全部 25 个 .rs、build.rs、docs/CONTRACTS.md、tauri.conf.json、Cargo.toml、src/main.ts、src/hud.ts、index.html、settings.html、hud.html、vite.config.ts、examples/）。
-> 所有数值、路径、行为均从代码验证，未做推测；无法验证处已标注。
+> 依据：2026-10-24 阶段A 结构重构后的源码全量对齐（src-tauri/src/ 含 engine/ delivery/ config/ 子目录，
+> src/app/ 按页拆分；全部行为描述经代码核验）。历史版本（0.3.29 基线）的逐文件行数已删，
+> 模块地图以本文为准；跨边界契约见 `docs/CONTRACTS.md`；功能验收状态见 `docs/FUNCTION-CHECKLIST.md`。
 
 ## 1. 项目定位
 
-- macOS 菜单栏语音输入工具：按住全局热键说话 → 云端 ASR 流式转写 → 本地词典纠错 → 可选 LLM 润色 → 自动粘贴到当前输入位置。
-- 个人工具，Tauri 2 实现：Rust 后端（src-tauri/）+ Alpine.js 轻前端（README 中的 Vue 模板文字未清理，实际无 Vue 依赖）。
-- 三个窗口：
-  - `main`：历史主窗，1060x680，最小 760x480（tauri.conf.json），页面 index.html。
-  - `hud`：录音浮窗，480x200，透明/置顶/无边框/默认隐藏，页面 hud.html。
-  - `settings`：设置窗，560x600，不可缩放（commands.rs `open_settings_window`），页面 settings.html，按需创建、已开则聚焦。
-- 常驻方式：`ActivationPolicy::Accessory`（菜单栏常驻，不占 Dock）；关窗=隐藏（CloseRequested 拦截）；真正退出走托盘菜单。
-- 单实例：tauri-plugin-single-instance，二次启动唤出并聚焦主窗。
-- 系统权限：
-  - 麦克风（TCC），Info.plist 声明 `NSMicrophoneUsageDescription`。**必需**。
-  - 辅助功能（AX），AX 直写与粘贴依赖，启动时检测并广播 `permission-ax`。**必需**。
-  - 屏幕录制（TCC）。**可选**：仅「截图作为纠错上下文」开关开启时需要。三项都在同一张「权限」卡里展示状态、用途、影响与跳转按钮（`permissions.rs::all()`，`PermState.required` 区分必需/可选；`missing()` 只算必需项）。
-  - Info.plist 另声明 `NSAppleEventsUsageDescription`（粘贴到当前应用）。
+- macOS 菜单栏语音输入工具：按住全局热键说话 → ASR 流式转写 → 本地词典纠错 → 可选 LLM 润色 → 自动写入当前光标位置。
+- 个人工具，Tauri 2 实现：Rust 后端（src-tauri/）+ Alpine.js 轻前端（src/）。
+- 两个窗口（UI v6 单窗化后）：
+  - `main`：主窗（历史 + 六页设置，1060x680，最小 760x480），页面 index.html + `src/pages/*.html` 六片段（`?raw` 注入）。
+  - `hud`：录音浮窗，480x200（队列态 664 宽），透明/置顶/无边框/默认隐藏，页面 hud.html。
+- 常驻：`ActivationPolicy::Accessory`（菜单栏，不占 Dock）；关窗=隐藏；退出走托盘。
+- 单实例：tauri-plugin-single-instance。
+- 系统权限：麦克风（必需）、辅助功能（必需，AX 直写/粘贴/键盘监听都走它）、屏幕录制（可选，仅截图上下文开启时）。权限卡在关于页与通用页展示。
 
 ## 2. 需求清单（用户视角）
+
+> 逐功能的预期/试法/验收状态见 `docs/FUNCTION-CHECKLIST.md`（收口期台账）。此处只写行为定义。
 
 ### 2.1 核心流程
 
 - **按住热键 = 录音**：
-  - 默认 F5，可在设置中录制新组合键（必须带修饰键或为功能键）。
-  - 按下后 hud 浮窗出现在光标所在屏，位置可配置（底部/中间/顶部）。
-  - partial 文本流式显示：豆包每次返回会话全量文本，整段替换刷新、自动滚动到底。
-  - 底部音量条随实时 RMS 跳动（Rust 每 120ms 发 `asr-level`，0-1000 定点）。
-  - 可选提示音：开始 Tink / 结束 Pop / 错误 Basso（NSSound 系统音效，音量 0.35，静默失败）。
-- **松开 = 停止录音并结算**：
-  - 尾音缓冲 `extra_tail_ms`（默认 0，上限 2000ms，分片 20ms 睡眠期间采集继续，蓝牙麦词尾截断时调大）。
-  - 结算链：ASR Finish → 恰好一次 Result/Error → 词典纠错 →（可选）LLM 润色 → 交付 → 入历史 → `asr-final`。
-  - 期间浮窗显示阶段状态："… 转写中" / "✦ AI 润色中…" / "交付中…"，不自动消失。
-  - **粘贴完成（交付返回、asr-final 发出）浮窗才关闭**。
-- **Esc = 丢弃**：
-  - Esc 快捷键仅在录音期间动态注册（`register_esc`/`unregister_esc`），不常驻占用。
-  - 丢弃录音、标记当前会话代（generation）为取消：在途结果只入历史、不粘贴。
-- **转写中可开新录音**：协调器规则允许转写期间再次按下直接 Start，两段交付互不阻塞。
-- **引擎四选一**（按 ASR 档案 provider）：
-  - 豆包流式（volcengine，主力）：partial 逐字显示。
-  - 智谱 GLM-ASR（zhipu，文件式）：无实时 partial，Finish 后整段返回。
-  - OpenAI Realtime（openai，备用）。
-  - 本地服务（local）：连本地 ASR 网关（`research-plan/voice-mac-app/local-asr/gateway.py`，mlx-qwen3-asr 滚动解码），WS 走 OpenAI Realtime 事件面子集。档案的 `base_url` 指定网关地址（空=`ws://127.0.0.1:8300`）；无需 API Key；partial 为全量替换语义（网关的滚动解码会回改近期文本）。网关单模型单流：并发会话会被拒绝（Error 入队可重试）。
-- **交付链**（pipeline::deliver 顺序，前一步成功即止）：
-  1. 前台应用是本 app → 仅写剪贴板（delivered=`copied-self`，自贴无意义）。
-  2. AX 直写光标（写 `AXSelectedText` + **多信号回读**校验；仅 `clipboard_only=false`、焦点校验通过、且未命中「粘贴优先名单」时尝试；成功=delivered `pasted-ax`，不碰剪贴板）。
-     - 回读信号：`AXValue` 含写入文本且发生变化 或 `AXSelectedText` 含写入文本（短时两次，40/120ms）→ 成功。
-     - 为什么不能只看 `AXSelectedText`（2026-10-14 Gemini `com.google.GeminiMacOS` 实测）：其输入框写入返回 0 且**已生效**（`AXValue` 可读到写入文本），但插入后选区折叠、`AXSelectedText` 回读为空 → 旧校验误判"静默忽略" → 再回退粘贴一次 → **同一段文本插入两次**。
-     - **粘贴优先名单**（通用页配置 `ax_paste_only_apps`，每行一个 bundle id）：命中则跳过 AX 直写直接粘贴——给"A 的多信号仍判不准"的个例留的手动开关。
+  - 默认 F5；绑定集 `bindings.transcribe.current[]` 支持一动作多键（C54/C55）。
+  - 按下后 hud 浮窗出现在活动显示器，位置按 `overlay_position`（底部/中间/顶部）。
+  - partial 文本流式显示（豆包/local 全量替换语义）；底部音量条随 RMS 跳动（120ms 采样，0-1000 定点）。
+  - 可选提示音：开始 Tink / 结束 Pop / 错误 Basso。
+- **松开 = 停止并结算**：
+  - 尾音缓冲 `extra_tail_ms`（默认 0，上限 2000ms）。
+  - 结算链：ASR Finish → 恰好一次 Result/NoSpeech/Error → **分段队列串行** → 词典纠错 →（可选）LLM → 交付 → 入历史。
+  - 浮窗显示阶段（"… 转写中"/"✦ AI 润色中…"/"交付中…"），交付完成才收起。
+- **Esc = 丢弃**：录音期间起键盘全键观察（`shortcut::esc_listen_begin`，任意修饰键状态识别 Esc）→ 协调器 Cancel → Abort；在途结果只入历史不粘贴。**已知问题 R2：真机仍无效，收口期排查**。
+- **转写中可开新录音**：协调器允许转写期间再次按下直接 Start；各段经 `segment_queue` FIFO 串行交付（顺序恒等于录音顺序，粘贴事务不互相踩）。
+- **引擎三选一**（ASR 档案 provider，D9 后 OpenAI Realtime 已移除）：
+  - 豆包流式（volcengine，主力）。
+  - 智谱 GLM-ASR（zhipu，文件式，无 partial）。空转写归 NoSpeech 金标（D2）。
+  - 本地网关（local）：`engine/gateway.rs` 管理的 denpa-asr 子进程（mlx-qwen3-asr），随机端口登记、零配置（BUILTIN_ID="builtin" 特化档案）；WS 走 OpenAI Realtime 事件面子集；单模型单流。
+- **交付链**（pipeline::deliver，前一步成功即止；D3 后原剪贴板快照在交付入口取）：
+  1. 前台是本 app → 仅复制（`copied-self`）。
+  2. AX 直写（`AXSelectedText` + 多信号回读校验；`clipboard_only=false` 且未命中粘贴优先名单时尝试；成功=`pasted-ax`）。
   3. `clipboard_only=true` → 仅复制（`copied`）。
-  4. 焦点已变 → 仅复制防串应用（`focus-changed-copied-only`）。
-  5. 回执式可靠粘贴（paste_tx，delivered=`pasted-cmdv`）：
-     - 剪贴板延迟供数据（lazy promise，`declareTypes:owner:`），目标 app 读取时回调供数据=回执。
-     - 附带 `org.nspasteboard.Transient/Concealed/AutoGenerated` 三种类型，第三方剪贴板管理器（Maccy/Paste）跳过本次内容。
-     - CGEvent 注入 CmdV chord，修饰键按住 100ms 再释放（过快释放丢 chord）。
-     - 末次回执后 200ms 安静期才恢复原剪贴板；`changeCount`/ownership 守卫绝不覆盖用户新复制。
-     - 恢复硬上限 8s（转写文本最多多留一会，绝不贴旧内容）；chord 注入失败 500ms 快速恢复。
-     - 主线程调度失败兜底：裸 CGEvent CmdV。
-  - `restore_clipboard=false` → 转写文本保留为普通剪贴板内容；`trailing_newlines`（0–10）→ 交给交付的文本末尾追加这么多个换行（只改文本，不发回车键——不会替用户提交/发送消息）。
+  4. 焦点已变 → 仅复制（`focus-changed-copied-only`）。
+  5. 回执式可靠粘贴（`delivery/paste.rs`，`pasted-cmdv`）：剪贴板延迟供数据（lazy promise）→ 目标 app 读取=回执 → CmdV chord 注入 → 末次回执后 200ms 安静期恢复**交付前的原剪贴板**（D3）；changeCount/ownership 守卫绝不覆盖用户新复制；恢复硬上限 8s；`restore_clipboard=false` 保留转写文本。
+  - `trailing_newlines`（0-10）只改交付文本末尾换行，不发回车键。
 
-### 2.2 主界面（index.html）
+### 2.2 主窗（index.html + src/app/ 按页组件）
 
-- 顶栏切换器：
-  - ASR 引擎下拉（档案列表，选中即存 active_asr_id）。
-  - 润色开关按钮（✦ 润色开 / ✧ 润色关，切换 active_llm_id 空/首个）。
-  - 麦克风下拉（含"🎤 自动"，存 mic_device_uid）。
-  - 试音按钮（走 recording_start/stop 命令）。
-  - 齿轮按钮（唤起设置窗，title 写"设置 (⌘,)"）。
-- 双栏历史本体：
-  - 左栏：搜索框（按原文/最终文本过滤）+ 时间线列表；每条显示时间、引擎、文本（final_text 或 raw）、chips（✦LLM / ⚠警告前 24 字 / delivered 方式）。
-  - 右栏详情：
-    - 最终结果 + 复制、重转按钮。
-    - 原始转写对照（raw 与 final 有差异时显示）。
-    - 问题行（warning，红色）。
-    - 元数据行：时间 · 引擎 · delivered · LLM✓。
-    - ▶ 播放（openPath 打开 wav）、显示录音（Finder 揭示）。
-    - 把本条加为词条（final_text/raw 截前 40 字进词典快加框）。
-- 状态条（statusLine）：当前引擎 · 麦克风 · 按住热键，一眼可见。
+- 顶栏：ASR 引擎下拉 / 润色开关 / 麦克风下拉 / 试音按钮（与热键录音状态经 core 轮询互相同步）/ 状态条（引擎·麦克风·热键）。
+- 六页（`sections`，hash 路由 + 搜索过滤）：历史 / 词典 / 通用 / 语音识别 / 大模型 / 关于。
+- 前端组件按页拆分（`src/app/`）：`types.ts`（AppThis 完整形状）+ `util.ts` + `common.ts`（横切：轮询/配置/权限/自测）+ 六页域文件（asr/llm/dict/history/general/about），`main.ts` 组合（44 行）。
+- 同步模型：**事件 + 轮询兜底**（`docs/SYNC.md`）；主窗 800ms 轮询 `poll_versions` 四计数（history/config/mics/recording），值变化才刷新对应数据；hud 150ms 轮询 `hud_poll`。
 
-### 2.3 设置（settings.html 独立窗 560x600 固定；齿轮唤起；侧栏含搜索过滤）
+### 2.3 各页功能
 
-- **通用**：
-  - 按住快捷键显示 + 试音按钮。
-  - 热键录制器：点击后捕获下一个组合键；必须带修饰键（Ctrl/Opt/Cmd/Shift）或为功能键；Esc 取消；保存后 `reapply_hotkey`（unregister_all + 重注册）。
-  - 保留音频条数（keep_audio_count，超出清理最旧录音）。
-  - AI 润色开关（提示：最长等 1 分钟，失败降级 ASR 原文）。
-  - 仅复制到剪贴板开关。
-  - 录音提示音开关。
-  - 浮窗位置（底部/中间/顶部）。
-  - 历史条数上限（0 不限）。
-  - 登录自动启动（LaunchAgent）。
-  - 打开数据目录 / 打开词典配置（config.json）。
-- **语音识别**：
-  - Key 池：多行文本，每行一个 Key；档案 Key 留空时按序取第一个。
-  - 引擎档案卡片：使用/编辑/删除；显示 provider 标签、"使用中"、Key 前 8 位、热词开关。编辑 sheet 提供 volcengine（火山引擎豆包流式）与 local（本地服务，显示服务地址输入、隐藏 Key 输入）选项。
-  - 热词直传预览：来自词典（按权重预算），改词典即时生效。
-  - 当前输入设备（实际使用，uid+name，录音开始后刷新为运行时事实）。
-  - 麦克风优先级列表：按序取第一个在线设备；加入/上移/下移/移除；不在线设备标注"已断开"。
-- **词典**：
-  - 快速添加行：回车入库（boost=3）。
-  - 搜索：按词条或变体过滤。
-  - 表格：词条 / 变体 chips / 护栏词 / 权重（★☆ 显示）。
-  - 编辑 sheet：词条（正确写法）、变体（逗号分隔）、护栏词（出现则不纠）、权重 0-5（影响热词直传优先级）。
-  - 规则提示：拼音模糊仅 3 字以上词条。
-- **大模型**：
-  - 档案卡片：名称、provider 标签、"使用中"、"思考"标签、模型名、Key 前 8 位或"(用 Key 池兜底)"。
-  - 编辑 sheet：
-    - 供应商：DeepSeek / 智谱 (OpenAI 兼容)；切换时 base_url 重置为该家默认，effort 重置（智谱 max / DeepSeek high）并自动拉模型列表。
-    - 模型下拉：`list_llm_models` 拉取供应商 `/models`（10s 超时），当前值不在列表时取首个；失败显示错误。
-    - 接口地址：留空=按供应商默认；可填自建/中转网关。
-    - API Key：留空用 Key 池。
-    - 思考模式开关（thinking：开=模型先思考再回答）。
-    - 思考强度：low/high/max（直传 `reasoning_effort`，不做映射）。
-    - 系统提示词：随档案保存；空则回填内置默认 prompt；编辑/Markdown 预览切换（marked 渲染）。
-    - 测试按钮：`llm_selftest` 走真实链路——固定测试输入 → 词典纠错 → LLM（真实 tool_calls）→ 显示词典结果、是否 tool_calls、延迟、LLM 输出；支持传未保存草稿作 override。
-- **关于**：版本（运行时 `getVersion()` 读 tauri.conf.json 的 version，不在页面里硬编码）、一句话定位、权限说明。
-- 注：历史管理不在设置窗（侧栏隐藏"历史"节），历史管理在主窗双栏。
+- **历史**：双栏列表/详情；搜索（原文+纠错稿）；复制/播放/显示录音/重转（**重转语义 R1 待重做**：应为后台重算回写条目，现状走语音重放）/加为词条。
+- **词典**：快加行（回车入库 boost=3）/搜索/表格（词条·变体·护栏词·权重★☆）/编辑。
+- **通用**：热键录制器（C55 后端录制，Esc 取消）/F 预设/多键绑定列表/激活方式（hold|press）/活动目标探测三档/粘贴优先名单/数据目录（改后提示重启，D10）/自启动/打开配置与数据目录。
+- **语音识别**：Key 池/引擎档案卡（volcengine|zhipu|local）/热词预览（预算后，改词典即时生效）/内置网关卡片（启停/重启生效/启动走秒/崩溃退出码/日志尾部）/当前设备/麦克风优先级。
+- **大模型**：档案卡/编辑（供应商切换自动填地址+拉模型列表/思考开关/思考强度/提示词+Markdown 预览/自测走真实链路，`llm::selftest`）/调用参数（超时/最大 token/重试）。
+- **关于**：版本（`app_version` 命令）/检查更新/安装更新/权限三项。
 
 ### 2.4 失败处理
 
-- **ASR 失败**：
-  - 浮窗保留、partial 文本不动、红点 + "⚠️ 转写失败" + 错误信息。
-  - 重试按钮（`retry_last`）：对最近一次录音重跑整条管线；**只允许重试一次**（`retried` 标志，新录音重置）。
-  - 重试仍失败 → 提示"重试失败(...)；可到 设置→历史 选中记录重跑"。
-- **LLM 失败/超时**：
-  - 交付 ASR 原文兜底，永不阻塞交付。
-  - 管线外层 60s 超时；reqwest 客户端自身 30s 超时（实际先触发，按"LLM 失败"降级）。
-  - hud 显示"✓ 已交付 ⚠️ {warning 前 60 字}"2.5 秒后自动关闭。
-- **转写失败也入历史**：Error 分支追加空文本 + warning + 音频路径的记录，重试链完整；可从历史重跑（`rerun_history`，后台线程按 180ms/6400B 节奏重放 PCM，与主链路同构）。
-- **太短丢弃**：时长 < `min_recording_seconds`（默认 0.3s）→ Abort 引擎（关 WS 无交付）、不入管线、浮窗关闭。
-- **超长截断**：`max_recording_seconds`（默认 1800，定时器下限 10s）到时自动 stop，浮窗提示"⚠️ 录音已达上限, 自动截断"。
-- **麦克风 open 失败**：清缓存重解析重试一次（自愈）；仍失败且错误判定为权限拒绝 → 发 `recording-error`（error_type=microphone_permission_denied），前端给出系统设置指引。
-- **AX 权限缺失**：启动线程检测 + `check_permissions` 命令检测，发 `permission-ax`，前端提示"系统设置 → 隐私与安全性 → 辅助功能"。
-- **配置读取失败**：post_process 直发 asr-final（warning="配置读取失败"）；config.json 损坏时按字段恢复。
-- **管线 panic**：`catch_unwind` 兜底发 asr-final（final 为空 + warning"内部错误"），HUD 不会卡住。
+- **ASR 失败（Error）**：失败段入队（先落盘+写历史保证可重试），浮窗录完提示一次；队列重试（`queue_retry`）而非旧 retry_last（已删）。
+- **空转写（NoSpeech）**：金标语义（D2）——写一条空历史 + 浮窗提示 2.5s，不进失败段、不报警。
+- **LLM 失败/关闭**：交付**词典纠错版**（D1）；永不阻塞交付；warning 记入历史。
+- **太短丢弃**：`min_recording_seconds`（默认 0.3s，下限 0.05s）生效（D5）→ Abort 引擎、不入管线。
+- **超长截断**：`max_recording_seconds`（默认 1800）到时 B5 定时器发 `AutoStopDue` 信号（决策统一协调器，哑火根因已修），自动收尾可立即再录。
+- **麦克风 open 失败**：清缓存重试一次；权限拒绝记日志（`[audio]` 前缀）。
+- **配置读取失败**：该段按 Failed 处理（warning=配置读取失败）。
+- **管线 panic**：`catch_unwind` 兜底，HUD 不卡。
 
-## 3. 架构（src-tauri/src/ 按文件）
+## 3. 架构（src-tauri/src/，2026-10-24 阶段A 后）
 
-### 3.1 会话闭包（recording.rs，413 行）
+### 3.0 数据流总纲
 
-- `RecordingSession`：一次按住→松开的完整生命周期，字段：
-  - `rec: audio::Recording`（采集 + cancel 令牌）
-  - `cmd_tx`（引擎命令通道）
-  - `started_at`（时长计算）
-  - `focus: deliver::FocusLock`（焦点快照）
-  - `gen: u64`（会话代）
-  - `handoff`（交接箱 `Arc<Mutex<Option<SessionHandoff>>>`）
-- 闭包保证：会话结束=结构体 drop=cancel 置位=附属物（B5 定时器/音量循环/桥线程）随 cancel 置位一并作废；无会话级全局 static；stop/abort 共用 `session_cleanup`（注销 Esc、托盘复位、提示音），不存在错误分支跳过清理。
-- `audio.rs`（采集）：
-  - cpal 原生格式（F32/I16，其余报错）→ 下混 mono → 线性插值重采样 16k（相位推进，不依赖系统重采样）→ i16le。
-  - 200ms=6400B 分包（CHUNK_BYTES）经 std mpsc → 引擎 Feed。
-  - `pcm_all` 全程累积，停止后经 SessionHandoff 交付线程异步写盘。
-  - RMS 0-1000 定点音量（AtomicU32）；`cancel: Arc<AtomicBool>`，Recording Drop 时置位。
-- `ctrl_start` 流程：
-  1. `resolve_asr`：active_asr_id 找档案→首个档案兜底；provider 校验（volcengine/zhipu/openai/local）；Key 取档案 api_key，空则 keys[0]（local 免 Key）。
-  2. 已在录音中→报错。
-  3. `resolve_mic`：uid 缓存命中直接用（少一次全枚举，省 40-110ms 按键延迟）；miss 时枚举，mic_priority 按序取第一个在线→mic_device_uid→系统默认；旧设备名配置自动迁移为 CoreAudio DeviceUID 并回写。
-  4. 采集 open：失败清缓存重试一次；再失败且判定权限拒绝→发 `recording-error`。
-  5. `engines::spawn_session`（provider、key、`budget_hotwords` 热词、交接箱、命令 rx）。
-  6. 桥线程：采集 chunk → `Cmd::Feed`（cancel 感知，会话结束即退出）。
-  7. `gen = SESSION_GEN.fetch_add+1`；写入 AppState.session；注册 Esc；show_hud；音量循环；超长定时器（cfg.max_recording_seconds>0 时）；开始提示音。
-- `ctrl_stop` 流程：
-  1. 取走会话；无会话→报错"未在录音中"。
-  2. 尾音缓冲（extra_tail_ms 分片睡，采集继续）。
-  3. `finish()`：取走全程 PCM，组装 SessionHandoff（pcm 随交接流动，停止路径不写盘）。
-  4. 时长 < min（0.3s 默认）→ `Cmd::Abort` + 清理 + 关 hud，不入管线。
-  5. 交接箱写入 + `Cmd::Finish` + 清理（结束提示音）。
-  6. hud 转写态（"… 转写中"）+ 托盘黄。
-- `ctrl_abort` 流程：记 `CANCELLED_GEN = gen`（在途 Result 交付前校验跳过粘贴）→ 有会话发 `Cmd::Abort`，无会话经 engine_mirror 发（覆盖转写中 Esc）→ 清理 + 关 hud。
+热键/托盘/试音 → `send_ctrl`（单一真源）→ **协调器**（三规则状态机）→ 效果线程执行 `ctrl_start/ctrl_stop/ctrl_abort` → 采集（audio.rs，cpal 16k mono i16le 200ms 分片）+ 引擎会话（engine/，专用 current_thread runtime）→ AsrEvent → **分段队列**（segment_queue，单 worker 串行）→ `pipeline::post_process`（词典 → 可选 LLM → 交付 → 历史）→ delivery/（AX 直写 | 回执式粘贴）→ core 版本计数 bump → 前端轮询刷新。
 
-### 3.2 交接与会话代（pipeline.rs，274 行）
+- `core.rs`：全局可变状态唯一居所（CoreState：队列/会话/配置·历史·设备三计数，一把 std Mutex + 版本号）；前端轮询协议的读接口。
+- `transcription_coordinator.rs`：纯状态机（无副作用）；Effect 由专职效果线程执行。
+- `recording.rs`：会话状态机（RecordingSession 闭包；resolve/编排）。麦克风解析在 `audio.rs`，截图编排在 `screen_context.rs`。
+- `engine/`：`contract.rs`（Cmd/AsrEvent）+ `mod.rs`（trait AsrEngine + spawn_session 分派 + resolve_asr + settle）+ `doubao.rs`/`zhipu.rs`/`local.rs` 三引擎 + `gateway.rs`（网关子进程生命周期：随机端口登记/探活收尸/两段式停止/日志尾部）。
+- `segment_queue.rs`：FIFO 队列 + 单 worker（100ms 轮询驱动）；成功/失败/NoSpeech 三类落历史与音频。
+- `pipeline.rs`：SessionHandoff（pcm/focus/gen/audio_path/screenshot）+ post_process + deliver 编排 + 时间戳。
+- `delivery/`：`ax.rs`（AX FFI/AxGuard RAII/ax_insert/ax_trusted）+ `mod.rs`（frontmost_bundle/FocusLock/cg_key_tap）+ `paste.rs`（回执式粘贴 + ClipboardSnapshot）。
+- `dict.rs`：三级纠错管道（正则规范化 → 变体精确替换 → 拼音窗口模糊）+ 热词预算（budget_hotwords，100 token 分层）。
+- `llm.rs`：OpenAI 兼容调用（submit_corrected_text 工具优先/content 兜底）+ DEFAULT_LLM_PROMPT + selftest + list_models + tool_used 直读。
+- `history.rs`：HistoryRecord JSONL + save_wav + wav_header/wav_data_chunk（FLLR 安全）+ prune。
+- `config.rs` + `config/paths.rs`（APP_ID/data_dir 恒定解析/write_config_atomic）+ `config/migrate.rs`（一次性迁移：bindings/F5 兜底/内置引擎/VAD 归零）。
+- `active_target.rs` + `screen_context.rs`：活动目标一次探测（焦点窗口→指针窗口→指针屏），截图与浮窗共用；ScreenCaptureKit 进程内截图（弃 screencapture 命令行——曾卡 134.6s）。
+- `hud.rs`/`overlay.rs`：浮窗内容接口（唯一写者）/坐标与窗口（build.rs 契约闸：坐标 API 只准 overlay.rs）。
+- `tray.rs`/`tray_events.rs`：objc2 NSStatusItem；状态行三点刷新（ctrl_start 尾/stop/abort）。
+- `shortcut.rs`：handy-keys HotkeyManager（transcribe 绑定）+ C55 后端组合录制 + Esc 全键观察。
+- `permissions.rs`/`mic_watch.rs`/`log.rs`/`crash_log.rs`/`update.rs`/`autotest.rs`：权限/设备热插拔监控/日志/崩溃捕获/应用内更新/自测通道。
+- `commands.rs`：Tauri command 薄壳（业务在域内；llm_selftest 已下沉 llm::selftest）。
 
-- `SessionHandoff`：`audio_path / pcm(Arc<Vec<u8>>) / focus / duration_ms / engine / gen`。会话数据只经此流动，禁止新会话级 static（docs/CONTRACTS.md 生命周期节）。
-- 会话代令牌：`SESSION_GEN`（每会话递增）、`CANCELLED_GEN`（abort 时写入被放弃会话的代）。交付前 `gen != 0 && gen == CANCELLED_GEN` → delivered="cancelled"，只入历史不粘贴。
-- `post_process`（Result 触发，专用线程 + `catch_unwind`）：
-  1. 配置读取失败 → asr-final（raw 即 final）+ 返回。
-  2. 空文本守卫：raw 全空白 → asr-final"未识别到语音内容"（delivered=none），不交付。
-  3. pcm 异步落盘：起线程 `history::save_wav` + `prune_recordings`，路径写回 AppState.last_audio（hud 重试用）。
-  4. 词典纠错（dict::TextCorrector，毫秒级本地）。
-  5. 可选 LLM：`use_llm_correction` 且找到 active 档案且有 Key；专用 current_thread runtime block_on；外层 60s 超时；术语表带变体注入；成功且非空才采用（llm_used=true）；失败/超时→warning + 保持 ASR 原文。
-  6. 交付（见 §2.1 交付链）。
-  7. 历史追加 + `enforce_limit` 裁剪。
-  8. asr-final（raw/final/llm_used/delivered/warning）+ 托盘复位。
-- 隐私：转写内容仅 debug 构建落日志（`#[cfg(debug_assertions)]`），release 脱敏。
-- 遗留死代码：`LAST_AUDIO` 静态（pipeline.rs:19）未被读写；`cfg_auto_submit`/`press_enter`（pipeline.rs:268-274）无调用方（paste_tx 有自己的同名函数）。
+### 3.1 关键机制（保留有效的细节描述）
 
-### 3.3 协调器（transcription_coordinator.rs，71 行）
+- **会话闭包**：RecordingSession drop = cancel 置位 = 附属线程作废；无会话级 static（CONTRACTS 生命周期节，build.rs 不检查此条——评审保证）。
+- **会话代令牌**：SESSION_GEN/CANCELLED_GEN（pipeline.rs）防取消段被交付——已知单槽缺陷（连续取消两段时前一段可能漏判，审核 a-3，收口期候选）。
+- **引擎协议**：豆包二进制帧（gzip 全量请求/音频/收尾帧，自校正解析，X-Api-Key 连接级鉴权，热词 corpus 直传）；智谱 multipart 文件式；local=WS Realtime 子集（首帧 context 注入热词）。恰好一次 Result|NoSpeech|Error。
+- **B5 超长**：定时器只发信号（AutoStopDue），决策在协调器（f9032c5 修复哑火）。
+- **事件面（真实）**：前端 listen 只有 `config-changed`（托盘切换配置时发）与 `update-progress`（下载进度）。Rust→WebView 的其余广播通道在打包版不可达（C43b 实测），一切状态同步走 invoke 轮询（core 版本计数 / hud_poll）。引擎事件桥的 "asr-partial"/"asr-result" 等字符串是**内部分派标签**，不是前端事件。
+- **AppState**（lib.rs）：session（当前会话）/last_audio/engine_mirror——收口期候选：并入 core。
 
-- 极简三规则状态机（由用户定义，替代 Handy 状态机）：
-  - `Input{pressed:true}` → Idle 时 Start；录音中忽略。
-  - `Input{pressed:false}` → 录音中则 Stop；否则忽略。
-  - `Cancel` → 录音中则 Abort；否则忽略。
-  - `StartResult{started:false}` → 复位录音态（下次按键可重试；麦克风被拒场景要先乐观转移状态，再由本次 StartResult 纠正）。
-  - 转写中的下一次按下：直接开新录音（交付各自独立，不互相阻塞）。
-- 线程模型（C13/C26）：快捷键回调、托盘、前端命令（recording_start/stop/abort）全部只发信号到 `lib.rs::send_ctrl/send_cancel`；协调器线程产出 Effect（Start/Stop/Abort）；专职效果线程执行 `ctrl_start/ctrl_stop/ctrl_abort`，Start 结果回发 StartResult。
-- 单一真源：所有录音触发（快捷键/托盘"录音"项/前端试音）同走 send_ctrl。
+### 3.2 契约闸与自测
 
-### 3.4 引擎层（engines.rs 115 行 + 三实现）
-
-- `engines.rs`：
-  - `spawn_session`：按 provider 分派（zhipu→zhipu_file，openai→openai_realtime，local→local_asr，其余→doubao）。
-  - 会话跑在**专用 current_thread tokio runtime** 的独立线程（C35：提交到 tauri::async_runtime 的任务会整体静默不被 poll，实测教训）。
-  - 统一事件桥 emit：
-    - `Partial` → `asr-partial`。
-    - `Result` → 从交接箱 take handoff，起线程跑 post_process（catch_unwind，panic 也兜底 asr-final）+ `asr-result`。
-    - `Error` → **失败也入历史**（空文本+warning+音频路径）+ `asr-error`。
-  - `send_current`：经 AppState.engine_mirror 对当前引擎发命令（转写中 abort / 自测喂音）。
-  - `FINALIZE_TIMEOUT_SECS = 3`：松开后等服务端最终结果的兜底上限（openai 引用此常量）。
-- `doubao.rs`（豆包流式，296 行，Rust 移植自 Swift DoubaoEngine）：
-  - 端点：`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`。
-  - 请求头：`X-Api-Key`（连接级鉴权）、`X-Api-Resource-Id: volc.seedasr.sauc.duration`、`X-Api-Request-Id`（uuid）、`X-Api-Sequence: -1`、`Sec-WebSocket-Key`（16 随机字节 base64）。
-  - 二进制帧协议（自校正解析：header+可选 seq+size+payload 恰好等于帧长）：
-    - 全量请求帧 `[0x11,0x10,0x11,0x00]`：gzip JSON——`user.uid = voicemac-{uuid}`（每次唯一）、audio pcm/16000/16bit/1ch、`model_name=bigmodel`、`enable_punc/enable_itn/enable_ddc/enable_nonstream` 全 true（enable_ddc=语义顺滑）。
-    - 热词直传：`request.corpus.context` = `{"hotwords":[{"word":...}]}`；无热词则不带 corpus（直传优先级高于词表，本 app 不用词表）。
-    - 音频帧 `[0x11,0x20,0x01,0x00]`：gzip PCM。
-    - 收尾帧 `[0x11,0x22,0x01,0x00]`：发送带 1s 超时（长录音收尾可能因 TCP 背压阻塞，C34）；finish 幂等（C21）。
-  - 响应解析：
-    - type=0b1001：`result.text` 为**会话全量文本，单变量替换、禁止拼接**（C33）；utterances 的 definite 不结算——交付只认按键松开（C20）。
-    - type=0b1111：错误帧，解析成功取 message，解析失败也不静默（报"错误帧(无法解析)"）——恰好一次 Result|Error 契约。
-  - 收尾循环（C37 单通道重构）：WS 读取与外部命令转发进统一通道，主循环单 recv，watchdog 用 `timeout_at` 包裹——finish 后 3s 无最终帧则用已收文本结算。中途断连（未 Finish）报"连接中断, 请重试"，不交付。
-- `zhipu_file.rs`（智谱 GLM-ASR 文件式，94 行）：
-  - Feed 累积 PCM → Finish 打包 WAV（`wrap_wav`，44B 头复用 `history::wav_header`）→ multipart POST `https://open.bigmodel.cn/api/paas/v4/audio/transcriptions`（model=glm-asr，Bearer 鉴权，60s 超时）。
-  - PCM < 1600B 报"没听清(无音频)"。无实时 partial；不支持热词。
-- `openai_realtime.rs`（备用，178 行）：
-  - 端点：`wss://api.openai.com/v1/realtime?model=gpt-4o-mini-transcribe`，头 `Authorization: Bearer` + `OpenAI-Beta: realtime=v1`。
-  - `session.update`：modalities=["text"]、input_audio_format=pcm16、turn_detection=null。
-  - Feed：16k→24k 线性插值上采样（每样本 1.5 倍）→ base64 → `input_audio_buffer.append`。
-  - transcript 分段累积（`conversation.item.input_audio_transcription.completed`）+ `response.audio_transcript.delta` 拼 partial。
-  - Finish：按键后立即 `input_audio_buffer.commit`，在 `FINALIZE_TIMEOUT_SECS` 窗口内收最后一帧即结算。
-  - 断连契约与 doubao 对齐：未 Finish 的中途断连报错。
-- settle 恰好一次（docs/CONTRACTS.md）：空文本=Error"没听清(转写为空)"，非空=Result；断连/错误帧/panic 均不静默。
-
-### 3.5 后处理管线组件
-
-- `dict.rs`（词典纠错，166 行，移植自 Swift TextCorrector）三级管道：
-  1. 正则规范化：normalizations 按 pattern 长度降序 replace_all。
-  2. 显式变体精确替换：词条+变体合并按字数最长优先；跳过是词条子串的变体（防自替换）；文本含护栏词则整条跳过；含正确写法则跳过。
-  3. 拼音窗口模糊：仅 3+ 字词条；无声调拼音音节序列编辑距离（DP）；近音组 [zh/z, ch/c, sh/s, n/l, f/h, an/ang, en/eng, in/ing, ian/iang, uan/uang] 记 0.5，其余 1.0；允许总距离 ≤0.5（至多一个近音音节，新音节 1.0 不允许）；窗口须全 CJK 且音节数相等。
-  - 热词权重预算（recording.rs `budget_hotwords`）：按 boost 降序，成本=字数+2，预算 100 token；装不下跳过（后续小词条仍可塞入，分层非硬截断）。
-- `llm.rs`（润色，156 行）：
-  - OpenAI 兼容 `{base}/chat/completions`；base 空=按 provider 默认（deepseek→`https://api.deepseek.com`，其余→`https://open.bigmodel.cn/api/paas/v4`）；temperature 0.1。
-  - system prompt = 用户 prompt + 术语表（每行一条，带变体的格式"词条(误: v1/v2)"）+ 强制要求调用 `submit_corrected_text` 工具提交修正文本。
-  - tools 定义 `submit_corrected_text(corrected_text)`；不强制 tool_choice（兼容端支持不一），解析侧 tool_calls 优先、content 兜底。
-  - 显式传两个独立参数：`thinking: {type: enabled|disabled}`（思维链开关）与 `reasoning_effort`（low/high/max，选项是什么发什么，不映射不降级，错误由服务端返回）。
-  - 每次调用全量落盘 `llm_logs/{millis}-{provider}-{耗时}ms.json`（url/request/response_raw）。
-  - `list_models`：GET `{base}/models`（10s 超时），取 data[].id 排序返回。
-
-#### 3.5.1 屏幕上下文（`active_target.rs` + `screen_context.rs` + `llm.rs` 的带图路径）
-
-开关式功能（`detect_active_target`，默认 `active_window`），定位是"提升专有名词准确率"，不改变 ASR 本身。
-
-- 目标选项（三值）：`off` 不截图；`active_window`（默认）截"主窗口"；`active_display` 截"光标所在显示器"整屏。
-- 主窗口与显示器由 `active_target::detect_active_target()` 探测**一次**，截图与浮窗共用（浮窗只取 `display`）：
-  1. **先看光标**：键盘焦点（输入光标所在）窗口 → 主窗口，它的屏 = 活动显示器；
-  2. **没有光标**：鼠标指针下的普通窗口 → 主窗口；
-  3. **鼠标下也没有窗口**：无主窗口，活动显示器 = 指针所在屏。
-  - 窗口合格条件：层 0、非本进程、≥200×150（过滤浮层、自己的窗口、工具提示）。
-  - 键盘焦点窗口 = AX 焦点元素的 `AXWindow` 的坐标/尺寸 → 在 CoreGraphics 窗口列表里按框匹配（±2px）。
-- 截图端消费配置：`active_window` 有主窗口 → 截窗口；没有 → 回退截显示器（`[ctx]` 日志说明）；`active_display` 始终截显示器。
-- 采集实现 = **ScreenCaptureKit**（进程内系统 API，macOS 14+）：`SCShareableContent` 枚举 → `SCContentFilter` → `SCScreenshotManager.captureImage` → ImageIO 写 PNG，存 `<数据目录>/screen_context/screen-{millis}-ctx.png`；**在录音开始的后台线程执行**，不占录音启动时间；保留最近 200 张。
-  - 不用 `screencapture` 命令行：外部进程不可控（实测最长一次卡 134.6s，把浮窗显示一起拖住，且无超时/单飞手段）。
-  - 窗口前后顺序取 CoreGraphics 窗口列表（文档保证"从前往后"）；ScreenCaptureKit 只负责截。
-- `active_display` 排除浮窗：过滤器用 `SCContentFilter(display:excludingWindows:)`，把**本应用自己的全部窗口**（浮窗/主窗/设置窗）从这一张截图里排除；不设 `NSWindow.sharingType`（那会连带影响屏幕共享/录屏里浮窗的可见性）。
-- 显示顺序：**按下热键立即显示浮窗**，并放在活动显示器上（屏内位置仍按 `overlay_position`）。
-- 注入（`llm.rs`）：user 消息变成 `[图片, 文本]` 内容块数组（带图时文本前缀"参考随附截图中的上下文，修正下面这段转写："）。图片走 base64 内联 data URL，每次新截图；**不带图时 user 消息仍是纯字符串**。
-- 权限：需要"屏幕录制"（TCC）。常驻在「权限」卡里展示（标"可选"）；目标非 `off` 时前端可调 `request_screen_permission` 触发系统引导；缺权限时采集失败 → `[ctx]` 日志 + 本次退回纯文本纠错，**不阻塞交付**。
-- 失败降级：枚举/截图失败（含 5s 超时）、图片读取失败、模型不支持图片，都只记日志并继续纯文本纠错。
-- 落盘留档：截图本体存 `screen_context/`；`llm_logs/*.json` 里把 base64 换成 `<截图内联: <路径> (N MB)>` 占位。
-- 实测依据（模型选择、token 成本、失败模式）：`research-plan/voice-mac-app/day-07-context/report.md`。要点：DeepSeek Flash 与 GLM 5.3 Flash 均支持图片；带图 vs 不带图的专名命中实测 1/5 → 5/5。
-- 配置迁移：旧键 `screenshot_context`（布尔）与 `screenshot_target`（早期取值）**不迁移、直接忽略**；新键 `detect_active_target` 缺省 `active_window`（用户自行改配置）。
-- `deliver.rs`（交付原语，155 行，移植自 Swift OutputAndHistory）：
-  - `ax_insert`：systemWide → `AXFocusedUIElement` → 读选区 before → 写 `AXSelectedText` → 读回 after 对比，防"报成功但 app 静默忽略"。
-  - `ax_trusted(prompt)`：AXIsProcessTrustedWithOptions，quiet=仅查询，否则弹系统授权窗。
-  - `frontmost_bundle`：`lsappinfo front` + `lsappinfo info -only bundleid`（系统自带命令）。
-  - `FocusLock`：录音开始快照 bundle；`still_valid` 策略——快照与当前都拿得到才比对，拿不到不拦截（宽松）。
-  - `cg_key_tap`：CGEventCreateKeyboardEvent + CGEventSetFlags + CGEventPost（KCG_HID_EVENT_TAP），按住 100ms 再释放（Handy #165：过快释放丢 chord）；CGEvent 构造线程安全（enigo 走 HIToolbox 有主线程断言会 SIGTRAP——C39 已实测确认的崩溃，弃用）；裸 CF 指针 CFRelease。
-- `paste_tx.rs`（回执式可靠粘贴，341 行，移植自 Handy paste_tx 全套，objc2 手写）：
-  - PasteProvider 自定义类：`pasteboard:provideDataForType:` 供数据并记录回执；`pasteboardChangedOwner:` 标记 ownership 丢失。
-  - `reliable_paste`（主线程调用）：flush 旧事务 → 备份原剪贴板（文本/图片）→ 发布延迟供数据（public.utf8-plain-text + 3 种隐藏类型，记 changeCount）→ 注入 CmdV chord → 注册 Pending + 起 waiter。
-  - waiter 15ms 轮询 evaluate：ownership 丢失/取消→Finish；末次回执（≥注入时刻）后 200ms 安静期→Finish；超时（注入失败 500ms / 常规 8s）→Finish。
-  - settle（恰好一次，主线程）：changeCount 仍 ours 且 restore_clipboard → 恢复原剪贴板（文本/图片/清空）；restore_clipboard=false → 转写文本保留为普通文本。不发任何按键（历史上的 auto_submit 补发 Return 已删，见 §2.1）。
-- `history.rs`（137 行）：
-  - `HistoryRecord`：ts/engine/raw/final_text/llm_used/delivered/audio_path/duration_ms/warning。
-  - append（JSONL 追加）/ recent（倒序截取）/ enforce_limit（0=不限，保留尾部 N 条）。
-  - `save_wav`：`recordings/rec_{unix_millis}.wav`，16k mono i16le 标准 44B 头；`wav_header` 为落盘/上传公共函数（消除 zhipu_file 重复，REFACTOR ✅19）。
-  - `prune_recordings`：按文件名排序保留最近 keep 个。
-
-#### 3.5.2 LLM 调用参数与失败重试
-
-三个参数在配置里（大模型页「调用参数」卡，三个档案共用）：
-
-| 参数 | 默认 | 作用 |
-|---|---|---|
-| `llm_timeout_secs` | 30 | 单次请求超时；慢思考模型（effort=high）可调大 |
-| `llm_max_tokens` | 0（不传） | 输出预算上限；思考型模型把预算耗在思考上导致正文为空时调大 |
-| `llm_retries` | 2 | 失败重试次数（总尝试 = 重试 + 1），退避 0.4s / 0.8s… |
-
-重试判据（`llm.rs::is_retryable_status` + 失败分类）：**传输失败、响应读取失败、响应非 JSON、HTTP 5xx/429、响应无有效输出** 重试；
-**4xx（模型名、Key、参数错误）不重试**——那是配置问题，重试只会浪费等待时间。
-
-失败可见性：每次尝试都写 `llm_logs/{时间}-{provider}-{耗时}ms-a{第几次}[-失败].json`（含原始响应体），
-并落 `[llm] 失败 第N/M次 可重试=… 原因=… 详情=…` 到 app.log；全部失败后 history 的 warning 记为
-`LLM 失败（已尝试 N 次）: …`，本次转写退回 ASR 原文（既有降级语义不变）。
-
-> 判定依据：2026-09-17 实测 —— 200 条历史里 191 次 LLM 成功；失败中 3 次是
-> `error decoding response body`（响应体读取失败，旧代码只报这一句、看不出原因，也无法重试）。
-> 修复后同样的失败会打印 HTTP 状态与响应体片段，并按上面的判据重试（本地用 127.0.0.1:9 验证过重试两次 + 清晰报错）。
-
-#### 3.5.3 提示词里的截图对照规则
-
-内置提示词（`settings::DEFAULT_LLM_PROMPT`）含第 6 节「截图上下文对照 (Screenshot Grounding)」：
-- 转写片段听着别扭/不成词/与常见写法对不上时，先到截图里找**同一个词**（同音/近音/缩写/中英混写）；
-  找到就用截图里的写法，找不到就保持原样（禁止臆造替换）。
-- 明确"不要把截图里与这段转写无关的内容写进结果"。
-- 两个示例分别对应"截图里有正解 → 按截图改"与"截图无线索 → 不改"。
-
-依据：实测发现仅靠"图作为宽松语境"不足——图里写着的词也可能不被采用（见
-`day-07-context/artifacts/image-context-usage-findings.md` 用例 5：图里有"基线文档"，输出却是"基座文档"），
-而图里没有的词任何模型都改不对。该节把行为要求写死，并给出正/负两侧的示例。
-
-### 3.6 HUD 浮窗（overlay.rs + hud.html + hud.ts）
-
-用户定义的原则（issue #7）：**按下出现、松手按规则延迟消失**。窗口的显隐只由少数几个明确时刻决定，其余一切（文字、队列、尺寸）都只是内容变化。
-
-- 窗口显隐（只三处）：
-  - `overlay::show_hud`（按下）：定位一次 + show + 记录 `LAST_SHOW_MS` + 清空上一次的 partial/finished/err。
-  - `show_hud_msg`：内容提示时确保窗口可见（不重新定位）。
-  - `hide_hud`：隐藏；调用入口只有前端 `hud_hide`。
-- 最短显示守卫（`overlay::MIN_SHOW_MS = 400ms`）：`hud_hide` 忽略“距上次显示不足 400ms”的隐藏请求。这是为了消灭隐藏定时器与显示之间的竞争（症状：按下不显示、松手才出现——上一次的提示定时器在按下后到期，把刚显示的窗口 hide 掉并清空快照）。
-- 尺寸：**固定**。窗口 `inner_size(480, 200)`；出现队列时宽度切到 664（CSS `transition: width`），高度始终 200。
-  - 长文本在文本框内滚动（`.cur-text { max-height: 110px; overflow-y: auto }`）——与队列化之前完全一致（当时窗口也是固定 480x200、文本区 110px 后滚动）。
-  - 不做动态改高：队列化时加的"按内容上报高度→改窗口→重新贴屏"这条链路已删除（`hud_resize` 命令、`overlay::resize_window`、前端的尺寸上报）。它会让窗口在"松手 → 结果到达"的几百毫秒里连改两三次位置/高度，正是用户报的"位置跟原来不完全一样"。
-- 位置：按下时 `position_hud_at_cursor` 定位一次。定位链全 NS 坐标系（光标 → 光标所在 NSScreen → 屏内水平居中、垂直按配置 bottom/top/center），越界拒绝放置并记日志；定位必须主线程。
-- 内容与存活（`src/hud.ts`，150ms 轮询 `hud_poll`，version 去重）：
-  - 录音中：状态行“● 录音中” + 实时文字（逐字滚动）+ 电平条（仅在 `status==="recording"` 时显示，其余归零）。
-  - 松手后：`status==="transcribing"` 时状态行“… 转写中”；左栏**保留上一份回显**（此时队列里还没这一段，ASR 结果要几百毫秒后才到；清空会造成“回显瞬间消失又出现”）。
-  - 队列总览：出现排队段时切换为左右两栏（480 ↔ 664 宽），左栏当前段、右栏队列（状态图标 + 单行文字；失败行红）。
-  - 存活规则：录音中 / 转写中 / 有排队段 → 不自动收；全部结束 → 350ms 收起；仅剩失败或一次提示（msg、warning）→ 2500ms 收起。
-  - 失败：录音中不显示失败段与失败条；录完提示一次，2500ms 后自动 `queue_dismiss`（音频与原文已在历史，可从历史页重跑）。
-  - 电平条：payload/1000×6 倍显示，>0.9 转橙色。
-- 录音中静音提醒（`recording.rs::spawn_level_loop`）：连续约 2.5s（21 帧 × 120ms）RMS < 2 就提示一次“⚠️ 还没听到声音”；重新出现声音则复位，下一次静音还能再提示。用户要求“没听清不该等松手才说”。
-  - 阈值必须贴着 0：实测该麦克风（DJI Wireless Mic）正常说话时 `peak` 只有 0.06，阈值取 10 会在真的说话时误报（日志实锤）。
-  - 录音中的一次性提示不参与窗口收起（`hud.ts`）：静音提醒也走 `msg`，但录音还在进行，收窗由阶段决定。
-- 空转写（松手后判定）：`AsrEvent::NoSpeech` → 写历史（`delivered="none"`）+ `hud::no_speech`。
-  - **必须同时结束“转写中”阶段**：这一段不会再有交付，若阶段留在 `transcribing`，前端按“忙”判定 → 浮窗永不收起（用户实测“提示停留特别久”，issue #9）。
-  - `hud::error` 同理：非录音时的错误意味着这一段已结束，阶段一起收掉。
-
-### 3.7 托盘（tray.rs 159 行 + tray_events.rs 100 行）
-
-- objc2 手写 NSStatusItem（tauri tray API 在本环境不显示，3 轮失败后弃用）；`mic.fill` 模板图标 18x18，tooltip"Denpa Jack"。
-- 图标：**恒定一张细线 template 图**（`src-tauri/icons/menubar.png`，随浅/深菜单栏自动反色），**不随录音/转写切换**。
-  - 状态反馈由浮窗负责（`● 录音中` / `… 转写中` / `✦ AI 润色中`），菜单栏图标不参与状态表达。
-  - 历史：C41 定义了 `set_recording`/`set_transcribing`（改 `systemRed`/`systemYellow` 染色），但 `set_recording(true)` 从未被调用、其余调用在非主线程静默失效 → **实际效果恒定不变**；`d4989f3`（"托盘三态修复"）补上主线程调度与四处调用点后图标开始变色；`affa729` 又把三态改成"烘焙彩色位图 + 加粗字形"（叠加设计）；`d28f555` 回到细线字形但仍在变色。
-  - 2026-09-18 用户裁决：回到"图标不变"（"以前图标是不变的，为什么它一定要变？"），删除 `set_tray_recording` / `set_tray_transcribing` 两个调度函数与全部调用点（`recording.rs` 3 处、`segment_queue.rs` 4 处）。
-- 菜单（tag → 事件）：状态行（禁用，"状态: 待命 (按住 {hotkey} 说话)"/"状态: 录音中…"）｜"录音 (松开转写)"(6)｜"LLM 纠错(慢速高保真)"(1，带勾选态)｜"仅复制不粘贴"(2，带勾选态)｜"打开数据目录"(3)｜"打开词典配置"(7)｜"设置…"(4)｜"退出"(5)。
-- 行为：
-  - 6：发协调器信号 `send_ctrl(!busy)`（点按式切换，与快捷键同源单一真源）。
-  - 1/2：翻转配置 + 广播 `config-changed` + 重建托盘刷新勾选态。
-  - 4：显示并聚焦**主窗**（main，非设置窗）。
-  - 5：app.exit(0)。
-- 事件线程经 mpsc 接 tag 字符串分发；`refresh_tray`：主线程 Drop 旧托盘（removeStatusItem）→ spawn_tray 重建。
-
-### 3.8 契约闸与契约文档（build.rs 38 行 + docs/CONTRACTS.md）
-
-- build.rs（docs/CONTRACTS.md 的编译期执行者，违者 panic 编译失败）：
-  - 写坐标 API（`setFrameOrigin` / `CGDisplayBounds` / `CGGetDisplaysWithPoint` / `cursor_position`）只准出现在 overlay.rs；`mouseLocation` 额外允许 autotest.rs（读坐标的验证者）。
-  - 使用主线程-only API（`NSStatusItem` / `NSPasteboard` / `setFrameOrigin` / `NSSound`）的文件必须同时出现 `run_on_main_thread` 或 `MainThreadMarker` 调度标记（audio_feedback.rs 豁免，play_on_main 内部已调度）。
-- docs/CONTRACTS.md（跨边界契约，教训来源 C27/C41/C26/C39）：
-  - 坐标三体系对照：NS（主屏左下原点，y 向上）/ CG（主屏左上，y 向下）/ Tauri logical（封装 CG，向下）——互不兼容；一次计算只用一套；坐标操作集中在 overlay.rs。
-  - 线程模型：NSWindow/NSStatusItem/NSPasteboard/NSSound 仅主线程（经 run_on_main_thread）；tauri 窗口方法线程安全；AX API/CGEvent 构造任意线程；全局快捷键回调只发信号；tokio 引擎会话跑专用 current_thread runtime。
-  - 生命周期：objc2 Retained 自动释放；裸 CGEvent/CF 必须 CFRelease；会话附属物一律持 Recording.cancel 令牌；交接数据只经 SessionHandoff。
-  - 单位：WAV/PCM 小端显式 to_le_bytes/from_le_bytes；音频链固定 16k mono i16le；tokio Duration 显式构造。
-  - 恰好一次：引擎结算 Result|Error 恰好一次，断连/解析失败/panic 不许静默。
-
-### 3.9 自测通道（autotest.rs 119 行，环境变量显式激活）
-
-- `VOICEMAC_AUTOTEST_FILE=<wav>`：headless 文件回放全链路——启动 1.2s 后 `ctrl_start`，读 wav 的 data chunk，按 190ms/6400B 真实节奏喂引擎，300ms 后 Finish，15s 等交付后 exit(0)。走真实交付路径（源码注释中"强制 clip_only"已过时，日志明确"非 clip_only"）。
-- `VOICEMAC_DATA_DIR=<dir>`：测试隔离——把整个数据目录（config/history/recordings/日志）指到独立位置。测试副本改 bundle id 无效（tauri 的 identifier 构建时烘焙，仍读写真实目录）；设了 `VOICEMAC_AUTOTEST` 的副本同时不注册真热键（不与用户实例抢按键）。
-- `VOICEMAC_AUTOTEST=e2e`：模拟按键 + 定位断言——启动 1.5s 后 `send_ctrl(true)`（与真实热键完全同通道）；600ms 后 hud 定位断言（主线程读回 NSWindow.frame 与光标所在 NS 屏求交，±2px 容差，失败 exit(1)）；按住 8s 后 Released；10s 等交付后 exit(0)。
-- examples/：`dict_test.rs`（词典纠错 5 用例：变体替换/拼音 0.5/护栏/已含正确/新音节不允许，`cargo run --example dict_test`）、`llm_test.rs`、`mic_ids.rs`、`smoke_e2e.rs`、`ws_test.rs`；`src/bin/llm_test2.rs`（list_models 双供应商实测，DS_KEY/ZP_KEY 环境变量）。
-- 前端启动 `uiSelftest`：逐个调用只读命令（ping/get_config/list_mics/get_active_mic/get_history/get_hotwords/list_llm_models），结果经 `ui_log` 落 app.log。
-- 回归顺序（REFACTOR.md）：cargo check 0 error → dict_test 5/5 → autotest file 交付 ✓ → autotest e2e 按键链 ✓ → 打包签名可启动。
-
-### 3.10 命令与事件面（commands.rs 384 行 + lib.rs 178 行）
-
-- Tauri 命令全集（invoke_handler）：
-  - 设备：`list_mics` / `get_active_mic`（每次按当前配置解析：优先级→指定→默认）。
-  - 录音：`recording_start` / `recording_stop` / `recording_abort`（统一发协调器信号）。
-  - LLM：`list_llm_models` / `llm_selftest` / `get_default_prompt`。
-  - 历史：`get_history` / `clear_history` / `copy_text` / `rerun_history`（后台线程重放）/ `retry_last`（AppState.last_audio，兜底历史最新音频）。
-  - HUD：`hud_hide` / `hud_poll`（尺寸固定，无 resize 命令）。
-  - 窗口/配置：`open_settings_window` / `reapply_hotkey` / `get_config` / `save_config` / `open_config_file` / `open_data_dir` / `dev_nav`（hash 导航）/ `check_permissions`。
-  - 自启动：`autostart_enable` / `autostart_disable` / `autostart_status`。
-  - 其他：`ping` / `get_hotwords`（预算后热词）/ `ui_log`。
-- 事件（Rust → 前端）：`asr-partial` / `asr-result` / `asr-error` / `asr-final` / `asr-level` / `hud-state`（recording|transcribing）/ `hud-busy` / `hud-msg` / `recording-error` / `permission-ax` / `config-changed`。
-- AppState：`session`（当前 RecordingSession）/ `last_audio`（最近已保存录音，hud 重试用）/ `engine_mirror`（当前引擎命令通道镜像）。
-- 启动序列（lib.rs run）：panic hook 落盘 → 插件注册（single_instance/opener/clipboard/global_shortcut/autostart）→ Accessory 策略 → 托盘 → AX 权限后台检测 → hud 窗创建定位 → 主快捷键注册（解析失败回落 f5）→ 协调器线程 + 效果线程 → autotest 挂载。
-- 日志（log.rs）：app.log（`settings::data_dir`，即默认目录或配置的 `data_dir`）+ stderr 双写；`elog` 无 app 句柄时用 `settings::data_dir_no_app()`（取同一份缓存，未预热则按 HOME 推导默认目录）；panic hook 落盘；release 构建转写内容不落日志。
+- build.rs 递归扫描 src/：坐标 API 只准 overlay.rs（mouseLocation 豁免 autotest.rs）；主线程 API 必须带调度标记；hud 快照 API 白名单。违反=编译 panic。
+- autotest.rs：`VOICEMAC_AUTOTEST=file`（文件回放全链）`timelimit`（超长截断+哑火 4 断言）`ui`（主窗数据链 vs 磁盘真值；**需先起 vite dev server**，无 dev server 时 WebView 空白=假绿）`e2e`（真麦）`update[/install]`。`VOICEMAC_DATA_DIR` 隔离数据目录。
+- 日志：`<数据目录>/app.log`，前缀 `[diag]/[voice]/[ui]/[audio]/[perm]/[shortcut]/[queue]/[pipeline]/[paste-tx]/[llm]/[ctx]/[hud]/[deliver]`。
 
 ## 4. 数据与配置
 
-- **config.json**：`~/Library/Application Support/io.github.yangyaofei.denpajack/config.json`（app_config_dir，identifier 决定；bundle id 常量见 `settings::APP_ID`）。
-  - `data_dir: string`：数据根目录（history / recordings / llm_logs / app.log 都在其下）。空 = 默认目录；支持绝对路径、`~/…`、相对默认目录的相对路径。config.json 本身固定在默认目录当锚点。取路径统一走 `settings::data_dir(app)`（缓存 + `save_config` 失效）。
-  - `keys: string[]`：API Key 池（档案间共享；档案 Key 留空时按序取第一个）。
-  - `llm_profiles`：id / name / provider(deepseek|zhipu) / base_url(空=默认) / model / api_key / prompt(空=内置) / thinking(bool) / effort(low|high|max，默认 low)。
-  - `asr_profiles`：id / name / provider(volcengine|zhipu|openai) / api_key / hotwords_enabled。
-  - `active_llm_id` / `active_asr_id`。
-  - `dict`：term / variants[] / guard_words[] / boost(0-10，前端限 0-5)。
-  - `normalizations`：pattern / replacement（正则规范化规则）。
-  - `hotkey`：key(默认 f5) / ctrl / alt / cmd / shift；保存时键名归一化为 keyboard_types Code 格式（F5/KeyA/Space/Digit1/Comma/ArrowUp…）。
-  - 行为开关与数值：
-    - `use_llm_correction`（默认 true）、`clipboard_only`（false）、`audio_feedback`、`restore_clipboard`（默认 true）、`trailing_newlines`（默认 0 = 不追加，夹到 0..=10，只改交付文本不改历史原文）。
-    - `detect_active_target`（默认 `active_window`）：活动目标探测的用途（off / active_window / active_display）——截图用窗口还是显示器作为纠错上下文；旧键 `screenshot_context` / `screenshot_target` 已废弃、忽略不迁移。详见 §3.5.1。
-    - `llm_timeout_secs`（默认 30）、`llm_max_tokens`（默认 0 = 不传该字段，用服务端默认）、`llm_retries`（默认 2）：LLM 调用参数，大模型页「调用参数」卡可改。详见 §3.5.2。
-    - `auto_check_update`（默认 true）：启动时自动检查更新（只报告，不自动安装）。详见 §3.11。
-    - `overlay_position`（"bottom"）、`history_limit`（200，0 不限）、`keep_audio_count`（50）。
-    - `max_recording_seconds`（1800）、`min_recording_seconds`（0.3）、`extra_tail_ms`（0，≤2000）。
-    - `mic_device_uid`、`mic_priority`（CoreAudio DeviceUID 序列）。
-  - 兼容性：所有字段 `#[serde(default)]`（旧配置文件可解析）；解析失败时按字段恢复（同类型才覆盖合并，一个坏字段不毁整个配置）；保存时 hotkey.key 归一化 + pretty 写盘。
-- **history.jsonl**（同目录）：一行一条 HistoryRecord；`clear_history` 直接删文件；前端拉取 limit=500。
-- **recordings/**（同目录）：`rec_{unix_millis}.wav`，16k mono i16le；keep_audio_count 裁剪最旧。
-- **llm_logs/**（同目录）：每次 LLM 调用 `{millis}-{provider}-{耗时}ms.json`，含 url / request / response_raw 全文（本地明文；key 不写入）。
-- **app.log**（同目录）：关键链路诊断日志（setup/hotkey/doubao 帧诊断/pipeline/paste-tx/autotest 断言）。
-- **screen_context/**（同目录）：屏幕上下文截图归档，`screen-{millis}-ctx.png`，保留最近 200 张（超出删最早）。仅当 `detect_active_target` 非 `off` 时产生；用途是事后核对"当时屏幕上是什么、模型看到的是不是这个"。
+- **config.json**：固定在 `~/Library/Application Support/io.github.yangyaofei.denpajack/`（锚点）。全部字段 `#[serde(default)]`；原子写（write_config_atomic：tmp+rename）。
+  - `data_dir`：数据根目录（history/recordings/llm_logs/app.log 跟随）。**启动解析一次恒定，改后重启生效（D10）**。取路径统一 `config::data_dir(app)`。
+  - `keys[]`（Key 池）、`llm_profiles`（provider=deepseek|zhipu）、`asr_profiles`（provider=volcengine|zhipu|local）、`active_llm_id`/`active_asr_id`。
+  - `dict[]`（term/variants/guard_words/boost）、`normalizations[]`。
+  - `bindings`（C54 绑定集，旧 hotkey/hotkeys 只读迁移）；`activation`（hold|press）。
+  - 开关与数值：`use_llm_correction`/`clipboard_only`/`audio_feedback`/`restore_clipboard`/`trailing_newlines`/`detect_active_target`（off|active_window|active_display）/`llm_timeout_secs`(30)/`llm_max_tokens`(0)/`llm_retries`(2)/`auto_check_update`/`overlay_position`/`history_limit`(200)/`keep_audio_count`(50)/`max_recording_seconds`(1800)/`min_recording_seconds`(0.3)/`extra_tail_ms`/`mic_device_uid`/`mic_priority`/`local_service_dir`/`builtin_engine{}`。
+- **history.jsonl**：一行一条；含 NoSpeech 空记录与失败段记录（可重试）。
+- **recordings/**：`rec_{millis}.wav`（16k mono i16le，44B 头）；按 keep_audio_count 裁剪。
+- **llm_logs/**：每次调用全量 JSON（url/request/response_raw；截图换占位；key 不写）。
+- **screen_context/**：截图归档，保留 200 张。
 
 ## 5. 构建与签名
 
-### 5.1 应用内更新（`update.rs` + `tauri-plugin-updater`）
+- 开发：`npm run tauri dev`（vite :1420）。打包：`npm run tauri build`（app+dmg；updater 产物私钥缺失报错不阻塞 app 产出，发版时 CI 注入）。
+- 签名：rcodesign 读 certs/*.p12 覆盖签名；identifier `io.github.yangyaofei.denpajack` 恒定 → TCC 持久。详见 `docs/CODE-SIGNING.md`。
+- 版本号六处一致（package.json/package-lock×2/Cargo.toml/Cargo.lock/tauri.conf.json，frontend-checks 断言）；tag `v*` 触发 release.yml 构建签名发 Release。
+- 应用内更新（update.rs + tauri-plugin-updater）：minisign 强制验签；自下载不带 quarantine → TCC 不变；`auto_check_update` 只报告不自动装。
+- Rust 关键依赖：tauri 2（macos-private-api）、cpal、tokio-tungstenite、reqwest、objc2 系、handy-keys（fork 固定 rev，含两个 macOS 键盘状态修复）、pinyin、flate2。
 
-为什么自带更新：浏览器下载的 app 会带 `com.apple.quarantine`，macOS 按"来自互联网的未受信任 App"处理，
-会重新索要麦克风/辅助功能权限（实测过）。应用自己下载则不带该标记（未声明 `LSFileQuarantineEnabled`），
-且新二进制满足同一份代码签名要求 → **TCC 授权保持不变**。
+## 6. 已知边界 / 遗留（2026-10-24 收口期清单）
 
-- 链路：关于页「检查更新」→（可选）启动时自动检查 → 下载 `*.app.tar.gz` → 验签 → 替换自身 → 重启（`app.restart()`）
-- 信任：minisign 签名强制校验，无法关闭。公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`；
-  私钥只在 CI Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `_PASSWORD`），本机备份 `certs/denpa-jack-updater.key` + `certs/updater-signing.pw`
-- 清单：`https://github.com/yangyaofei/denpa-jack/releases/latest/download/latest.json`（由 release.yml 生成，含 version/notes/pub_date/platforms.darwin-aarch64.signature|url）
-- 行为：只报告不自动装（`auto_check_update` 默认 true），安装必须用户点「下载并安装」；进度经 `update-progress` 事件显示
-- 自测：`VOICEMAC_AUTOTEST=update`（只检查）、`VOICEMAC_AUTOTEST=update VOICEMAC_AUTOTEST_UPDATE=install`（连安装一起跑）
-- 注意：私钥丢失后已安装的 app 收不到新版本（只能手动重下）；换密钥等于换信任根，同理
-
-
-- 前端依赖：`npm install`（@tauri-apps/api 2、alpinejs 3、marked 18 等）。
-- 开发：`npm run tauri dev`（beforeDevCommand `npm run dev` → vite，devUrl `http://localhost:1420`，strictPort）。
-- 打包：`npm run tauri build`（beforeBuildCommand `npm run build` → `vite build` → `dist/`；bundle targets `app` + `dmg`）。
-- 签名（tauri.conf.json bundle.macOS）：
-  - `identifier: "io.github.yangyaofei.denpajack"` 固定不变——自签证书 + identifier 稳定，保证重打包后 TCC 授权（麦克风/辅助功能）持久有效，不重复弹授权。
-  - 签名不在 tauri 配置里：打包后用 **rcodesign 直接读 `.p12` 文件**签名（不需要钥匙串/系统信任）——见 `docs/CODE-SIGNING.md`；`hardenedRuntime: false`。
-- `macOSPrivateApi: true`；`minimumSystemVersion: "10.15"`；版本号在 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` 三处必须一致（发布时由 tag 统一注入，见 docs/CI-CD.md）。
-- vite 构建（vite.config.ts）：rollupOptions.input 现仅 `index.html` + `hud.html`（**缺 settings.html**，见 §6）。
-- Rust 关键依赖：tauri 2（tray-icon + macos-private-api feature）、cpal 0.18、tokio-tungstenite 0.30（native-tls）、reqwest 0.13（json+multipart）、objc2 0.6 + objc2-app-kit 0.3、core-foundation、pinyin、regex、flate2、uuid、base64。
-- 回归顺序：`cargo check` 0 error → `cargo run --example dict_test` 5/5 → `VOICEMAC_AUTOTEST_FILE=<wav>` 交付 ✓ → `VOICEMAC_AUTOTEST=e2e` 按键链 ✓ → 打包签名可启动（TCC 授权 ALIVE）。
-
-## 6. 已知边界 / 延后项
-
-- **热词 100 token 预算分层**：`budget_hotwords` 按 boost 降序、成本=字数+2、预算 100；装不下跳过（后续小词条仍可塞入），非硬截断。仅豆包直传；智谱/OpenAI 引擎不支持热词。
-- **OpenAI Realtime 引擎未实测**：无 key，代码在位但未经真实链路验证。
-- **阿里 DashScope 流式**：候选第二引擎，未实现。
-- **加词条为整条文本**：主窗"把本条加为词条"取 final_text/raw 截前 40 字；"选中文本加词条"未实现。
-- **打包产物缺 settings.html**：vite.config.ts input 仅 main+hud，`dist/` 无 settings.html；dev 模式正常，打包版设置窗加载会失败——待修。
-- 已知死代码/前端残缺（见 §7）：pipeline 遗留 static 与未用函数、engines::settle 未被调用、试音按钮与 Key 池保存的 Alpine 方法名不匹配。
-- 时间戳：`now_local_pub` 为自实现 UTC+8 近似格式化；录音文件名用 unix 毫秒。
-- 隐私边界：release 构建转写内容不落 app.log；但 llm_logs 含请求/响应明文（本地磁盘）。
-
-## 7. 文档/代码已知不一致（审计备注）
-
-- `index.html`/`settings.html` 引用 `toggleRec()`，main.ts 实际定义 `toggleRecording()`——试音按钮点击报 Alpine 表达式错误。
-- `settings.html` Key 池 textarea 绑 `@change="saveKeys()"`，main.ts 无 `saveKeys()`（保存逻辑在 `saveCfg()` 内解析 keysText）——修改 Key 池抛方法未定义错误。
-- 齿轮按钮 title 提示"设置 (⌘,)"，代码未注册 Cmd+, 快捷键。
-- hud 重试失败文案"可到 设置→历史"，但设置窗侧栏隐藏 history 节（历史管理在主窗）。
-- REFACTOR.md ✅1 声称 LAST_AUDIO 已删——`pipeline::LAST_AUDIO` 静态仍在（无读写）；`pipeline::cfg_auto_submit`/`press_enter` 死代码仍在。
-- REFACTOR.md ✅5 声称公共 settle 三引擎共用——`engines::settle` 未被调用，doubao/openai 各留本地 settle 副本。
-- REFACTOR.md ✅6 声称收尾超时统一常量——openai 用 `FINALIZE_TIMEOUT_SECS`，doubao 仍硬编码 3s。
-- autotest.rs `run_file` 注释写"强制 clip_only"，实际走真实交付路径（日志自述"非 clip_only"）。
-- main.ts 的 TS `Config`/`LlmProfile` 接口：含已删字段（shortcut_activation/hold_threshold_ms/filler_word_removal/append_trailing_space/hotkey_key_code），缺 `base_url`/`effort` 声明（运行时 any 使用未报错）。
-- examples/dict_test.rs 头注释写 `cargo run --bin dict_test`，实际位于 examples/，应为 `cargo run --example dict_test`。
-- README.md 仍为 Tauri+Vue 模板原文，与实际技术栈（Alpine.js）不符。
+- **R1 重转语义重做**（REQUIREMENTS.md 已钉死）：后台重算+回写条目+三态显示，不交付不弹 HUD。
+- **R2 Esc 取消真机无效**：已修一版（单键注册→全键观察），仍无效；候选=覆盖安装未重启旧进程/监听器并存问题；日志锚点 `[shortcut] Esc 取消命中`。
+- 热词 100 token 预算仅豆包/local 注入；智谱不支持。
+- CANCELLED_GEN 单槽：连续取消两段时前一段在途结果可能漏判（审核 a-3）。
+- `now_local_pub` 为 UTC+8 近似格式化（伪秒 :60 修过跨秒回退）；非本地时区用户时间戳偏差——候选改系统本地时间。
+- AppState（session/last_audio/engine_mirror）未并入 core——收口期候选。
+- 隐私：release 转写内容不落日志；llm_logs 明文（本地磁盘）。
+- 死代码已清（56b8c9e）；AGENTS.md 为模块结构权威；handover/ 为流程文档。
