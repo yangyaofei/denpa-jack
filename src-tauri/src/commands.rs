@@ -382,7 +382,7 @@ pub async fn llm_selftest(
         model: prof.model.clone(),
         api_key: key,
         prompt: if prof.prompt.is_empty() {
-            crate::settings::DEFAULT_LLM_PROMPT.to_string()
+            crate::llm::DEFAULT_LLM_PROMPT.to_string()
         } else {
             prof.prompt.clone()
         },
@@ -431,7 +431,7 @@ pub async fn llm_selftest(
 /// 内置润色 prompt 原文(前端编辑回填用)
 #[tauri::command]
 pub fn get_default_prompt() -> String {
-    crate::settings::DEFAULT_LLM_PROMPT.to_string()
+    crate::llm::DEFAULT_LLM_PROMPT.to_string()
 }
 
 /// UI v6 已废除独立设置窗: 此命令改为聚焦主窗(托盘"设置"入口)

@@ -97,7 +97,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
                     model: prof.model.clone(),
                     api_key: key,
                     prompt: if prof.prompt.is_empty() {
-                        crate::settings::DEFAULT_LLM_PROMPT.to_string()
+                        crate::llm::DEFAULT_LLM_PROMPT.to_string()
                     } else {
                         prof.prompt.clone()
                     },

@@ -1,14 +1,18 @@
 // 配置层: 档案制(参照 Swift 版 Config.swift 结构)
 // 原则: 所有新增字段必须 #[serde(default)] —— 旧配置文件可解析(C17 教训)
+// 阶段A 第3步拆分: 路径解析→settings/paths.rs, 一次性迁移→settings/migrate.rs;
+// 本文件只剩"配置里有什么"(类型/默认值/读写/热键归一化)。
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
-use tauri::Manager;
 
-/// bundle id 单一来源(tauri.conf.json 的 identifier 必须与此一致)
-/// 数据目录 ~/Library/Application Support/<APP_ID>/, 同时用于自粘贴焦点判定;
-/// 改名时必须同步 tauri.conf.json + 迁移旧目录, 否则日志/llm_logs/历史会分叉
-pub const APP_ID: &str = "io.github.yangyaofei.denpajack";
+mod migrate;
+pub mod paths;
+
+pub use paths::{
+    base_dir, config_path, data_dir, data_dir_no_app, invalidate_data_dir_cache,
+    resolve_data_dir, APP_ID,
+};
+pub(crate) use paths::write_config_atomic;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LlmProfile {
@@ -302,121 +306,6 @@ pub struct Config {
 
 }
 
-/// 默认数据目录（也是 config.json 的固定位置，作为一切路径的锚点）
-pub fn base_dir(app: &tauri::AppHandle) -> PathBuf {
-    // 自测隔离: 测试副本(改 bundle id 无效——tauri 的 identifier 构建时烘焙)用
-    // 环境变量把整个数据目录指到独立位置, 避免读到真实配置/写脏真实历史。
-    // 正常启动不设此变量, 走 app_config_dir。
-    if let Ok(d) = std::env::var("VOICEMAC_DATA_DIR") {
-        if !d.trim().is_empty() {
-            let p = PathBuf::from(d);
-            fs::create_dir_all(&p).ok();
-            return p;
-        }
-    }
-    let dir = app
-        .path()
-        .app_config_dir()
-        .expect("app_config_dir 不可用");
-    fs::create_dir_all(&dir).ok();
-    dir
-}
-
-/// 解析数据目录：配置为空用默认目录；`~/x` 展开为家目录；相对路径相对默认目录
-pub fn resolve_data_dir(base: &std::path::Path, configured: &str) -> PathBuf {
-    let t = configured.trim();
-    if t.is_empty() {
-        return base.to_path_buf();
-    }
-    let expanded = match t.strip_prefix("~/") {
-        Some(rest) => match std::env::var("HOME") {
-            Ok(h) => format!("{h}/{rest}"),
-            Err(_) => t.to_string(),
-        },
-        None => t.to_string(),
-    };
-    let p = PathBuf::from(expanded);
-    if p.is_absolute() {
-        p
-    } else {
-        base.join(p)
-    }
-}
-
-static DATA_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-
-/// 配置变更后必须清缓存（否则数据仍写到旧目录）
-pub fn invalidate_data_dir_cache() {
-    *DATA_ROOT.lock().unwrap() = None;
-}
-
-/// 数据根目录（带缓存；save_config 时失效）。history/recordings/llm_logs/app.log 都从这里派生。
-pub fn data_dir(app: &tauri::AppHandle) -> PathBuf {
-    if let Some(p) = DATA_ROOT.lock().unwrap().clone() {
-        return p;
-    }
-    let base = base_dir(app);
-    let configured = get_config(app.clone())
-        .map(|c| c.data_dir)
-        .unwrap_or_default();
-    let p = resolve_data_dir(&base, &configured);
-    fs::create_dir_all(&p).ok();
-    *DATA_ROOT.lock().unwrap() = Some(p.clone());
-    p
-}
-
-/// 没有 app handle 的地方（如 LLM 落盘）取同一份目录：缓存已由启动流程预热；
-/// 未预热时按家目录推导默认目录。
-pub fn data_dir_no_app() -> PathBuf {
-    if let Some(p) = DATA_ROOT.lock().unwrap().clone() {
-        return p;
-    }
-    // 自测隔离与 base_dir 同源(见 base_dir 注释)
-    if let Ok(d) = std::env::var("VOICEMAC_DATA_DIR") {
-        if !d.trim().is_empty() {
-            let p = PathBuf::from(d);
-            fs::create_dir_all(&p).ok();
-            return p;
-        }
-    }
-    let base = std::env::var("HOME")
-        .map(|h| PathBuf::from(h).join("Library/Application Support").join(APP_ID))
-        .unwrap_or_else(|_| PathBuf::from("."));
-    fs::create_dir_all(&base).ok();
-    // 没有 AppHandle 时直接从磁盘读 config.json 取 data_dir，保证日志与业务写在同一目录
-    let configured = fs::read_to_string(base.join("config.json"))
-        .ok()
-        .map(|s| configured_data_dir_from_json(&s))
-        .unwrap_or_default();
-    let p = resolve_data_dir(&base, &configured);
-    fs::create_dir_all(&p).ok();
-    *DATA_ROOT.lock().unwrap() = Some(p.clone());
-    p
-}
-
-/// 从 config.json 文本里取 data_dir（无 AppHandle 场景用；缺失/解析失败一律视为空=默认目录）
-fn configured_data_dir_from_json(text: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|v| v.get("data_dir").and_then(|d| d.as_str()).map(|s| s.to_string()))
-        .unwrap_or_default()
-}
-
-pub fn config_path(app: &tauri::AppHandle) -> PathBuf {
-    base_dir(app).join("config.json")
-}
-
-
-/// 配置变更信号(save_config 时递增; 主窗轮询刷新顶栏状态)
-/// 原子写 config.json(审核a-4): 先写同目录临时文件再 rename——写盘中途崩溃
-/// (进程死亡真实发生过, 见 crash_log)不会留下半截 JSON 让全部配置不可读。
-/// rename 在同一文件系统上原子, 半截文件只可能是 .tmp(下次覆盖)。
-pub(crate) fn write_config_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, content)?;
-    fs::rename(&tmp, path)
-}
-
 /// 配置版本(转发 core: 计数已收口, 写路径走 core::bump_config)
 pub fn config_version() -> u64 {
     crate::core::config_version()
@@ -466,63 +355,8 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
             def
         }
     };
-    // C54 迁移: hotkey/hotkeys 并入 bindings("transcribe")——一次迁移, bindings 为唯一真相
-    let needs_migrate = cfg.bindings.is_empty() && (!cfg.hotkeys.is_empty() || cfg.hotkey.shortcut_str() != "F5");
-    if needs_migrate {
-        let mut set: Vec<String> = vec![cfg.hotkey.shortcut_str()];
-        for h in &cfg.hotkeys {
-            let s = h.shortcut_str();
-            if !s.is_empty() {
-                set.push(s);
-            }
-        }
-        let set: Vec<String> = {
-            let mut normed: Vec<String> = set.iter().map(|s| normalize_combo(s)).filter(|s| !s.is_empty()).collect();
-            normed.sort();
-            normed.dedup();
-            normed
-        };
-        cfg.bindings.insert("transcribe".into(), BindingSet { current: set });
-        // 迁移即落盘(旧字段 skip_serializing 不再写出, 重复组合已归一去重)
-        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-            let _ = write_config_atomic(&p, &json);
-        }
-    }
-    // F5 兜底(审核a-3): 旧迁移条件"≠F5 才迁"把热键恰好等于默认 F5 的用户漏掉——
-    // bindings 为空且从未有 bindings 键 → 无热键可按。这里对"从未有键"的配置补默认 F5;
-    // 只查键不存在(不查 current 空)——用户显式清空全部热键的选择不被覆盖。
-    if !cfg.bindings.contains_key("transcribe") {
-        cfg.bindings.insert("transcribe".into(), BindingSet { current: vec!["F5".to_string()] });
-        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-            let _ = write_config_atomic(&p, &json);
-        }
-    }
-    // 内置引擎迁移(2026-10-08): 激活档案是"local 且地址为空"的旧形态 → 切到
-    // 特化的 builtin id(type/name 定死, 随机端口联动); 空地址 local 档案移除
-    // (外部网关档案必须显式填地址)。迁移即落盘。
-    if cfg.active_asr_id != crate::local_service::BUILTIN_ID {
-        let old_id = cfg
-            .asr_profiles
-            .iter()
-            .find(|x| x.id == cfg.active_asr_id && x.provider == "local" && x.base_url.trim().is_empty())
-            .map(|x| x.id.clone());
-        if let Some(old_id) = old_id {
-            cfg.active_asr_id = crate::local_service::BUILTIN_ID.into();
-            cfg.asr_profiles.retain(|x| x.id != old_id);
-            if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-                let _ = write_config_atomic(&p, &json);
-            }
-        }
-    }
-    // VAD 一次性迁移: 0.3.23 曾把默认 ten 写进配置; 当天实测 ten 吃气声口述首尾帧
-    // (rec_1791445446593/460175, 音频完整模型直读全对而交付缺头少尾), 默认改关。
-    // 该值只可能是默认带入(0.3.23 仅存在数小时), 强制归零不冤枉任何显式选择。
-    if cfg.builtin_engine.vad == "ten" {
-        cfg.builtin_engine.vad = String::new();
-        if let Ok(json) = serde_json::to_string_pretty(&cfg) {
-            let _ = write_config_atomic(&p, &json);
-        }
-    }
+    // 一次性迁移(C54 bindings / F5 兜底 / 内置引擎 / VAD 归零)集中在 settings/migrate.rs
+    migrate::migrate_on_load(&mut cfg, &p);
     Ok(cfg)
 }
 
@@ -616,100 +450,8 @@ pub fn default_config() -> Config {
     }
 }
 
-pub fn default_llm_prompt() -> String {
-    DEFAULT_LLM_PROMPT.trim().to_string()
-}
-
-pub const DEFAULT_LLM_PROMPT: &str = r#"
-一个智能的语音转写文本润色助手。你的目标是输出一份准确、通顺且专业的记录。你需要找到“忠实原文”与“书面化”之间的平衡点：既要删除明显的口误和废话，又要保留说话人的表达逻辑、语气及情绪，不要进行过度的摘要或重写。
-
-## Core Guidelines (核心原则)
-
-### 1. 智能去噪与自我修正 (Smart Cleaning & Self-Correction) - [重点]
-
-* 处理改口/自我修正：如果说话人先说了一个内容，紧接着又否定或修改了它，只保留最终正确的版本。
-  * Bad: "我们需要用方案一，呃不是，是方案二。"
-  * Good: "我们需要使用方案二。"
-* 删除无意义重复：删除因思考卡顿导致的单词重复（如"这个这个这个"），但保留强调性的重复。
-* 删除废词：彻底删除"呃、那个、嗯、You know、然后就是"等口语填充词。
-
-### 2. 语气与情绪保留 (Tone & Emotion Preservation) - [关键]
-
-* 区分废词与情绪词：删除无意义的填充词，但必须保留传递情绪的语气词（如"啊、呢、吧、嘛、哎、卧槽"等）。
-* 禁止"压平"句式：绝对不要把反问句、感叹句强行修改为平铺直叙的陈述句。保留说话人表达时的急促感、疑问或不满。
-* 尊重原始张力：保留带有个人色彩的生动吐槽、感叹或非正式比喻，不要将其"净化"成刻板、礼貌的陈述句。
-  * Bad: "这 API 设计得也太反人类了吧？" -> "这个 API 的设计非常不合理。" （抹杀了反问和情绪张力）
-  * Good: 保持原话 "这 API 设计得也太反人类了吧？"
-
-### 3. 语法与流畅度修正 (Grammar & Flow)
-
-* 修复语病：修正明显的语法错误（如主谓不一致、语序颠倒、缺词），使句子通顺。
-* 适度润色：将过于破碎的短语拼接成完整的句子，但不要改变原句的主动/被动语态或核心逻辑。
-* 拒绝过度总结：保留叙述细节，不要把长段的叙述强行压缩成一个 bullet point。
-
-### 4. 听感同音修复 (Phonetic Context Repair)
-
-* 精准替换：根据上下文修复 ASR 识别错误的同音词。
-  * "含到 word" / "函道 word" -> Handover
-  * "Meat request" -> Merge Request
-  * "Sequel" -> SQL
-  * "Q rui" -> Query
-  * 艺术 -> issue
-
-### 5. 技术规范化 (Technical Standards)
-
-* 代码标记：变量名、文件路径、API 强制使用反引号 ( ` ) 包裹。示例：`userId`, `config.yaml`
-* 序号补零：Phase one -> Phase 01; Step 5 -> Step 05。
-* 中英空格：中英文之间强制添加空格。
-
-### 6. 截图上下文对照 (Screenshot Grounding) - [优先]
-
-随附截图是本次转写的**上下文**：屏幕上往往正显示着你刚才说的话涉及的内容（文档、窗口标题、代码、列表、聊天记录），其中的词可以直接复用。
-
-* 转写里出现**听着别扭、不成词、或与常见写法对不上**的片段时，先去截图里找有没有**同一个词**（同音 / 近音 / 缩写 / 中英混写）。
-  * 找得到 → 采用截图里的写法（含大小写、连字符、中英空格），不要另造写法。
-  * 找不到 → 保持原样，不要凭猜测换成别的词。
-* 截图里的专有名词、文件名、命令、变量名若与转写片段明显指同一个东西，以截图为准。
-* 不要把截图里与这段转写无关的内容写进结果，也不要复述截图内容。
-
-示例（截图里显示一行 `基线文档全部通读`）：
-* Input: "你把那个机线文档全部通读一遍，然后再说结论。"
-* Output: 你把那个 `基线文档` 全部通读一遍，然后再说结论。
-* 解析: "机线文档"不成词，截图同一位置写着"基线文档全部通读" → 按截图写法修正。
-
-示例（截图里没有对应词）：
-* Input: "然后那个机组里面的文档，我们都要。"
-* Output: 然后那个机组里面的文档，我们都要。
-* 解析: 截图里找不到与"机组"对应的写法 → 保持原样，不猜。
-
-## Few-Shot Examples (学习这种"中间力度")
-
-### Example 1: 处理改口与重复 (修正力度：中)
-* Input: "那个，Phase one 阶段，我们需要把那个...那个 user ID，不对，是 user name，传给后端。然后那个...然后那个 sequel 报错的话，就重试一下。"
-* Output: Phase 01 阶段，我们需要把 `userName` 传给后端。如果 SQL 报错的话，就重试一下。
-* 解析: 捕捉到了 userName 的改口逻辑，删除"那个"，修复了 Sequel 到 SQL 的转换并添加了代码反引号，序号 Phase one 规范为 Phase 01。
-
-### Example 2: 处理 Handover 与语病 (修正力度：中)
-* Input: "重复一下正在干的任务，在你重复完后，我要清理上下文。那个，在这之前，你需要含到 word 文档的编写。"
-* Output: 重复一下当前正在进行的任务，在你重复完后，我要清理上下文。在这之前，你需要进行 Handover 文档的编写。
-* 解析: 修复了"正在干的"这种生硬口语，修复了"含到word"为 Handover，保持了原本的对话指令流。
-
-### Example 3: 混合逻辑与代码 (修正力度：中)
-* Input: "如果这个值是空的，呃，如果是 null 的话，就抛异常。标题写一下，1.1 异常处理。"
-* Output: 如果这个值是 `null`，就抛出异常。标题写一下，1.1 异常处理。
-* 解析: 处理了"空的...如果是 null"的自我修正，保留了技术术语 null 并加反引号。识别了标题格式。
-
-### Example 4: 情绪保留与反问句式 (修正力度：轻)
-* Input: "哎哟，这 API 设计得也太反人类了吧？那个...我们绝对不能这么搞啊，这不是纯纯给自己挖坑嘛！"
-* Output: "哎哟，这 API 设计得也太反人类了吧？我们绝对不能这么搞啊，这不是纯纯给自己挖坑嘛！"
-* 解析: 删除了废词"那个"，但完整保留了"哎哟、吧、啊、嘛"等情绪语气词，并保留了反问句式和"反人类、挖坑"等生动吐槽，拒绝将其书面化为无感情的陈述句。
-
-## 最终输出要求
-
-* 直接输出润色后的最终文本。
-* 绝对不要输出"解析："等任何解释性过程。
-* 不要输出多余的开场白或结尾。
-"#;
+// 默认润色提示词(DEFAULT_LLM_PROMPT)已归位 llm.rs(阶段A 第3步): 那是 LLM 域的资产,
+// pipeline/commands 消费; 配置域只存用户自定义的 prompt 字段。
 
 fn default_shortcut_activation() -> String {
     "hold".into()
@@ -792,42 +534,7 @@ mod tests {
 #[cfg(test)]
 mod gap_tests {
     use super::*;
-
-    #[test]
-    fn resolve_data_dir_empty_uses_base() {
-        let base = std::path::Path::new("/tmp/base");
-        assert_eq!(resolve_data_dir(base, ""), base.to_path_buf());
-        assert_eq!(resolve_data_dir(base, "   "), base.to_path_buf());
-    }
-
-    #[test]
-    fn resolve_data_dir_absolute_and_relative() {
-        let base = std::path::Path::new("/tmp/base");
-        assert_eq!(
-            resolve_data_dir(base, "/Volumes/Ext/denpa"),
-            std::path::PathBuf::from("/Volumes/Ext/denpa")
-        );
-        assert_eq!(
-            resolve_data_dir(base, "data2"),
-            std::path::PathBuf::from("/tmp/base/data2")
-        );
-    }
-
-    #[test]
-    fn resolve_data_dir_expands_home() {
-        let base = std::path::Path::new("/tmp/base");
-        let home = std::env::var("HOME").expect("HOME 应存在");
-        assert_eq!(
-            resolve_data_dir(base, "~/DenpaData"),
-            std::path::PathBuf::from(format!("{home}/DenpaData"))
-        );
-    }
-
-    #[test]
-    fn config_without_data_dir_defaults_to_empty() {
-        let cfg: Config = serde_json::from_str("{}").expect("空对象应可解析");
-        assert_eq!(cfg.data_dir, "");
-    }
+    // resolve_data_dir/config_without_data_dir 用例已随路径解析迁至 settings/paths.rs(阶段A 第3步)
 
     #[test]
     fn normalize_key_whitespace_and_case() {
