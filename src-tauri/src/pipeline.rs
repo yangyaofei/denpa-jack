@@ -60,20 +60,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         return Outcome::NoSpeech;
     }
 
-    // pcm 随会话流入: 异步落盘+清理(停止路径不再同步写盘, Handy spawn_blocking 等价)
-    if !ho.pcm.is_empty() {
-        let app2 = app.clone();
-        let pcm = ho.pcm.clone();
-        let keep = cfg.keep_audio_count.max(1) as usize;
-        std::thread::spawn(move || {
-            if let Some(p) = crate::history::save_wav(&app2, &pcm) {
-                use tauri::Manager;
-                app2.state::<std::sync::Mutex<crate::AppState>>()
-                    .lock().unwrap().last_audio = Some(p);
-            }
-            crate::history::prune_recordings(&app2, keep);
-        });
-    }
+    // pcm 的落盘与历史写入统一延后到第 4) 步(交付完成后)在子线程执行(D4: 路径回填)
 
     // 1) 词典纠错(毫秒级, 本地)
     let (dict_text, _matches) = crate::dict::TextCorrector { entries: cfg.dict.clone(), normalizations: cfg.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect() }.correct(&raw);
@@ -191,10 +178,10 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         }
     };
 
-    // 4) 历史 —— 交付失败**不在此写**: 由队列 worker 的失败留痕(record_failed)统一写。
-    //    旧实现两处都写 → 同一段两行历史、两个 wav、last_audio 两线程竞写(审核 a-6)。
-    //    失败信息(纠正稿/llm_used)经 Outcome::Failed 带给 worker, 留痕不降级。
-    let audio_path = ho.audio_path.clone().unwrap_or_default();
+    // 4) 历史 + 音频落盘(统一在落盘线程): save_wav 的真实路径回填进历史条目(D4)——
+    //    旧实现先 append(路径恒空)再异步落盘, 成功条目永远无法"重跑", wav 成孤儿(审核 a-5)。
+    //    交付失败**不在此写**: 由队列 worker 的失败留痕(record_failed)统一写(修双写)。
+    //    rerun 会话自带 audio_path(原始音频), 保留优先, 不被新落盘覆盖。
     let raw_for_payload = raw.clone();
     if delivered != "failed" {
         let rec = crate::history::HistoryRecord {
@@ -205,13 +192,43 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             final_text: final_text.clone(),
             llm_used,
             delivered: delivered.clone(),
-            audio_path,
+            audio_path: ho.audio_path.clone().unwrap_or_default(),
             warning: warning.clone(),
             duration_ms: ho.duration_ms,
         };
-        crate::history::append(&app, &rec);
-        crate::history::enforce_limit(&app, cfg.history_limit);
-        crate::log::elog(&format!("[pipeline] delivered={delivered} history appended"));
+        // 停止路径不阻塞(Handy spawn_blocking 等价): 落盘+历史+清理都在子线程,
+        // 前端历史刷新本就靠 poll_versions 版本轮询(≤800ms), 用户无感。
+        let app2 = app.clone();
+        let keep = cfg.keep_audio_count.max(1) as usize;
+        let hist_limit = cfg.history_limit;
+        let ho_pcm = ho.pcm.clone();
+        std::thread::spawn(move || {
+            let disk_path = if !ho_pcm.is_empty() {
+                let p = crate::history::save_wav(&app2, &ho_pcm);
+                if let Some(ref path) = p {
+                    use tauri::Manager;
+                    app2.state::<std::sync::Mutex<crate::AppState>>()
+                        .lock().unwrap().last_audio = Some(path.clone());
+                }
+                p
+            } else {
+                None
+            };
+            let mut rec = rec;
+            if rec.audio_path.is_empty() {
+                rec.audio_path = disk_path.unwrap_or_default();
+            }
+            crate::history::append(&app2, &rec);
+            crate::history::enforce_limit(&app2, hist_limit);
+            if !ho_pcm.is_empty() {
+                crate::history::prune_recordings(&app2, keep);
+            }
+            crate::log::elog(&format!(
+                "[pipeline] delivered={} history appended audio={}",
+                rec.delivered,
+                if rec.audio_path.is_empty() { "-" } else { "ok" }
+            ));
+        });
     }
 
     let fin_payload = serde_json::json!({
