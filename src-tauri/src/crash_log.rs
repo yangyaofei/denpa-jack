@@ -29,7 +29,7 @@ pub fn stderr_redirected() -> bool {
 /// 直接追加一行到 app.log。
 /// 不复用 log.rs 的 LOG_LOCK：panic 与信号处理可能在持锁线程上发生，抢锁会自锁。
 pub fn append_raw(line: &str) {
-    append_raw_to(&crate::settings::data_dir_no_app().join("app.log"), line);
+    append_raw_to(&crate::config::data_dir_no_app().join("app.log"), line);
 }
 
 /// 追加到指定日志文件（会话生命周期函数用显式路径，便于测试与多目录场景）

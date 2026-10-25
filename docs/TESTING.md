@@ -8,7 +8,7 @@
 | 3. 链路回归+打包 | `bash scripts/regression.sh` | 真实人声文件回放→转写→交付→历史断言 + e2e 真麦 + 打包签名 | 每次打包必跑 |
 
 ## 修 bug 的测试规则（TEST-MATRIX.md 登记）
-每修一个 bug 必加对应用例（Handy settings.rs 内联 JSON fixture / history.rs 内存库相同做法）。
+每修一个 bug 必加对应用例（Handy config.rs 内联 JSON fixture / history.rs 内存库相同做法）。
 
 ## Handy 对照（调研结论, subagent 实测数据）
 - Handy: 29 文件 ~270 单元测试(纯函数+tempfile+内存 SQLite+17 tokio::test 本地 socket)+Playwright 冒烟 2 例+CI test.yml；**无集成测试目录**(tests/ 是 playwright 的)——与我们同构

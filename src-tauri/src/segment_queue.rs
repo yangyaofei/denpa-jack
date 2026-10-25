@@ -195,7 +195,7 @@ fn record_failed(
             audio = Some(p);
         }
     }
-    let keep = crate::settings::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
+    let keep = crate::config::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
     crate::history::prune_recordings(app, keep);
     let rec = crate::history::HistoryRecord {
         ts: crate::pipeline::now_local_pub(),
@@ -231,7 +231,7 @@ pub fn record_no_speech(
             audio = Some(p);
         }
     }
-    let keep = crate::settings::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
+    let keep = crate::config::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
     crate::history::prune_recordings(app, keep);
     let rec = crate::history::HistoryRecord {
         ts: crate::pipeline::now_local_pub(),

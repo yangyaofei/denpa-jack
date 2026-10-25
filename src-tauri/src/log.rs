@@ -6,7 +6,7 @@ use std::sync::Mutex;
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn app_log_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    let dir = crate::settings::data_dir(app);
+    let dir = crate::config::data_dir(app);
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -38,7 +38,7 @@ pub fn elog(msg: &str) {
     // grep 按"key-engine"检索时整行丢失, 造成"日志没打"的误判)
     let _g = LOG_LOCK.lock().unwrap();
     // 无 app 句柄: 走 settings 的同一份数据目录缓存(启动时已预热), 保证 data_dir 改了 diag 日志也跟着走
-    let dir = crate::settings::data_dir_no_app();
+    let dir = crate::config::data_dir_no_app();
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)

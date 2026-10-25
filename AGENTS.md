@@ -16,7 +16,7 @@ Rust 后端（`src-tauri/src/`）负责录音、识别、纠错、交付；WebVi
 
 | 路径 | 内容 |
 |---|---|
-| `src-tauri/src/` | 后端模块（2026-10-24 阶段A 结构重构后）：`core`（全局状态单锁+版本计数轮询协议）`recording`（会话状态机）`transcription_coordinator`（协调器）`segment_queue`（分段队列）`pipeline`（后处理/交付编排）`engine/`（ASR 引擎域：`contract` 事件契约 + `doubao`/`zhipu`/`local` 三引擎 + `mod` 调度）`delivery/`（交付域：`ax` AX 能力 / `paste` 回执式粘贴 / `mod` 焦点探测）`audio`（采集/麦克风解析）`screen_context`（截图/窗口列表）`active_target`（活动目标探测）`dict`（词典纠错/热词预算）`llm`（润色+默认提示词）`history`（历史/WAV 解析）`settings/`（配置域：主文件 + `paths` 路径解析 + `migrate` 配置迁移）`tray`/`hud`/`overlay`（菜单栏/浮窗/定位）`shortcut`（键盘）`permissions`/`mic_watch`/`log`/`crash_log`/`local_service`（网关进程管理）`autotest`（自测通道） |
+| `src-tauri/src/` | 后端模块（2026-10-24 阶段A 结构重构后）：`core`（全局状态单锁+版本计数轮询协议）`recording`（会话状态机）`transcription_coordinator`（协调器）`segment_queue`（分段队列）`pipeline`（后处理/交付编排）`engine/`（ASR 引擎域：`contract` 事件契约 + `doubao`/`zhipu`/`local` 三引擎 + `mod` 调度）`delivery/`（交付域：`ax` AX 能力 / `paste` 回执式粘贴 / `mod` 焦点探测）`audio`（采集/麦克风解析）`screen_context`（截图/窗口列表）`active_target`（活动目标探测）`dict`（词典纠错/热词预算）`llm`（润色+默认提示词）`history`（历史/WAV 解析）`config/`（配置域：主文件 `config.rs` + `paths` 路径解析 + `migrate` 配置迁移）`tray`/`hud`/`overlay`（菜单栏/浮窗/定位）`shortcut`（键盘）`permissions`/`mic_watch`/`log`/`crash_log`/`local_service`（网关进程管理）`autotest`（自测通道） |
 | `src-tauri/build.rs` | 编译期契约闸（**递归**扫描 `src/` 子目录）：坐标 API 只能在 `overlay.rs`、hud 快照 API 白名单、主线程 API 必须有调度标记——违反直接 panic（`docs/CONTRACTS.md`） |
 | `src/` | `main.ts`（主窗入口：组合+启动，44 行）`app/`（主窗组件按页拆分：`types` AppThis 形状 / `util` / `common` 横切 / `asr`/`llm`/`dict`/`history`/`general`/`about` 六页域）`hud.ts`（浮窗）`style.css`（设计 token 与组件样式）`pages/*.html`（六个页面片段，经 `?raw` 注入） |
 | `index.html` / `hud.html` | **两个前端入口**：vite 的 `rollupOptions.input` 指向它们，构建产物供主窗与浮窗两个 WebView 加载 |
@@ -63,9 +63,9 @@ CI 需要的仓库凭据（Secrets）与发版流程见 `docs/CI-CD.md`。
 5. **前端与后端同步 = 事件 + 轮询兜底**：不要新增"只发事件"的同步路径（`docs/SYNC.md`）。
 6. **权限只有两项**：麦克风 + 辅助功能；**不需要"输入监控"**（键盘层是 handy-keys，权限门槛=辅助功能）。
 7. **数据目录随 bundle id**：默认 `~/Library/Application Support/io.github.yangyaofei.denpajack`
-   （改 id 会重置权限，`src-tauri/src/settings/paths.rs` 的 `APP_ID` 是单一来源）；
+   （改 id 会重置权限，`src-tauri/src/config/paths.rs` 的 `APP_ID` 是单一来源）；
    数据根目录可用配置 `data_dir` 改（history / recordings / llm_logs / app.log 都跟着走，
-   `config.json` 固定在默认位置当锚点）。取路径一律走 `settings::data_dir(app)`
+   `config.json` 固定在默认位置当锚点）。取路径一律走 `config::data_dir(app)`
    （启动解析一次恒定——**改 data_dir 不中途切换，重启生效**，前端保存时会提示），
    不要自己拼 `app_data_dir()`。
 8. **不要用脚本批量替换源码**：逐处 `edit`，改完看编译输出与日志；`tmp/` 下的本地脚本不参与构建。

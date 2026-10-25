@@ -138,7 +138,7 @@ pub fn position_hud(app: &tauri::AppHandle, display: Option<&DisplayTarget>) {
         return;
     };
     let app2 = app.clone();
-    let pos_mode = crate::settings::get_config(app.clone())
+    let pos_mode = crate::config::get_config(app.clone())
         .map(|c| c.overlay_position)
         .unwrap_or_else(|_| "bottom".to_string());
     let target = display.copied();

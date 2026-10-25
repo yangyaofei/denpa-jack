@@ -13,7 +13,7 @@ use crate::audio;
 use crate::delivery;
 use crate::engine;
 use crate::pipeline;
-use crate::settings::{self, Config};
+use crate::config::{self, Config};
 use crate::shortcut::{esc_listen_begin, esc_listen_end};
 use crate::{log, AppState};
 
@@ -118,7 +118,7 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
 fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::audio_feedback::Cue>) {
     esc_listen_end();
     if let Some(cue) = cue {
-        let _ = settings::get_config(app.clone()).map(|c| {
+        let _ = config::get_config(app.clone()).map(|c| {
             if c.audio_feedback {
                 crate::audio_feedback::play_on_main(app, cue);
             }
@@ -154,7 +154,7 @@ pub fn recording_abort() -> Result<(), String> {
 
 pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> Result<(), String> {
     // C54: 录制期间绑定已真注销(suspend), 触发不可达——此守卫防御性保留
-    let mut cfg: Config = settings::get_config(app.clone())?;
+    let mut cfg: Config = config::get_config(app.clone())?;
     let (profile, key) = engine::resolve_asr(&cfg)?;
     {
         let st = state.lock().unwrap();
@@ -276,7 +276,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
 
 /// 停止: 无论走哪条分支(正常/太短丢弃), 清理路径唯一且必走
 fn profile_name_of(app: &tauri::AppHandle) -> String {
-    settings::get_config(app.clone())
+    config::get_config(app.clone())
         .ok()
         .and_then(|c| c.asr_profiles.iter().find(|p| p.id == c.active_asr_id).cloned())
         .map(|p| p.provider)
@@ -293,7 +293,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     };
     let engine = profile_name_of(&app);
     // 尾音缓冲(Handy extra_recording_buffer_ms 等价): 可感知取消的分片睡眠, 期间采集继续
-    let tail = settings::get_config(app.clone()).map(|c| c.extra_tail_ms).unwrap_or(0).min(2000);
+    let tail = config::get_config(app.clone()).map(|c| c.extra_tail_ms).unwrap_or(0).min(2000);
     if tail > 0 {
         for _ in 0..(tail / 20) {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -304,7 +304,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 200ms 的音频会因 duration 达到 300ms 被误判为有效语音而交付。
     // D5: 下限接配置 min_recording_seconds(16k mono i16le = 32000 B/s),
     // floor 0.05s 与 serde 缺字段保护一致; 旧实现硬编码 9600B, 配置形同摆设。
-    let min_secs = settings::get_config(app.clone())
+    let min_secs = config::get_config(app.clone())
         .map(|c| c.min_recording_seconds)
         .unwrap_or(0.3)
         .max(0.05);
@@ -377,14 +377,14 @@ mod tests {
 #[cfg(test)]
 mod gap_tests {
     use super::*;
-    use crate::settings::Config;
+    use crate::config::Config;
 
     #[test]
     fn min_bytes_floor_never_zero() {
         // D5: 太短判据 = min_recording_seconds × 32000 B/s; default_config() 0.3s → 9600B(与旧硬编码等值);
         // derive Default/serde 缺字段时为 0.0 → floor 0.05s(1600B), 判据永不失效
         assert_eq!(Config::default().min_recording_seconds, 0.0, "derive Default 无默认时长");
-        assert_eq!(crate::settings::default_config().min_recording_seconds, 0.3);
+        assert_eq!(crate::config::default_config().min_recording_seconds, 0.3);
         assert_eq!((0.3f64 * 32000.0) as usize, 9600);
         assert_eq!((0.0f64.max(0.05) * 32000.0) as usize, 1600, "floor 0.05s");
     }

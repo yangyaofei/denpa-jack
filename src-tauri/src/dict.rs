@@ -79,7 +79,7 @@ fn seq_dist(sa: &[String], sb: &[String]) -> f64 {
 }
 
 pub struct TextCorrector {
-    pub entries: Vec<crate::settings::DictEntry>,
+    pub entries: Vec<crate::config::DictEntry>,
     pub normalizations: Vec<(String, String)>,
 }
 
@@ -167,8 +167,8 @@ impl TextCorrector {
 
 /// 热词预算(豆包 corpus 上限 100 token; cost = 字数 + 2, 装不下跳过, 按 boost 降序装)
 /// 从 recording.rs 归位(阶段A 第2步): 热词怎么选是词典域的事, 录音域只管消费
-pub fn budget_hotwords(dict: &[crate::settings::DictEntry]) -> Vec<String> {
-    let mut sorted: Vec<&crate::settings::DictEntry> = dict.iter().collect();
+pub fn budget_hotwords(dict: &[crate::config::DictEntry]) -> Vec<String> {
+    let mut sorted: Vec<&crate::config::DictEntry> = dict.iter().collect();
     sorted.sort_by(|a, b| b.boost.cmp(&a.boost));
     let mut used = 0usize;
     let mut out = vec![];
@@ -186,7 +186,7 @@ pub fn budget_hotwords(dict: &[crate::settings::DictEntry]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::DictEntry;
+    use crate::config::DictEntry;
     fn entry(term: &str, variants: &[&str], guard: &[&str]) -> DictEntry {
         DictEntry { term: term.into(), variants: variants.iter().map(|s| s.to_string()).collect(),
             guard_words: guard.iter().map(|s| s.to_string()).collect(), boost: 5 }
@@ -238,7 +238,7 @@ mod tests {
 #[cfg(test)]
 mod gap_tests {
     use super::*;
-    use crate::settings::DictEntry;
+    use crate::config::DictEntry;
 
     fn entry(term: &str, variants: &[&str]) -> DictEntry {
         DictEntry { term: term.into(), variants: variants.iter().map(|s| s.to_string()).collect(), guard_words: vec![], boost: 5 }

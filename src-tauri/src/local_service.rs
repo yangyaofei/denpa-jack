@@ -16,7 +16,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::settings::Config;
+use crate::config::Config;
 
 /// 内置引擎档案 id（type/name 定死的特化 provider；不占 asr_profiles 列表）
 pub const BUILTIN_ID: &str = "builtin";
@@ -99,7 +99,7 @@ pub fn healthy_at(base_url: &str) -> bool {
 }
 
 fn log_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    crate::settings::data_dir(app).join("local-service.log")
+    crate::config::data_dir(app).join("local-service.log")
 }
 
 /// 拉起内置网关（双守卫：已有活的子进程→拒绝重复拉）
@@ -285,7 +285,7 @@ fn strip_ansi(s: &str) -> String {
 pub fn prewarm(app: &tauri::AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-        let Ok(cfg) = crate::settings::get_config(app.clone()) else { return };
+        let Ok(cfg) = crate::config::get_config(app.clone()) else { return };
         if cfg.active_asr_id != BUILTIN_ID || !cfg.local_autostart {
             return;
         }

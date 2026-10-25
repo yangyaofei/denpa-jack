@@ -90,8 +90,8 @@ check(
   /KAX_VALUE/.test(deliverSrc) && /after_val\.contains\(text\) && after_val != before_val/.test(deliverSrc),
 );
 
-// 2.8) TS 接口与 Rust settings.rs 字段对齐(settings.rs 为唯一事实来源)
-const rs = readFileSync("src-tauri/src/settings.rs", "utf8");
+// 2.8) TS 接口与 Rust config.rs 字段对齐(config.rs 为唯一事实来源; 阶段A 改名 settings→config)
+const rs = readFileSync("src-tauri/src/config.rs", "utf8");
 const rsFields = (name) => {
   const body = rs.match(new RegExp(`pub struct ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
   return [...body.matchAll(/pub\s+(\w+)\s*:/g)].map((m) => m[1]);
@@ -100,7 +100,7 @@ const tsBody = (name) => readFileSync("src/app/types.ts", "utf8").match(new RegE
 for (const name of ["Config", "LlmProfile", "AsrProfile", "DictEntry"]) {
   const body = tsBody(name);
   const missing = rsFields(name).filter((f) => !new RegExp(`\\b${f}\\??\\s*:`).test(body));
-  check(`TS ${name} 未遗漏 settings.rs 字段(缺: ${missing.join(",") || "无"})`, missing.length === 0);
+  check(`TS ${name} 未遗漏 config.rs 字段(缺: ${missing.join(",") || "无"})`, missing.length === 0);
 }
 const deadFields = ["hotkey_key_code", "filler_word_removal", "append_trailing_space"];
 check(`无废弃字段残留(${deadFields.join("/")})`, deadFields.every((f) => !src.includes(f)));

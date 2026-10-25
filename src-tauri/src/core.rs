@@ -169,8 +169,8 @@ pub fn bump_mic_list() {
 // ── 门面: 静态数据经 core 可查(转发给纯数据模块; core 不 import 执行模块) ──
 
 /// 配置快照(门面: 转发 settings; 调用方不需要知道 settings 的存在)
-pub fn get_config(app: &tauri::AppHandle) -> Result<crate::settings::Config, String> {
-    crate::settings::get_config(app.clone())
+pub fn get_config(app: &tauri::AppHandle) -> Result<crate::config::Config, String> {
+    crate::config::get_config(app.clone())
 }
 
 /// 最近历史(门面: 转发 history)

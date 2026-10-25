@@ -14,7 +14,7 @@ use objc2_foundation::{NSArray, NSInteger, NSString};
 use tauri::{AppHandle};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-use crate::settings::Config;
+use crate::config::Config;
 
 /// 末次回执后的安静期(Chromium 类 app 会 probe-then-read 多次)
 const QUIET_PERIOD: Duration = Duration::from_millis(200);

@@ -6,10 +6,10 @@ use crate::delivery;
 use crate::engine;
 use crate::history;
 use crate::pipeline;
-use crate::settings::Config;
+use crate::config::Config;
 use tokio::sync::mpsc as ttx;
 use crate::dict::budget_hotwords;
-use crate::settings;
+use crate::config;
 
 #[tauri::command]
 pub fn ping() -> String {
@@ -44,7 +44,7 @@ pub fn copy_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_hotwords(app: tauri::AppHandle) -> Vec<String> {
-    settings::get_config(app).map(|c| budget_hotwords(&c.dict)).unwrap_or_default()
+    config::get_config(app).map(|c| budget_hotwords(&c.dict)).unwrap_or_default()
 }
 
 /// 麦克风解析: 优先级第一个在线 → 指定设备 → 系统默认
@@ -69,13 +69,13 @@ pub fn dev_nav(app: tauri::AppHandle, section: String) {
 
 #[tauri::command]
 pub fn open_config_file(app: tauri::AppHandle) -> Result<(), String> {
-    let p = settings::config_path(&app);
+    let p = config::config_path(&app);
     tauri_plugin_opener::open_path(p.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = crate::settings::data_dir(&app);
+    let dir = crate::config::data_dir(&app);
     tauri_plugin_opener::open_path(dir.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -111,7 +111,7 @@ pub fn rerun_history(app: tauri::AppHandle, audio_path: String) -> Result<(), St
 }
 
 fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), String> {
-    let cfg: Config = settings::get_config(app.clone())?;
+    let cfg: Config = config::get_config(app.clone())?;
     let (profile, key) = crate::engine::resolve_asr(&cfg)?;
     let raw = std::fs::read(&audio_path).map_err(|e| format!("读音频失败: {e}"))?;
     // 剥 WAV 头取 PCM: 复用 wav_data_chunk(遍历 chunk, 跳过 FLLR 填充块)——
@@ -157,7 +157,7 @@ pub fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
         .try_state::<crate::shortcut::ShortcutState>()
         .ok_or("快捷键引擎未初始化")?;
     state.inner().unregister_all()?;
-    let cfg = settings::get_config(app.clone())?;
+    let cfg = config::get_config(app.clone())?;
     for hk in cfg.transcribe_bindings() {
         state.inner().register(&hk)?;
     }
@@ -197,7 +197,7 @@ pub fn request_screen_permission() -> bool {
 /// 打开截图归档目录(事后判读/复现用)
 #[tauri::command]
 pub fn open_screen_context_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = crate::settings::data_dir(&app).join(crate::screen_context::DIR_NAME);
+    let dir = crate::config::data_dir(&app).join(crate::screen_context::DIR_NAME);
     let _ = std::fs::create_dir_all(&dir);
     tauri_plugin_opener::open_path(dir.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
@@ -255,7 +255,7 @@ pub fn hud_resize(app: tauri::AppHandle, width: f64) {
 #[tauri::command]
 pub fn get_active_mic(app: tauri::AppHandle) -> Option<(String, String)> {
     // 每次都按当前配置解析(优先级→指定→默认): 配置一改, 显示立即跟手
-    let mut cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let mut cfg = crate::config::get_config(app.clone()).unwrap_or_default();
     let uid = crate::audio::resolve_mic(&app, &mut cfg)?;
     let name = crate::audio::list_mics()
         .into_iter()
@@ -273,7 +273,7 @@ pub async fn list_llm_models(
     api_key: String,
 ) -> Result<Vec<String>, String> {
     let key = if api_key.is_empty() {
-        crate::settings::get_config(app)
+        crate::config::get_config(app)
             .ok()
             .and_then(|c| c.keys.first().cloned())
             .unwrap_or_default()
@@ -337,7 +337,7 @@ pub async fn llm_selftest(
     app: tauri::AppHandle,
     profile: Option<LlmSelftestOverride>,
 ) -> Result<LlmSelftestResult, String> {
-    let cfg = crate::settings::get_config(app.clone())?;
+    let cfg = crate::config::get_config(app.clone())?;
     let raw = "根据配置文件里面我加的 你第一次把把配置不齐。";
     let (dict_text, _) = crate::dict::TextCorrector {
         entries: cfg.dict.clone(),
@@ -350,7 +350,7 @@ pub async fn llm_selftest(
     .correct(raw);
 
     let prof = match profile {
-        Some(o) => crate::settings::LlmProfile {
+        Some(o) => crate::config::LlmProfile {
             id: "selftest".into(),
             name: "selftest".into(),
             provider: if o.provider.is_empty() { "deepseek".into() } else { o.provider },
@@ -404,7 +404,7 @@ pub async fn llm_selftest(
     let home = std::env::var("HOME").unwrap_or_default();
     let log_dir = std::path::PathBuf::from(home)
         .join("Library/Application Support")
-        .join(crate::settings::APP_ID)
+        .join(crate::config::APP_ID)
         .join("llm_logs");
     let mut tool_used = false;
     if let Ok(files) = std::fs::read_dir(&log_dir) {
@@ -465,7 +465,7 @@ pub fn capture_end(app: tauri::AppHandle, confirm: bool, combo: Option<String>) 
 /// 后端只提供 suspend/resume(真注销/重注册)与 confirm 提交。无 capture 线程、无 Channel、无门闩。
 #[tauri::command]
 pub fn add_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
-    let combo = crate::settings::normalize_combo(&combo);
+    let combo = crate::config::normalize_combo(&combo);
     if combo.is_empty() {
         return Err("组合不能为空".into());
     }
@@ -473,15 +473,15 @@ pub fn add_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
     combo
         .parse::<handy_keys::Hotkey>()
         .map_err(|e| format!("组合无法解析({combo}): {e}"))?;
-    let mut cfg = crate::settings::get_config(app.clone())?;
+    let mut cfg = crate::config::get_config(app.clone())?;
     let set = cfg
         .bindings
         .entry("transcribe".into())
-        .or_insert(crate::settings::BindingSet { current: vec![] });
+        .or_insert(crate::config::BindingSet { current: vec![] });
     if !set.current.contains(&combo) {
         set.current.push(combo);
     }
-    crate::settings::save_config(app.clone(), cfg)?;
+    crate::config::save_config(app.clone(), cfg)?;
     crate::shortcut::resume_all(&app)?;
     Ok(())
 }
@@ -489,14 +489,14 @@ pub fn add_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
 /// 删除一个绑定组合; 至少保留一个(Handy: every shortcut should have a value)
 #[tauri::command]
 pub fn remove_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
-    let mut cfg = crate::settings::get_config(app.clone())?;
+    let mut cfg = crate::config::get_config(app.clone())?;
     if let Some(set) = cfg.bindings.get_mut("transcribe") {
         set.current.retain(|c| c != &combo);
         if set.current.is_empty() {
             return Err("至少保留一个快捷键".into());
         }
     }
-    crate::settings::save_config(app.clone(), cfg)?;
+    crate::config::save_config(app.clone(), cfg)?;
     reapply_hotkey(app)?;
     Ok(())
 }
@@ -582,7 +582,7 @@ pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
 
 #[tauri::command]
 pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
-    let cfg = crate::settings::get_config(app.clone())?;
+    let cfg = crate::config::get_config(app.clone())?;
     match crate::local_service::start(&app, &cfg) {
         Ok(info) => Ok(info),
         Err(e) if e.starts_with("already-starting") => Ok(e), // 不是失败, 是"已在启动中"

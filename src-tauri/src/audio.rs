@@ -85,7 +85,7 @@ pub fn list_mics() -> Vec<(String, String)> {
 /// 上次命中的麦克风 uid 缓存: 按下→录音的关键路径少一次全枚举(Handy cached_device)
 static MIC_CACHE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-pub fn resolve_mic(app: &tauri::AppHandle, cfg: &mut crate::settings::Config) -> Option<String> {
+pub fn resolve_mic(app: &tauri::AppHandle, cfg: &mut crate::config::Config) -> Option<String> {
     if let Some(uid) = MIC_CACHE.lock().unwrap().clone() {
         // 缓存命中: 不枚举, open 失败由 ctrl_start 的自愈重试全量重解析
         return Some(uid);
@@ -106,7 +106,7 @@ pub fn resolve_mic(app: &tauri::AppHandle, cfg: &mut crate::settings::Config) ->
     }
     if migrated {
         crate::log::elog("[mic] 旧名字配置已迁移为硬件 uid");
-        let _ = crate::settings::save_config(app.clone(), cfg.clone());
+        let _ = crate::config::save_config(app.clone(), cfg.clone());
     }
     let picked = cfg
         .mic_priority

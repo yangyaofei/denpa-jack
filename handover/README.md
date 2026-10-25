@@ -28,7 +28,7 @@
 - 全局 static 收敛进 `core.rs`（CoreState 单锁，版本计数轮询协议）；
 - 引擎域：`engines.rs`/`doubao.rs` 等五文件归位 `engine/` 目录，trait `AsrEngine` 统一入口；
 - `recording.rs` 工具函数各回各家（麦克风→`audio.rs`，热词预算→`dict.rs`，WAV 解析→`history.rs`，截图编排→`screen_context.rs`）；
-- `settings.rs` 拆出 `settings/paths.rs`（数据目录/配置路径）与 `settings/migrate.rs`（配置迁移），提示词归位 `llm.rs`；
+- `settings.rs` 拆出 `settings/paths.rs`（数据目录/配置路径）与 `settings/migrate.rs`（配置迁移），提示词归位 `llm.rs`——阶段A 后续已统一改名 `config.rs` + `config/`；
 - 交付层 `deliver.rs`+`paste_tx.rs` 分家为 `delivery/`（`ax.rs`/`mod.rs`/`paste.rs`）；
 - 前端 `main.ts` 926 行按页拆分 `src/app/`（types/util/common + 六页域），HTML 零改动。
 

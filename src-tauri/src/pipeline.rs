@@ -1,5 +1,5 @@
 // 后处理链: asr-result → 词典纠错 → 可选 LLM → 剪贴板/粘贴 → 历史 → asr-final
-use crate::settings::Config;
+use crate::config::Config;
 
 /// 会话交接数据(由 RecordingSession 产生, 随 Result 事件流入)——会话级状态不进全局
 #[derive(Clone, Default)]
@@ -38,7 +38,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     crate::log::elog(&format!("[pipeline] begin raw={:.40}", raw));
     #[cfg(not(debug_assertions))]
     crate::log::elog("[pipeline] begin");
-    let cfg: Config = match crate::settings::get_config(app.clone()) {
+    let cfg: Config = match crate::config::get_config(app.clone()) {
         Ok(c) => c,
         Err(e) => {
             let msg = format!("配置读取失败: {e}");
@@ -266,7 +266,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     // 旧实现在 reliable_paste 内部快照, 读到的是已写入的转写文本, 恢复=没恢复。
     let saved = crate::delivery::paste::ClipboardSnapshot::take(app);
     // 焦点是本 app(设置窗等) → 只复制, 粘贴到自身无意义
-    if focus.bundle.as_deref() == Some(crate::settings::APP_ID) {
+    if focus.bundle.as_deref() == Some(crate::config::APP_ID) {
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
         return Ok("copied-self".into());
     }
@@ -274,7 +274,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     //    修 bug: 以前 AX 直写成功就 return, 剪贴板里什么都没有, 用户事后拿不回转写结果。
     app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
     // 3-prev) 配置提前取一次(粘贴优先名单 + paste_tx 都要用)
-    let cfg_h: crate::settings::Config = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let cfg_h: crate::config::Config = crate::config::get_config(app.clone()).unwrap_or_default();
     // 2) AX 直写光标(点不碰剪贴板式插入; 焦点校验通过才尝试, B10)。
     //    粘贴优先名单命中 → 跳过 AX(该 App 的 AX 写入会重复输入, 见 settings 字段注释)
     let ax_skip = ax_paste_only(&cfg_h.ax_paste_only_apps, focus.bundle.as_deref());

@@ -1,6 +1,6 @@
 // 配置层: 档案制(参照 Swift 版 Config.swift 结构)
 // 原则: 所有新增字段必须 #[serde(default)] —— 旧配置文件可解析(C17 教训)
-// 阶段A 第3步拆分: 路径解析→settings/paths.rs, 一次性迁移→settings/migrate.rs;
+// 阶段A 第3步拆分: 路径解析→config/paths.rs, 一次性迁移→config/migrate.rs;
 // 本文件只剩"配置里有什么"(类型/默认值/读写/热键归一化)。
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -353,7 +353,7 @@ pub fn get_config(app: tauri::AppHandle) -> Result<Config, String> {
             def
         }
     };
-    // 一次性迁移(C54 bindings / F5 兜底 / 内置引擎 / VAD 归零)集中在 settings/migrate.rs
+    // 一次性迁移(C54 bindings / F5 兜底 / 内置引擎 / VAD 归零)集中在 config/migrate.rs
     migrate::migrate_on_load(&mut cfg, &p);
     Ok(cfg)
 }
@@ -533,7 +533,7 @@ mod tests {
 #[cfg(test)]
 mod gap_tests {
     use super::*;
-    // resolve_data_dir/config_without_data_dir 用例已随路径解析迁至 settings/paths.rs(阶段A 第3步)
+    // resolve_data_dir/config_without_data_dir 用例已随路径解析迁至 config/paths.rs(阶段A 第3步)
 
     #[test]
     fn normalize_key_whitespace_and_case() {

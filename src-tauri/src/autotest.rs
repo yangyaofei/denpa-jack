@@ -62,7 +62,7 @@ pub fn maybe_spawn(app: &AppHandle) {
 
 /// resolve ASR 档案, 内置引擎未就绪时等待其启动完成(模型加载约 40s)——
 /// 文件回放/e2e 的入口都走它; 档案本身有问题则立刻失败, 不空等。
-fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::settings::Config) -> Result<(crate::settings::AsrProfile, String), String> {
+fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         match crate::engine::resolve_asr(cfg) {
@@ -107,7 +107,7 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
         let pcm = wav_data_chunk(&raw).unwrap_or_default();
         log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段 pcm {}B ({path})", idx + 1, pcm.len()));
         // 每段一个独立会话(等价于一次"按下→说话→松开"), 自建会话与 ctrl_start 隔离(无双输入)
-        let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+        let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
         let (profile, key) = match resolve_asr_wait_gateway(&app, &cfg) {
             Ok(x) => x,
             Err(e) => {
@@ -186,7 +186,7 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             log::log(&app, &format!("AUTOTEST-FILE: pcm {}B", pcm.len()));
             // 自建会话: resolve→spawn→mirror, 与 ctrl_start 完全隔离(无双输入)
             use tauri::Manager;
-            let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+            let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
             let (profile, key) = match crate::engine::resolve_asr(&cfg) {
                 Ok(x) => x,
                 Err(e) => { log::log(&app, &format!("AUTOTEST-FILE: resolve 失败: {e}")); app.exit(1); return; }
@@ -239,7 +239,7 @@ fn run_timelimit(app: tauri::AppHandle) {
         .unwrap_or(3);
     // 先等内置网关就绪(冷启动模型加载 ~40s): ctrl_start 的 resolve 不带等待,
     // 网关未就绪时第一次按下会 Start 失败, 干扰状态机断言(非被测行为)
-    let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
     if let Err(e) = resolve_asr_wait_gateway(&app, &cfg) {
         log::log(&app, &format!("AUTOTEST-TL: resolve 未就绪({e}), 继续测试"));
     }
@@ -345,7 +345,7 @@ fn run_e2e(app: tauri::AppHandle) {
 /// 与磁盘真值(history.jsonl 行数/config.json dict 数)断言比对
 fn run_ui_chain(app: tauri::AppHandle) {
     std::thread::sleep(std::time::Duration::from_millis(1200));
-    let dir = crate::settings::data_dir(&app);
+    let dir = crate::config::data_dir(&app);
     // 1) 历史链: 函数返回 vs jsonl 行数(recent 有 500 条上限, 历史超限时按 min 比较)
     let jsonl = dir.join("history.jsonl");
     let disk_lines = std::fs::read_to_string(&jsonl)
@@ -360,7 +360,7 @@ fn run_ui_chain(app: tauri::AppHandle) {
         crate::log::elog(&format!("[ui-chain] 最新一条: {} final={}", last.ts, preview));
     }
     // 2) 配置链: dict/keys/档案
-    let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
     crate::log::elog(&format!(
         "[ui-chain] config: dict={} keys={} llm_profiles={} active_asr={}",
         cfg.dict.len(), cfg.keys.len(), cfg.llm_profiles.len(), cfg.active_asr_id

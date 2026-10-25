@@ -198,7 +198,7 @@ pub fn init_shortcuts(
     send_ctrl: Box<dyn Fn(bool) + Send>,
 ) -> Result<(), String> {
     let state = ShortcutState::new(send_ctrl)?;
-    let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
     let mut ok_count = 0;
     for hk in cfg.transcribe_bindings() {
         match state.register(&hk) {
@@ -328,22 +328,22 @@ pub fn capture_end(app: &tauri::AppHandle, confirm: bool, combo: Option<String>)
     }
     if confirm {
         if let Some(combo) = combo {
-            let combo = crate::settings::normalize_combo(&combo);
+            let combo = crate::config::normalize_combo(&combo);
             if combo.is_empty() {
                 return Err("组合为空".into());
             }
             combo
                 .parse::<Hotkey>()
                 .map_err(|e| format!("组合无法解析({combo}): {e}"))?;
-            let mut cfg = crate::settings::get_config(app.clone())?;
+            let mut cfg = crate::config::get_config(app.clone())?;
             let set = cfg
                 .bindings
                 .entry("transcribe".into())
-                .or_insert(crate::settings::BindingSet { current: vec![] });
+                .or_insert(crate::config::BindingSet { current: vec![] });
             if !set.current.contains(&combo) {
                 set.current.push(combo);
             }
-            crate::settings::save_config(app.clone(), cfg)?;
+            crate::config::save_config(app.clone(), cfg)?;
         }
     }
     resume_all(app)
@@ -359,7 +359,7 @@ pub fn suspend_all(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// 录制结束恢复全部绑定(幂等)
 pub fn resume_all(app: &tauri::AppHandle) -> Result<(), String> {
-    let cfg = crate::settings::get_config(app.clone()).unwrap_or_default();
+    let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
     let state = app.state::<ShortcutState>().inner();
     for hk in cfg.transcribe_bindings() {
         match state.register(&hk) {

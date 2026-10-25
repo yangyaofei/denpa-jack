@@ -2,7 +2,7 @@
 use tauri::{Emitter, Manager};
 
 use crate::commands::{open_config_file, open_data_dir};
-use crate::settings::{self, Config};
+use crate::config::{self, Config};
 use crate::TRAY_TX;
 use crate::tray;
 
@@ -38,7 +38,7 @@ pub fn spawn_tray(app: &tauri::AppHandle) -> Result<(), String> {
     // 调用点均在主线程(setup / run_on_main_thread)
     let mtm = objc2::MainThreadMarker::new().ok_or("spawn_tray 不在主线程")?;
     let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let cfg: Config = settings::get_config(app.clone()).unwrap_or_default();
+    let cfg: Config = config::get_config(app.clone()).unwrap_or_default();
     let busy = crate::core::session_recording();
     let t = tray::MacTray::new(
         mtm,
@@ -72,17 +72,17 @@ pub fn spawn_tray(app: &tauri::AppHandle) -> Result<(), String> {
 pub fn handle_tray_event(app: &tauri::AppHandle, ev: &str) {
     match ev {
         "toggle_llm" => {
-            if let Ok(mut c) = settings::get_config(app.clone()) {
+            if let Ok(mut c) = config::get_config(app.clone()) {
                 c.use_llm_correction = !c.use_llm_correction;
-                let _ = settings::save_config(app.clone(), c);
+                let _ = config::save_config(app.clone(), c);
                 let _ = Emitter::emit_to(app, "main", "config-changed", ());
                 let _ = refresh_tray(app);
             }
         }
         "toggle_clip" => {
-            if let Ok(mut c) = settings::get_config(app.clone()) {
+            if let Ok(mut c) = config::get_config(app.clone()) {
                 c.clipboard_only = !c.clipboard_only;
-                let _ = settings::save_config(app.clone(), c);
+                let _ = config::save_config(app.clone(), c);
                 let _ = Emitter::emit_to(app, "main", "config-changed", ());
                 let _ = refresh_tray(app);
             }

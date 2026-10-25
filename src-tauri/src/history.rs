@@ -22,13 +22,13 @@ pub struct HistoryRecord {
 }
 
 pub fn history_path(app: &tauri::AppHandle) -> PathBuf {
-    let dir = crate::settings::data_dir(app);
+    let dir = crate::config::data_dir(app);
     fs::create_dir_all(&dir).ok();
     dir.join("history.jsonl")
 }
 
 pub fn recordings_dir(app: &tauri::AppHandle) -> PathBuf {
-    let dir = crate::settings::data_dir(app);
+    let dir = crate::config::data_dir(app);
     let r = dir.join("recordings");
     fs::create_dir_all(&r).ok();
     r
@@ -128,7 +128,7 @@ pub fn prune_wavs_in(dir: &std::path::Path, keep: usize) {
 
 /// 保留最近 N 个录音, 删多余
 fn history_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
-    crate::settings::data_dir(app)
+    crate::config::data_dir(app)
 }
 
 pub fn prune_recordings(app: &tauri::AppHandle, keep: usize) {
@@ -235,10 +235,10 @@ mod tests {
     fn config_atomic_write_roundtrip_and_no_tmp_leftover() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.json");
-        crate::settings::write_config_atomic(&p, "{\"a\":1}").unwrap();
+        crate::config::write_config_atomic(&p, "{\"a\":1}").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"a\":1}");
         // 覆盖写不留 .tmp 残留
-        crate::settings::write_config_atomic(&p, "{\"a\":2}").unwrap();
+        crate::config::write_config_atomic(&p, "{\"a\":2}").unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "{\"a\":2}");
         let leftovers: Vec<_> = std::fs::read_dir(d.path()).unwrap()
             .filter_map(|e| e.ok())

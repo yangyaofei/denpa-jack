@@ -24,7 +24,7 @@ pub mod recording;
 pub mod screen_context;
 mod segment_queue;
 mod update;
-pub mod settings;
+pub mod config;
 mod shortcut;
 #[allow(unused_unsafe)]
 mod tray;
@@ -113,9 +113,9 @@ pub fn run() {
             log::log(app.handle(), "setup begin");
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // 菜单栏常驻, 不占 Dock
             // 预热数据目录缓存（history/recordings/llm_logs/app.log 都从它派生）
-            log::log(app.handle(), &format!("数据目录: {}", crate::settings::data_dir(app.handle()).display()));
+            log::log(app.handle(), &format!("数据目录: {}", crate::config::data_dir(app.handle()).display()));
             // 死亡诊断: 会话文件(判定上次是否正常运行结束) + 崩溃报告扫描 + 心跳
-            crate::crash_log::begin_session(&crate::settings::data_dir(app.handle()));
+            crate::crash_log::begin_session(&crate::config::data_dir(app.handle()));
             crate::crash_log::spawn_heartbeat();
             if let Err(e) = mic_watch::start() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
@@ -218,7 +218,7 @@ pub fn run() {
             }
             // 触发模式缓存初始化(hold/toggle)
             {
-                let cfg0 = settings::get_config(app.handle().clone()).unwrap_or_default();
+                let cfg0 = config::get_config(app.handle().clone()).unwrap_or_default();
                 *crate::ACTIVATION.lock().unwrap() = cfg0.activation;
             }
             log::log(app.handle(), "setup done");
@@ -249,7 +249,7 @@ pub fn run() {
             commands::check_permissions, commands::request_microphone, commands::open_system_settings,
             commands::request_screen_permission, commands::open_screen_context_dir,
             commands::autostart_enable, commands::autostart_disable, commands::autostart_status,
-            settings::get_config, settings::save_config,
+            config::get_config, config::save_config,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -261,7 +261,7 @@ pub fn run() {
                 local_service::stop();
             }
             tauri::RunEvent::Exit => {
-                crate::crash_log::end_session(&crate::settings::data_dir(app));
+                crate::crash_log::end_session(&crate::config::data_dir(app));
             }
             _ => {}
         });

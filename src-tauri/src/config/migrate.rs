@@ -1,8 +1,8 @@
 // 配置域·一次性迁移(阶段A 第3步从 settings.rs get_config 拆出):
 // 全部"读旧配置→改写成新形态→落盘"的迁移都集中在这里, 每段一个 if, 逐字未改。
 // 迁移即落盘(同目录原子写), 下次读取不再触发。
-use crate::settings::paths::write_config_atomic;
-use crate::settings::{BindingSet, Config};
+use crate::config::paths::write_config_atomic;
+use crate::config::{BindingSet, Config};
 
 /// get_config 加载后调用: 按序跑四段迁移(C54 bindings → F5 兜底 → 内置引擎 → VAD 归零)
 pub(crate) fn migrate_on_load(cfg: &mut Config, p: &std::path::Path) {
@@ -17,7 +17,7 @@ pub(crate) fn migrate_on_load(cfg: &mut Config, p: &std::path::Path) {
             }
         }
         let set: Vec<String> = {
-            let mut normed: Vec<String> = set.iter().map(|s| crate::settings::normalize_combo(s)).filter(|s| !s.is_empty()).collect();
+            let mut normed: Vec<String> = set.iter().map(|s| crate::config::normalize_combo(s)).filter(|s| !s.is_empty()).collect();
             normed.sort();
             normed.dedup();
             normed

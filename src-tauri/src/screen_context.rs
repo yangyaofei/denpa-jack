@@ -618,7 +618,7 @@ pub fn spawn_session_capture(
             crate::log::elog("[ctx] 截图跳过: 未授予屏幕录制权限(可在设置页对应开关处申请)");
             return;
         }
-        let dir = crate::settings::data_dir(&app);
+        let dir = crate::config::data_dir(&app);
         match capture_and_prune(&dir, "ctx", &target, mode) {
             Ok(shot) => {
                 // sha256 与后续 [llm] 带图请求里的指纹对照 → 证明发出去的图就是这一张

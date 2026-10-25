@@ -60,7 +60,7 @@ pub fn data_dir(app: &tauri::AppHandle) -> PathBuf {
         return p;
     }
     let base = base_dir(app);
-    let configured = crate::settings::get_config(app.clone())
+    let configured = crate::config::get_config(app.clone())
         .map(|c| c.data_dir)
         .unwrap_or_default();
     let p = resolve_data_dir(&base, &configured);
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn config_without_data_dir_defaults_to_empty() {
-        let cfg: crate::settings::Config = serde_json::from_str("{}").expect("空对象应可解析");
+        let cfg: crate::config::Config = serde_json::from_str("{}").expect("空对象应可解析");
         assert_eq!(cfg.data_dir, "");
     }
 }

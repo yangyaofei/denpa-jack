@@ -59,12 +59,12 @@ pub fn settle(emit: &impl Fn(AsrEvent), text: &str) {
 
 /// ASR 档案解析: 从配置选出本会话引擎与 key——从 recording.rs 归位(阶段A 第2步),
 /// "哪个引擎可用什么参数跑"是引擎域的事(engine→settings/local_service 单向依赖)。
-pub fn resolve_asr(cfg: &crate::settings::Config) -> Result<(crate::settings::AsrProfile, String), String> {
+pub fn resolve_asr(cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
     // 不占档案列表、零配置, 地址来自 local_service 登记的随机端口(联动)
     if cfg.active_asr_id == crate::local_service::BUILTIN_ID {
         let base = crate::local_service::builtin_base_url()?;
-        let p = crate::settings::AsrProfile {
+        let p = crate::config::AsrProfile {
             id: crate::local_service::BUILTIN_ID.into(),
             name: "内置本地引擎".into(),
             provider: "local".into(),
@@ -101,18 +101,18 @@ mod tests {
 
     #[test]
     fn resolve_asr_rejects_unknown_provider() {
-        let mut cfg = crate::settings::default_config();
+        let mut cfg = crate::config::default_config();
         cfg.active_asr_id = "x".into();
-        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+        cfg.asr_profiles = vec![crate::config::AsrProfile {
             id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(),
         }];
         assert!(resolve_asr(&cfg).is_err());
     }
     #[test]
     fn resolve_asr_falls_back_to_first_profile() {
-        let mut cfg = crate::settings::default_config();
+        let mut cfg = crate::config::default_config();
         cfg.active_asr_id = "nope".into();
-        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+        cfg.asr_profiles = vec![crate::config::AsrProfile {
             id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(),
         }];
         let (p, k) = resolve_asr(&cfg).unwrap();
@@ -121,9 +121,9 @@ mod tests {
     }
     #[test]
     fn resolve_asr_empty_key_uses_pool() {
-        let mut cfg = crate::settings::default_config();
+        let mut cfg = crate::config::default_config();
         cfg.keys = vec!["pool-key".into()];
-        cfg.asr_profiles = vec![crate::settings::AsrProfile {
+        cfg.asr_profiles = vec![crate::config::AsrProfile {
             id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(),
         }];
         let (_, k) = resolve_asr(&cfg).unwrap();
