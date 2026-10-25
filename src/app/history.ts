@@ -24,6 +24,12 @@ export function historyPage(this: AppThis) {
       return this.history.filter((h: any) =>
         (h.raw || "").toLowerCase().includes(q) || (h.final_text || "").toLowerCase().includes(q));
     },
+    selectHist(this: AppThis, h: HistoryRecord) {
+      this.selHist = h;
+      // 切条目时右栏详情滚回顶部——否则上一条的滚动位置留着,
+      // 新条目的"最终结果/重转按钮"在顶上, 还得手动滑回去(用户反馈)
+      this.$nextTick(() => { const el = (this.$refs as any).paneRight; if (el) el.scrollTop = 0; });
+    },
     async copyHist(this: AppThis, h: HistoryRecord) {
       try { await invoke("copy_text", { text: h.final_text }); } catch (e) { console.error(e); }
     },

@@ -424,17 +424,37 @@ pub struct Versions {
     pub recording: bool,
     /// R1: 进行中的历史重转 ts 列表(前端三态"重算中"的数据源)
     pub reruns: Vec<String>,
+    /// 在途段一览(Live cur + 队列 + Rerun)——主窗状态条渲染, 数据同 HUD 投影
+    pub queue: Vec<SegLite>,
 }
 
 #[tauri::command]
 pub fn poll_versions() -> Versions {
+    // 队列投影(主窗状态条): 在途段一览, 段数最多个位数, 800ms 轮询带上无压力
+    let (cur, queue) = crate::segment_queue::views();
+    let mut segs: Vec<SegLite> = Vec::new();
+    if let Some(c) = cur {
+        segs.push(SegLite { state: c.state, source: c.source, text: c.text });
+    }
+    for s in queue {
+        segs.push(SegLite { state: s.state, source: s.source, text: s.text });
+    }
     Versions {
         history: crate::core::history_version(),
         config: crate::core::config_version(),
         mics: crate::core::mic_list_version(),
         recording: crate::core::session_recording(),
         reruns: crate::core::rerun_active(),
+        queue: segs,
     }
+}
+
+/// 轮询附带的轻量段视图(主窗状态条渲染用)
+#[derive(serde::Serialize, Clone)]
+pub struct SegLite {
+    pub state: String,
+    pub source: String,
+    pub text: String,
 }
 
 // ── 内置本地网关(特化 provider: 随机端口联动, 零配置; 外部网关档案不受此管) ──

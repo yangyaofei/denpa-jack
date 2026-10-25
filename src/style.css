@@ -214,7 +214,7 @@ body {
 body { background: var(--bg1); color: var(--label); }
 body.settings-win { display: flex; }
 body.settings-win .sidebar { width: 190px; flex: none; border-right: 1px solid var(--sep); background: var(--bg3); }
-body.settings-win .content-in { flex: 1; overflow-y: auto; padding: 20px 24px; background: var(--bg2); }
+body.settings-win .content-in { flex: 1; overflow-y: auto; padding: 20px 24px; background: var(--bg2); display: flex; flex-direction: column; }
 h1 { font-size: 17px; font-weight: 600; }          /* Title2 */
 .hi-text { font-size: 13px; }                       /* Body */
 .hi-meta, .d-meta, .row-hint { font-size: 11px; color: var(--label2); }  /* Footnote */
@@ -224,9 +224,23 @@ h1 { font-size: 17px; font-weight: 600; }          /* Title2 */
 .card { background: var(--bg2); border: none; box-shadow: none; }
 
 /* ===== 主窗一体化(sidebar 布局) ===== */
+/* content-in 已是 flex 列容器: 普通页 min-height:auto 可超出→整页滚动照旧;
+   历史页 flex:1+min-height:0 受限于视口 → 左右两栏各自独立滚动,
+   不再跟着 content-in 一同滚(用户反馈: 左栏滚到底点条目, 右栏详情还停在底部) */
 .page-wide { max-width: none !important; width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .page-wide .split { flex: 1; min-height: 0; }
 .page-wide .pane-left { width: 460px; }
+/* 主窗队列状态条(与 HUD 同源投影): 有在途段/录音时显示, 最多几行 */
+[x-cloak] { display: none !important; }
+.queue-bar { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; margin-bottom: 8px;
+  border: 1px solid var(--sep); border-radius: 8px; background: var(--bg3); font-size: 12px; }
+.qb-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.qb-ic { flex: none; width: 16px; text-align: center; color: var(--label2); }
+.qb-row.failed .qb-ic { color: #ff6961; }
+.qb-row.transcribing .qb-ic { color: var(--accent); }
+.qb-row.recording .qb-ic { color: #ff6961; animation: pulse 1.2s infinite; }
+.qb-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--label); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
 body.settings-win .side-status {
   margin-top: auto; padding: 10px 12px;
   font-size: 11px; color: var(--label2);

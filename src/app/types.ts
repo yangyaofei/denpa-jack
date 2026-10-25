@@ -48,6 +48,9 @@ export interface LocalSvcState {
 
 /// 组件完整形状: 状态字段 + 全部方法。各页域 partial 的 this 都是它。
 export interface AppThis {
+  // Alpine 魔法属性(selectHist 里滚回顶部用)
+  $nextTick: (fn: () => void) => void;
+  $refs: Record<string, any>;
   // —— 公共状态(common) ——
   section: string; search: string; recording: boolean;
   error: string; cfg: Config | null;
@@ -72,6 +75,8 @@ export interface AppThis {
   history: HistoryRecord[]; selHist: HistoryRecord | null; histSearch: string;
   /** R1: 进行中的历史重转 ts 集合(poll_versions.reruns 的镜像) */
   rerunning: Set<string>;
+  /** 在途转写段一览(poll_versions.queue 的镜像)——主窗状态条 */
+  queueView: { state: string; source: string; text: string }[];
   // —— 通用页 ——
   axPasteOnlyText: string;
   // —— 关于页 ——

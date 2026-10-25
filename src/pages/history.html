@@ -16,12 +16,23 @@
           <span style="flex:1"></span>
           <button class="rec-btn small" @click="toggleRecording()" x-text="recording ? '■ 停止' : '试音'"></button>
         </div>
+        <div class="queue-bar" x-show="queueView.length || recording" x-cloak>
+          <template x-for="(s, i) in queueView" :key="i">
+            <div class="qb-row" :class="s.state">
+              <span class="qb-ic" x-text="s.state === 'failed' ? '✕' : s.state === 'transcribing' ? (s.source === 'rerun' ? '↻' : '⟳') : '•'"></span>
+              <span class="qb-t" x-text="(s.source === 'rerun' ? '重转中 ' : '') + (s.text ? String(s.text).slice(0, 40) : (s.state === 'failed' ? '识别失败(可重试)' : s.state === 'queued' ? '排队中…' : ''))"></span>
+            </div>
+          </template>
+          <div class="qb-row recording" x-show="recording">
+            <span class="qb-ic">●</span><span class="qb-t">正在录音…</span>
+          </div>
+        </div>
         <div class="split">
           <div class="pane-left">
             <input class="inp" type="text" placeholder="搜索转写内容…" x-model="histSearch" />
             <div class="hist-list">
               <template x-for="h in filteredHist()" :key="h.ts">
-                <div class="hist-item" :class="{sel: selHist?.ts === h.ts}" @click="selHist = h">
+                <div class="hist-item" :class="{sel: selHist?.ts === h.ts}" @click="selectHist(h)">
                   <div class="hi-meta"><span x-text="h.ts"></span><span x-text="h.engine"></span></div>
                   <div class="hi-text" x-text="h.final_text || h.raw"></div>
                   <div class="hi-tags">
@@ -34,11 +45,11 @@
               <div class="dim" x-show="!filteredHist().length" style="padding:20px">无记录（按住热键说话即产生）</div>
             </div>
           </div>
-          <div class="pane-right">
+  <div class="pane-right" x-ref="paneRight">
             <template x-if="selHist">
               <div class="detail">
                 <div class="d-row"><label>最终结果</label><div class="d-text strong" x-text="selHist.final_text || selHist.raw"></div>
-                  <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" :disabled="rerunning.has(selHist.ts)" @click="rerunHist(selHist)">{{ rerunning.has(selHist.ts) ? '重算中…' : '重转' }}</button></div></div>
+                  <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" :disabled="rerunning.has(selHist.ts)" @click="rerunHist(selHist)" x-text="rerunning.has(selHist.ts) ? '重算中…' : '重转'"></button></div></div>
                 <div class="d-row" x-show="selHist.raw && selHist.raw !== selHist.final_text"><label>原始转写</label><div class="d-text dim2" x-text="selHist.raw"></div></div>
                 <div class="d-row" x-show="selHist.llm_thinking"><label>LLM 思考</label>
                   <details class="think"><summary>展开思考链</summary><pre class="d-text dim2" x-text="selHist.llm_thinking"></pre></details>

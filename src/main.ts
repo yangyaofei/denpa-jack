@@ -23,6 +23,7 @@ import { aboutPage } from "./app/about";
   ...common(),
   ...historyPage(),
   rerunning: new Set<string>() as Set<string>,
+  queueView: [] as { state: string; source: string; text: string }[],
   ...dictPage(),
   ...generalPage(),
   ...asrPage(),
