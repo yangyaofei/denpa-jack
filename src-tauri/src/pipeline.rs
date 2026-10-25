@@ -118,99 +118,19 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 
     // pcm 的落盘与历史写入统一延后到第 4) 步(交付完成后)在子线程执行(D4: 路径回填)
 
-    // 1) 词典纠错(毫秒级, 本地)
-    let (dict_text, _matches) = crate::dict::TextCorrector { entries: cfg.dict.clone(), normalizations: cfg.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect() }.correct(&raw);
-    // 默认交付=词典纠错版(D1): LLM 关闭/失败/超时都落到这一档, 不再退回 ASR 原文——
-    // 词典是本地毫秒级能力, 没理由在 LLM 缺席时丢弃它。raw 只进历史留痕。
-    let mut final_text = dict_text.clone();
-    let mut llm_used = false;
-    let mut warning: Option<String> = None;
-    let mut history_thinking: Option<String> = None;
-
-    // 2) LLM 润色(可选; 提供tools模型自主决定; 5s 超时/失败降级词典版——永不阻塞交付)
-    if cfg.use_llm_correction {
-        if let Some(prof) = cfg.llm_profiles.iter().find(|p| p.id == cfg.active_llm_id) {
-            let key = if prof.api_key.is_empty() {
-                cfg.keys.first().cloned().unwrap_or_default()
-            } else {
-                prof.api_key.clone()
-            };
-            if !key.is_empty() {
-                let opts = crate::llm::LlmOpts {
-                    provider: prof.provider.clone(),
-                    base_url: prof.base_url.clone(),
-                    model: prof.model.clone(),
-                    api_key: key,
-                    prompt: if prof.prompt.is_empty() {
-                        crate::llm::DEFAULT_LLM_PROMPT.to_string()
-                    } else {
-                        prof.prompt.clone()
-                    },
-                    thinking: prof.thinking,
-                    effort: if prof.effort.is_empty() { "low".into() } else { prof.effort.clone() },
-                    timeout_secs: cfg.llm_timeout_secs,
-                    max_tokens: cfg.llm_max_tokens,
-                    retries: cfg.llm_retries,
-                };
-                // 词典注入: 带变体映射(纠错指向性更强, LLM 上下文充足不加预算限制)
-                let terms: Vec<String> = cfg
-                    .dict
-                    .iter()
-                    .map(|d| {
-                        if d.variants.is_empty() {
-                            d.term.clone()
-                        } else {
-                            format!("{}(误: {})", d.term, d.variants.join("/"))
-                        }
-                    })
-                    .collect();
-                // 告诉 HUD "进入 AI 润色阶段"。用户可能已经在录下一段了——
-                // 这时 HUD 不采纳(它自己持有"录音中"的状态), 不会打断实时回显(issue #2)。
-                crate::hud::polishing(&app);
-                let mut llm_thinking: Option<String> = None;
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build();
-
-                let polished = rt.map(|r| {
-                    r.block_on(async {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(60),
-                            crate::llm::polish(&dict_text, &terms, &opts, ho.screenshot.as_deref()),
-                        )
-                        .await
-                        {
-                            Ok(Ok(out)) => {
-                                llm_thinking = out.thinking;
-                                Some(out.text)
-                            }
-                            Ok(Err(e)) => {
-                                warning = Some(format!("LLM 失败: {e}"));
-                                final_text = dict_text.clone(); // 降级=词典纠错版(D1)
-                                None
-                            }
-                            Err(_) => {
-                                warning = Some("LLM 超时(60s)".into());
-                                final_text = dict_text.clone(); // 降级=词典纠错版(D1)
-                                None
-                            }
-                        }
-                    })
-                });
-                history_thinking = llm_thinking.clone();
-                if let Ok(Some(t)) = polished {
-                    if !t.trim().is_empty() {
-                        final_text = t;
-                        llm_used = true;
-                    }
-                }
-            } else {
-                warning = Some("LLM 档案缺 Key".into());
-            }
-        } else {
-            warning = Some("未找到启用的 LLM 档案".into());
-        }
-    }
+    // 1+2) 纠错管线(词典→可选 LLM→降级词典版): llm::refine 是唯一实现,
+    // 重转/自测与这里共用同一根管线。HUD 的"润色中"广播是编排职责, 留在这里。
+    crate::hud::polishing(&app);
+    let refined = tauri::async_runtime::block_on(crate::llm::refine(
+        &raw,
+        Some(&cfg),
+        None,
+        ho.screenshot.as_deref(),
+    ));
+    let final_text = refined.text;
+    let llm_used = refined.llm_used;
+    let mut warning = refined.warning;
+    let history_thinking = refined.thinking;
 
     // 3) 交付: 剪贴板(+粘贴)
     //    `trailing_newlines` 只改"交付出去的文本"(末尾补换行), 不改历史里的原文——

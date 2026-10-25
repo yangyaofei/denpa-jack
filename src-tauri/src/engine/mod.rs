@@ -222,51 +222,18 @@ fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
         crate::log::elog(&format!("[rerun] 回写失败: 未找到 ts={ts} 的条目"));
         return;
     };
+    // 纠错管线与 Live 结算共用同一实现(llm::refine); 重转无截图(事后屏幕会误导纠错)
     let cfg = crate::config::get_config(app.clone()).ok();
-    let dict = cfg.as_ref().map(|c| crate::dict::TextCorrector {
-        entries: c.dict.clone(),
-        normalizations: c.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect(),
-    });
-    let (dict_text, _) = dict.as_ref().map(|d| d.correct(raw)).unwrap_or((raw.to_string(), Vec::new()));
-    let mut final_text = dict_text.clone();
-    let mut llm_used = false;
-    let mut thinking: Option<String> = None;
-    let mut warning: Option<String> = None;
-    if let Some(c) = cfg.as_ref().filter(|c| c.use_llm_correction) {
-        if let Some(p) = c.llm_profiles.iter().find(|p| p.id == c.active_llm_id).cloned() {
-            let key = if p.api_key.is_empty() { c.keys.first().cloned().unwrap_or_default() } else { p.api_key.clone() };
-            let opts = crate::llm::LlmOpts {
-                provider: p.provider.clone(),
-                base_url: p.base_url.clone(),
-                model: p.model.clone(),
-                api_key: key,
-                prompt: if p.prompt.is_empty() { crate::llm::DEFAULT_LLM_PROMPT.to_string() } else { p.prompt.clone() },
-                thinking: p.thinking,
-                effort: if p.effort.is_empty() { "low".into() } else { p.effort.clone() },
-                timeout_secs: c.llm_timeout_secs,
-                max_tokens: c.llm_max_tokens,
-                retries: c.llm_retries,
-            };
-            let terms: Vec<String> = c.dict.iter().map(|d| d.term.clone()).collect();
-            match tauri::async_runtime::block_on(crate::llm::polish(&dict_text, &terms, &opts, None)) {
-                Ok(out) => {
-                    final_text = out.text;
-                    thinking = out.thinking;
-                    llm_used = true;
-                }
-                Err(e) => warning = Some(format!("重转 LLM 失败, 已交付词典版: {e}")),
-            }
-        }
-    }
+    let r = tauri::async_runtime::block_on(crate::llm::refine(raw, cfg.as_ref(), None, None));
     rec.raw = raw.to_string();
-    rec.final_text = final_text;
-    rec.llm_used = llm_used;
-    rec.llm_thinking = thinking;
-    rec.warning = warning;
+    rec.final_text = r.text;
+    rec.llm_used = r.llm_used;
+    rec.llm_thinking = r.thinking;
+    rec.warning = r.warning.map(|w| format!("重转 {w}, 已用词典纠错版"));
     match crate::history::update_by_ts(app, &ts, &rec) {
         Ok(()) => {
             crate::core::bump_history();
-            crate::log::elog(&format!("[rerun] 回写完成 ts={ts} llm_used={llm_used}"));
+        crate::log::elog(&format!("[rerun] 回写完成 ts={ts} llm_used={}", r.llm_used));
         }
         Err(e) => crate::log::elog(&format!("[rerun] 回写失败: {e}")),
     }

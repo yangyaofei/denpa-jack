@@ -192,64 +192,120 @@ pub struct SelftestReport {
     pub latency_ms: u128,
 }
 
-pub async fn selftest(
-    cfg: &crate::config::Config,
-    override_profile: Option<crate::config::LlmProfile>,
-) -> Result<SelftestReport, String> {
-    let raw = "根据配置文件里面我加的 你第一次把把配置不齐。";
+/// 纠错管线的产出: 词典版/最终文本/是否润色/思考链/降级警告
+#[derive(Debug, Clone, Default)]
+pub struct Refined {
+    /// 词典纠错版(LLM 关闭/失败/空结果时的兜底, D1)
+    pub dict_text: String,
+    /// 最终交付文本
+    pub text: String,
+    pub llm_used: bool,
+    pub thinking: Option<String>,
+    /// LLM 失败/超时/缺配置的降级警告(成功时 None)
+    pub warning: Option<String>,
+    /// 本次是否走 submit_corrected_text 工具调用(自测展示; 主链路不消费)
+    pub tool_used: bool,
+}
+
+/// 纠错管线唯一实现: 词典纠错 → 可选 LLM 润色 → 失败/空结果降级词典版。
+/// 三个消费方共用(Live worker 结算 / 重转结算 / 自测)——此前三份相似代码,
+/// 行为还各自漂移(词条映射/超时保险/空结果采纳不一致), 统一到最完整的基准。
+/// async 形态: block_on 与否由调用方的线程性质决定, 管线本身不绑定线程模型。
+/// cfg=None(读配置失败)时原样返回——纠错不比交付更坚强。
+pub async fn refine(
+    raw: &str,
+    cfg: Option<&crate::config::Config>,
+    profile_override: Option<crate::config::LlmProfile>,
+    screenshot: Option<&std::path::Path>,
+) -> Refined {
+    let mut out = Refined { dict_text: raw.to_string(), text: raw.to_string(), ..Default::default() };
+    let Some(cfg) = cfg else { return out };
+    // 1) 词典纠错(本地毫秒级)
     let (dict_text, _) = crate::dict::TextCorrector {
         entries: cfg.dict.clone(),
-        normalizations: cfg
-            .normalizations
-            .iter()
-            .map(|r| (r.pattern.clone(), r.replacement.clone()))
-            .collect(),
+        normalizations: cfg.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect(),
     }
     .correct(raw);
-
-    let prof = match override_profile {
+    out.dict_text = dict_text.clone();
+    out.text = dict_text.clone();
+    // 2) LLM 润色(可选; 失败/超时/空结果一律降级词典版——永不阻塞交付)
+    let want_llm = profile_override.is_some() || cfg.use_llm_correction;
+    if !want_llm {
+        return out;
+    }
+    let prof = match profile_override.or_else(|| cfg.llm_profiles.iter().find(|p| p.id == cfg.active_llm_id).cloned()) {
         Some(p) => p,
-        None => cfg
-            .llm_profiles
-            .iter()
-            .find(|p| p.id == cfg.active_llm_id)
-            .cloned()
-            .ok_or("未找到启用的 LLM 档案")?,
+        None => {
+            out.warning = Some("未找到启用的 LLM 档案".into());
+            return out;
+        }
     };
-    let key = if prof.api_key.is_empty() {
-        cfg.keys.first().cloned().unwrap_or_default()
-    } else {
-        prof.api_key.clone()
-    };
+    let key = if prof.api_key.is_empty() { cfg.keys.first().cloned().unwrap_or_default() } else { prof.api_key.clone() };
     if key.is_empty() {
-        return Err("LLM 档案缺 Key(且 Key 池为空)".into());
+        out.warning = Some("LLM 档案缺 Key".into());
+        return out;
     }
     let opts = LlmOpts {
         provider: prof.provider.clone(),
         base_url: prof.base_url.clone(),
         model: prof.model.clone(),
         api_key: key,
-        prompt: if prof.prompt.is_empty() {
-            DEFAULT_LLM_PROMPT.to_string()
-        } else {
-            prof.prompt.clone()
-        },
+        prompt: if prof.prompt.is_empty() { DEFAULT_LLM_PROMPT.to_string() } else { prof.prompt.clone() },
         thinking: prof.thinking,
         effort: if prof.effort.is_empty() { "low".into() } else { prof.effort.clone() },
         timeout_secs: cfg.llm_timeout_secs,
         max_tokens: cfg.llm_max_tokens,
         retries: cfg.llm_retries,
     };
-    let terms: Vec<String> = cfg.dict.iter().map(|d| d.term.clone()).collect();
+    // 词典注入带变体映射(纠错指向性更强; LLM 上下文充足不加预算限制)
+    let terms: Vec<String> = cfg
+        .dict
+        .iter()
+        .map(|d| {
+            if d.variants.is_empty() {
+                d.term.clone()
+            } else {
+                format!("{}(误: {})", d.term, d.variants.join("/"))
+            }
+        })
+        .collect();
+    // 60s 外层保险: opts.timeout_secs 是单次请求超时, 重试几次后总时长可能超预期
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        polish(&dict_text, &terms, &opts, screenshot),
+    )
+    .await
+    {
+        Ok(Ok(o)) if !o.text.trim().is_empty() => {
+            out.text = o.text;
+            out.thinking = o.thinking;
+            out.tool_used = o.tool_used;
+            out.llm_used = true;
+        }
+        Ok(Ok(_)) => out.warning = Some("LLM 返回空结果, 已用词典纠错版".into()),
+        Ok(Err(e)) => out.warning = Some(format!("LLM 失败: {e}")),
+        Err(_) => out.warning = Some("LLM 超时(60s)".into()),
+    }
+    out
+}
+
+pub async fn selftest(
+    cfg: &crate::config::Config,
+    override_profile: Option<crate::config::LlmProfile>,
+) -> Result<SelftestReport, String> {
+    // 自测走同一根纠错管线(override 草稿档案优先)——管线降级=自测失败,
+    // 展示的警告文案即真实交付路径会遇到的文案
+    let raw = "根据配置文件里面我加的 你第一次把把配置不齐。";
     let t0 = std::time::Instant::now();
-    let out = polish(&dict_text.clone(), &terms, &opts, None)
-        .await
-        .map_err(|e| format!("LLM 调用失败: {e}"))?;
+    let r = refine(raw, Some(cfg), override_profile, None).await;
+    if let Some(w) = &r.warning {
+        return Err(format!("LLM 链路失败: {w}"));
+    }
     Ok(SelftestReport {
-        dict_text,
-        llm_text: out.text,
-        thinking: out.thinking,
-        tool_used: out.tool_used,
+        dict_text: r.dict_text,
+        llm_text: r.text,
+        thinking: r.thinking,
+        tool_used: r.tool_used,
         latency_ms: t0.elapsed().as_millis(),
     })
 }
