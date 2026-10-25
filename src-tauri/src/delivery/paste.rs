@@ -302,7 +302,7 @@ pub fn reliable_paste(text: &str, app_handle: &AppHandle, cfg: &Config) -> Resul
     if let Ok(mut st) = state.lock() {
         st.injected_at = Some(Instant::now());
     }
-    match crate::deliver::cg_key_tap(0x09, 1 << 20) {
+    match super::cg_key_tap(0x09, 1 << 20) {
         Ok(()) => crate::log::elog("[paste-tx] chord 已注入"),
         Err(e) => {
             if let Ok(mut st) = state.lock() {

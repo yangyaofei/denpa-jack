@@ -2,7 +2,7 @@
 use tauri::{Emitter, Manager};
 
 use crate::audio;
-use crate::deliver;
+use crate::delivery;
 use crate::engine;
 use crate::history;
 use crate::pipeline;
@@ -123,7 +123,7 @@ fn rerun_blocking(app: tauri::AppHandle, audio_path: String) -> Result<(), Strin
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
         audio_path: Some(audio_path.clone()),
         pcm: std::sync::Arc::new(Vec::new()),
-        focus: deliver::FocusLock::snapshot(),
+        focus: delivery::FocusLock::snapshot(),
         duration_ms: 0,
         engine: profile.provider.clone(),
         gen: 0,

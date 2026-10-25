@@ -82,7 +82,7 @@ check(
 );
 const pipe = readFileSync("src-tauri/src/pipeline.rs", "utf8");
 check("交付时命中名单跳过 AX 直写", /ax_paste_only\(&cfg_h\.ax_paste_only_apps/.test(pipe) && /粘贴优先名单命中, 跳过 AX 直写/.test(pipe));
-const deliverSrc = readFileSync("src-tauri/src/deliver.rs", "utf8");
+const deliverSrc = readFileSync("src-tauri/src/delivery/ax.rs", "utf8");
 check(
   "AX 校验改为多信号(AXValue 为主)",
   /KAX_VALUE/.test(deliverSrc) && /after_val\.contains\(text\) && after_val != before_val/.test(deliverSrc),

@@ -86,7 +86,7 @@ pub fn screen_recording_state() -> PermState {
 
 /// 全部权限的当前状态(供前端一次性展示；含可选项，前端按 required 区分展示)
 pub fn all() -> Vec<PermState> {
-    let ax = crate::deliver::ax_trusted(false);
+    let ax = crate::delivery::ax_trusted(false);
     vec![
         PermState {
             key: "microphone",

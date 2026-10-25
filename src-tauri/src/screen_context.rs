@@ -196,7 +196,7 @@ pub fn window_at(point: (f64, f64)) -> Option<WindowRef> {
 ///    → 回退"全系统最前面的普通窗口"（≈ 前台应用的主窗口）。
 pub fn focused_window() -> Option<WindowRef> {
     let our_pid = std::process::id() as i32;
-    let Some(info) = crate::deliver::focused_element_info() else {
+    let Some(info) = crate::delivery::focused_element_info() else {
         crate::log::elog("[ctx] AX 焦点不可用，回退全系统最前窗口");
         return frontmost_window();
     };

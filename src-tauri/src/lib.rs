@@ -7,7 +7,7 @@ pub mod crash_log;
 pub mod core;
 /// 活动目标探测（焦点窗口/指针窗口 + 显示器；截图与浮窗共用）
 pub mod active_target;
-mod deliver;
+mod delivery;
 pub mod dict;
 /// 引擎域: 契约 + 四引擎 + 会话调度(阶段A trait 化归位)
 pub mod engine;
@@ -18,7 +18,6 @@ mod log;
 mod mic_watch;
 pub mod local_service;
 mod overlay;
-mod paste_tx;
 mod permissions;
 mod pipeline;
 pub mod recording;
@@ -140,7 +139,7 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                 }
                 // 辅助功能: 带引导提示的检查(AXIsProcessTrustedWithOptions(prompt))
-                let ax = deliver::ax_trusted(!autotest);
+                let ax = delivery::ax_trusted(!autotest);
                 let missing = crate::permissions::missing();
                 if missing.is_empty() {
                     log::log(&h, "[perm] 权限齐备: 麦克风 + 辅助功能");

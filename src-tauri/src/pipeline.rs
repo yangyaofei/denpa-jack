@@ -7,7 +7,7 @@ pub struct SessionHandoff {
     pub audio_path: Option<String>,
     /// 待落盘 PCM(交付线程异步存盘, 停止路径不阻塞——Handy spawn_blocking 等价)
     pub pcm: std::sync::Arc<Vec<u8>>,
-    pub focus: crate::deliver::FocusLock,
+    pub focus: crate::delivery::FocusLock,
     pub duration_ms: u64,
     pub engine: String,
     /// 会话代: 交付前与 CANCELLED_GEN 比对, 被取消的会话跳过粘贴只入历史
@@ -235,9 +235,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 
 
 
-fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crate::deliver::FocusLock) -> Result<String, String> {
+fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crate::delivery::FocusLock) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    let ax_ok = crate::deliver::ax_trusted(false);
+    let ax_ok = crate::delivery::ax_trusted(false);
     let focus_ok = focus.still_valid();
     crate::log::elog(&format!(
         "[deliver] ax_trusted={ax_ok} focus_bundle={:?} focus_ok={focus_ok}",
@@ -263,7 +263,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         ));
     }
     if !clipboard_only && focus_ok && !ax_skip {
-        match crate::deliver::ax_insert(text) {
+        match crate::delivery::ax_insert(text) {
             Ok(()) => return Ok("pasted-ax".into()),
             Err(e) => crate::log::elog(&format!("[deliver] ax_insert 失败: {e}")),
         }
@@ -280,7 +280,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     // 5) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
     let text2 = text.to_string();
     let r = app.run_on_main_thread(move || {
-        let _ = crate::paste_tx::reliable_paste(&text2, &app2_h, &cfg_h);
+        let _ = crate::delivery::paste::reliable_paste(&text2, &app2_h, &cfg_h);
     });
     if r.is_err() {
         // 审计#11: 兜底也先写文本再注入(Handy clipboard.rs:74 注入失败路径同样先写)
@@ -302,7 +302,7 @@ fn ax_paste_only(apps: &[String], bundle: Option<&str>) -> bool {
 /// 模拟 Cmd+V —— CGEvent 直发(线程安全; enigo 内部走 HIToolbox 输入法 API
 /// 有主线程 dispatch_assert_queue 断言, 后台线程调用直接 SIGTRAP——C39 崩溃实锤)
 fn paste_cmd_v() -> Result<(), String> {
-    crate::deliver::cg_cmd_key(0x09) // kVK_ANSI_V
+    crate::delivery::cg_cmd_key(0x09) // kVK_ANSI_V
 }
 
 pub fn now_local_pub() -> String {

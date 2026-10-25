@@ -10,7 +10,7 @@ use tokio::sync::mpsc as ttx;
 pub(crate) static LAST_GEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
 
 use crate::audio;
-use crate::deliver;
+use crate::delivery;
 use crate::engine;
 use crate::pipeline;
 use crate::settings::{self, Config};
@@ -22,7 +22,7 @@ pub struct RecordingSession {
     pub rec: audio::Recording,
     cmd_tx: ttx::Sender<engine::Cmd>,
     started_at: std::time::Instant,
-    focus: deliver::FocusLock,
+    focus: delivery::FocusLock,
     gen: u64,
     /// 交接箱: stop 写入, 引擎 Result 到达时 take——会话数据随会话管道流动
     handoff: Arc<Mutex<Option<pipeline::SessionHandoff>>>,
@@ -206,7 +206,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     };
     // 交接箱: 会话作用域——stop 写, 引擎 Result 读(唯一交接点, 无全局)
     let handoff = Arc::new(Mutex::new(None));
-    let focus = deliver::FocusLock::snapshot();
+    let focus = delivery::FocusLock::snapshot();
     engine::spawn_session(
         app.clone(),
         profile.provider.clone(),
