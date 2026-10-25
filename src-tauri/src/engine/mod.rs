@@ -3,6 +3,9 @@
 // (D9: OpenAI Realtime 引擎已移除——从未实测且收尾固定等满 30s; 协议子集由本地网关 local.rs 使用)
 mod contract;
 mod doubao;
+/// 内置网关子进程生命周期管理(denpa-asr): 随机端口登记/探活收尸/两段式停止/日志尾部。
+/// 与 local.rs(WS 客户端引擎)配对——客户端连的就是这个网关。
+pub mod gateway;
 mod local;
 mod zhipu;
 
@@ -58,14 +61,14 @@ pub fn settle(emit: &impl Fn(AsrEvent), text: &str) {
 }
 
 /// ASR 档案解析: 从配置选出本会话引擎与 key——从 recording.rs 归位(阶段A 第2步),
-/// "哪个引擎可用什么参数跑"是引擎域的事(engine→settings/local_service 单向依赖)。
+/// "哪个引擎可用什么参数跑"是引擎域的事(engine→config/gateway 单向依赖)。
 pub fn resolve_asr(cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
-    // 不占档案列表、零配置, 地址来自 local_service 登记的随机端口(联动)
-    if cfg.active_asr_id == crate::local_service::BUILTIN_ID {
-        let base = crate::local_service::builtin_base_url()?;
+    // 不占档案列表、零配置, 地址来自 gateway 登记的随机端口(联动)
+    if cfg.active_asr_id == crate::engine::gateway::BUILTIN_ID {
+        let base = crate::engine::gateway::builtin_base_url()?;
         let p = crate::config::AsrProfile {
-            id: crate::local_service::BUILTIN_ID.into(),
+            id: crate::engine::gateway::BUILTIN_ID.into(),
             name: "内置本地引擎".into(),
             provider: "local".into(),
             api_key: String::new(),

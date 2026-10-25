@@ -561,7 +561,7 @@ pub struct LocalSvcStatus {
 
 #[tauri::command]
 pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
-    let s = crate::local_service::snapshot();
+    let s = crate::engine::gateway::snapshot();
     let state = if s.healthy {
         "running".to_string()
     } else if s.alive {
@@ -576,14 +576,14 @@ pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
         port: s.port,
         elapsed_secs: s.started_at.map(|t| t.elapsed().as_secs()),
         exit: s.exit.clone(),
-        tail: crate::local_service::log_tail(&app, 80),
+        tail: crate::engine::gateway::log_tail(&app, 80),
     }
 }
 
 #[tauri::command]
 pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
     let cfg = crate::config::get_config(app.clone())?;
-    match crate::local_service::start(&app, &cfg) {
+    match crate::engine::gateway::start(&app, &cfg) {
         Ok(info) => Ok(info),
         Err(e) if e.starts_with("already-starting") => Ok(e), // 不是失败, 是"已在启动中"
         Err(e) => Err(e),
@@ -592,7 +592,7 @@ pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn local_service_stop() -> Result<String, String> {
-    if crate::local_service::stop() {
+    if crate::engine::gateway::stop() {
         Ok("stopped".into())
     } else {
         Ok("not-ours".into()) // 登记处没有自有子进程(外部手动实例 APP 不动)

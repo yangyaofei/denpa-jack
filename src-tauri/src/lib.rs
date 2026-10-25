@@ -16,7 +16,6 @@ pub mod hud;
 pub mod llm;
 mod log;
 mod mic_watch;
-pub mod local_service;
 mod overlay;
 mod permissions;
 mod pipeline;
@@ -125,7 +124,7 @@ pub fn run() {
             // (规则与理由见 segment_queue.rs 顶部注释: 顺序保证 + 不丢段 + 失败不阻塞)
             segment_queue::start(app.handle().clone());
             // 方案 B: local 引擎网关自动探活/拉起(异步, 不阻塞启动; 手动 serve 的实例直接复用)
-            local_service::prewarm(app.handle());
+            engine::gateway::prewarm(app.handle());
             // 权限总检查: 一次性查清全部必需权限(麦克风 + 辅助功能)
             // 缺项 → 落日志 + 推给前端 + 把主窗拉出来, 让用户第一眼就看到"缺什么、会怎样"
             let h = app.handle().clone();
@@ -258,7 +257,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { code, .. } => {
                 log::log(app, &format!("ExitRequested code={code:?}"));
                 // 收掉内置网关子进程(两段式: SIGTERM→5s→SIGKILL; 外部实例不在登记处不受影响)
-                local_service::stop();
+                engine::gateway::stop();
             }
             tauri::RunEvent::Exit => {
                 crate::crash_log::end_session(&crate::config::data_dir(app));
