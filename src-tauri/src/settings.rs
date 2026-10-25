@@ -46,7 +46,7 @@ pub struct AsrProfile {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub provider: String, // volcengine | zhipu | openai | local
+    pub provider: String, // volcengine | zhipu | local
     #[serde(default)]
     pub api_key: String,
     /// 本地服务地址（provider=local 时用；空=ws://127.0.0.1:8300）

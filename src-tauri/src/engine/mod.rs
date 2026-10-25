@@ -1,16 +1,16 @@
-// 引擎域: 契约(contract.rs) + 四引擎(doubao/zhipu/local/openai) + 会话调度(本文件)。
+// 引擎域: 契约(contract.rs) + 三引擎(doubao/zhipu/local) + 会话调度(本文件)。
 // 引擎事件 → 前端事件; 交接箱与会话同生命周期: ctrl_start 建, stop 写入, 引擎 Result take——无全局会话状态
+// (D9: OpenAI Realtime 引擎已移除——从未实测且收尾固定等满 30s; 协议子集由本地网关 local.rs 使用)
 mod contract;
 mod doubao;
 mod local;
-mod openai;
 mod zhipu;
 
 pub use contract::{AsrEvent, Cmd};
 use std::sync::{Arc, Mutex};
 
 /// 引擎会话上下文: spawn_session 解析好的输入, 引擎各自取所需
-/// (zhipu/openai 无热词支持, local 无鉴权走 base_url——不用的字段以 _ 标注)
+/// (zhipu 无热词支持, local 无鉴权走 base_url——不用的字段以 _ 标注)
 pub struct EngineCtx {
     pub api_key: String,
     pub base_url: String,
@@ -48,7 +48,7 @@ pub const FINALIZE_TIMEOUT_SECS: u64 = 30;
 pub const DOUBAO_FINALIZE_TIMEOUT_SECS: u64 = 3;
 
 /// 结算契约(恰好一次): 空文本=没听清(NoSpeech, 不是失败), 非空=Result。
-/// OpenAI Realtime 收尾调用此处; doubao 因需记录文本长度日志保留本地实现(见 doubao::settle)。
+/// local 收尾调用此处; doubao 因需记录文本长度日志保留本地实现(见 doubao::settle)。
 pub fn settle(emit: &impl Fn(AsrEvent), text: &str) {
     if text.trim().is_empty() {
         emit(AsrEvent::NoSpeech("没听清(转写为空)".into()));
@@ -80,7 +80,7 @@ pub fn resolve_asr(cfg: &crate::settings::Config) -> Result<(crate::settings::As
         .cloned()
         .or_else(|| cfg.asr_profiles.first().cloned())
         .ok_or("没有 ASR 档案, 请先在设置中添加")?;
-    if !["volcengine", "zhipu", "openai", "local"].contains(&profile.provider.as_str()) {
+    if !["volcengine", "zhipu", "local"].contains(&profile.provider.as_str()) {
         return Err(format!("未知引擎: {}", profile.provider));
     }
     // 本地/内置网关无鉴权：不需要 Key(空 Key 池也能用)
@@ -199,7 +199,6 @@ pub fn spawn_session(
         let ctx = EngineCtx { api_key, base_url, hotwords };
         match provider.as_str() {
             "zhipu" => zhipu::Zhipu.run(ctx, rx, emit).await,
-            "openai" => openai::OpenAiRealtime.run(ctx, rx, emit).await,
             // 本地网关(local-asr/gateway.py): 无鉴权, 走 base_url;
             // 热词经首帧 context 注入(网关同时用于流式与二遍全句重解)
             "local" => local::LocalGateway.run(ctx, rx, emit).await,
