@@ -277,7 +277,7 @@ export function common(this: AppThis) {
           { id: "l1", name: "DeepSeek 润色", provider: "deepseek", base_url: "", model: "deepseek-chat", api_key: "sk-demo", prompt: "", thinking: false, effort: "low" },
           { id: "l2", name: "智谱 Flash", provider: "zhipu", base_url: "", model: "glm-5.3-flash", api_key: "", prompt: "", thinking: true, effort: "low" },
         ], asr_profiles: [
-          { id: "a1", name: "豆包流式", provider: "volcengine", api_key: "", hotwords_enabled: true },
+          { id: "a1", name: "豆包流式", provider: "volcengine", api_key: "" },
         ], dict: [
           { term: "谢克数学", variants: ["些克数学", "歇课数学"], guard_words: [], boost: 3 },
           { term: "腾讯云", variants: ["腾讯营"], guard_words: [], boost: 2 },

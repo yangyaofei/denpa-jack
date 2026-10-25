@@ -80,7 +80,7 @@
                   <span class="tag" x-text="p.provider"></span>
                   <span class="tag" x-show="cfg?.active_asr_id === p.id">使用中</span>
                 </div>
-                <div class="row-hint" x-text="'Key: ' + (p.api_key ? p.api_key.slice(0, 8) + '…' : '未设置') + (p.hotwords_enabled ? ' · 热词开' : '')"></div>
+                <div class="row-hint" x-text="'Key: ' + (p.api_key ? p.api_key.slice(0, 8) + '…' : '未设置')"></div>
               </div>
               <div style="display: flex; gap: 6px">
                 <button class="mini" @click="useAsr(p)" x-show="cfg?.active_asr_id !== p.id">使用</button>
@@ -145,10 +145,6 @@
             <label x-show="asrEdit.provider !== 'local'" x-cloak>API Key<span class="row-hint">(该引擎档案的密钥)</span>
               <input class="inp" type="password" x-model="asrEdit.api_key" />
             </label>
-            <div class="row">
-              <span>词典热词直传</span>
-              <input type="checkbox" class="switch" x-model="asrEdit.hotwords_enabled" />
-            </div>
             <div class="btns end">
               <button class="mini" @click="asrEdit = null">取消</button>
               <button class="mini primary" @click="saveAsr()">保存</button>

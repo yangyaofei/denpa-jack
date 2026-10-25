@@ -70,7 +70,6 @@ pub fn resolve_asr(cfg: &crate::settings::Config) -> Result<(crate::settings::As
             provider: "local".into(),
             api_key: String::new(),
             base_url: base,
-            hotwords_enabled: true,
         };
         return Ok((p, String::new()));
     }
@@ -105,7 +104,7 @@ mod tests {
         let mut cfg = crate::settings::default_config();
         cfg.active_asr_id = "x".into();
         cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(), hotwords_enabled: true,
+            id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(),
         }];
         assert!(resolve_asr(&cfg).is_err());
     }
@@ -114,7 +113,7 @@ mod tests {
         let mut cfg = crate::settings::default_config();
         cfg.active_asr_id = "nope".into();
         cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(), hotwords_enabled: true,
+            id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(),
         }];
         let (p, k) = resolve_asr(&cfg).unwrap();
         assert_eq!(p.id, "p1");
@@ -125,7 +124,7 @@ mod tests {
         let mut cfg = crate::settings::default_config();
         cfg.keys = vec!["pool-key".into()];
         cfg.asr_profiles = vec![crate::settings::AsrProfile {
-            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(), hotwords_enabled: true,
+            id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(),
         }];
         let (_, k) = resolve_asr(&cfg).unwrap();
         assert_eq!(k, "pool-key");

@@ -13,7 +13,7 @@ export function asrPage(this: AppThis) {
     // ── ASR 档案 ──
     newAsr(this: AppThis) {
       this.asrIsNew = true;
-      this.asrEdit = { id: uid(), name: "新引擎", provider: "volcengine", api_key: "", base_url: "", hotwords_enabled: true };
+      this.asrEdit = { id: uid(), name: "新引擎", provider: "volcengine", api_key: "", base_url: "" };
     },
     editAsr(this: AppThis, p: AsrProfile) { this.asrIsNew = false; this.asrEdit = JSON.parse(JSON.stringify(p)); },
     async delAsr(this: AppThis, p: AsrProfile) {

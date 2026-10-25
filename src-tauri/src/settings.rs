@@ -52,8 +52,6 @@ pub struct AsrProfile {
     /// 本地服务地址（provider=local 时用；空=ws://127.0.0.1:8300）
     #[serde(default)]
     pub base_url: String,
-    #[serde(default)]
-    pub hotwords_enabled: bool,
 }
 
 /// 内置本地引擎的启动参数（2026-10-08 用户定则: 配置长在引擎身上, APP 是唯一

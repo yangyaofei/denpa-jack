@@ -7,7 +7,7 @@ export interface LlmProfile {
   api_key: string; prompt: string; thinking: boolean; effort: string;
 }
 export interface AsrProfile {
-  id: string; name: string; provider: string; api_key: string; base_url: string; hotwords_enabled: boolean;
+  id: string; name: string; provider: string; api_key: string; base_url: string;
 }
 export interface DictEntry {
   term: string; variants: string[]; guard_words: string[]; boost: number;
