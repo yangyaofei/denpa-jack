@@ -310,12 +310,38 @@ pub fn now_local_pub() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
+    format_epoch_local(secs)
+}
+
+/// 系统本地时区格式化: 时区/DST 交给系统(libc::localtime_r), 跟随用户设置。
+/// 旧实现 UTC+8 硬编码("个人工具不引时区库")——用户拍板"应该适应所有时区"。
+/// localtime_r 失败(几乎不可能)退回 UTC+8 旧分解, 保证永远有输出。
+pub fn format_epoch_local(secs: i64) -> String {
+    unsafe {
+        let t: libc::time_t = secs;
+        let mut tm: libc::tm = std::mem::zeroed();
+        if !libc::localtime_r(&t, &mut tm).is_null() {
+            return format_tm(
+                tm.tm_year as i64 + 1900,
+                tm.tm_mon as i64 + 1,
+                tm.tm_mday as i64,
+                tm.tm_hour as i64,
+                tm.tm_min as i64,
+                tm.tm_sec as i64,
+            );
+        }
+    }
     format_epoch_utc8(secs)
 }
 
-/// UTC+8 格式化(纯函数, 可测): **先加 8 小时再分解**——旧实现先分解后给小时 +8,
-/// UTC 16:00–24:00(北京次日 0–8 点)日期不进位, 历史时间戳少一天(审核 a-8)。
-/// 时区固定北京(个人工具, 不引时区库)。
+/// 字段→字符串(纯函数, 可测): 格式契约集中一处
+fn format_tm(y: i64, mo: i64, d: i64, h: i64, mi: i64, s: i64) -> String {
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}")
+}
+
+/// UTC+8 分解(localtime_r 失败的兜底, 纯函数可测): **先加 8 小时再分解**——
+/// 旧实现先分解后给小时 +8, UTC 16:00–24:00(北京次日 0–8 点)日期不进位,
+/// 历史时间戳少一天(审核 a-8)。
 pub fn format_epoch_utc8(secs: i64) -> String {
     let secs = secs + 8 * 3600;
     let days = secs.div_euclid(86400);
@@ -352,7 +378,22 @@ fn trailing_newlines_text(text: &str, n: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ax_paste_only, format_epoch_utc8, mark_cancelled, take_cancelled, trailing_newlines_text, CANCELLED_GENS};
+    use super::{ax_paste_only, format_epoch_local, format_epoch_utc8, format_tm, mark_cancelled, take_cancelled, trailing_newlines_text, CANCELLED_GENS};
+
+    #[test]
+    fn format_tm_is_the_format_contract() {
+        assert_eq!(format_tm(2026, 10, 25, 0, 5, 9), "2026-10-25 00:05:09");
+        assert_eq!(format_tm(1970, 1, 1, 0, 0, 0), "1970-01-01 00:00:00");
+    }
+
+    #[test]
+    fn local_epoch_zero_is_within_a_day_of_utc() {
+        // 系统时区无关的稳定断言: epoch 0 在任何合法时区(±14h)内都应落在
+        // 1969-12-31 ~ 1970-01-02 之间, 且格式合法
+        let s = format_epoch_local(0);
+        assert!(s.starts_with("1969-12-31") || s.starts_with("1970-01-01") || s.starts_with("1970-01-02"),
+            "epoch 0 的本地表示越界: {s}");
+    }
 
     #[test]
     fn utc8_crosses_midnight_correctly() {
