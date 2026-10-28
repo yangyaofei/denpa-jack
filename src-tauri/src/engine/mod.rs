@@ -3,6 +3,8 @@
 // (D9: OpenAI Realtime 引擎已移除——从未实测且收尾固定等满 30s; 协议子集由本地网关 local.rs 使用)
 mod contract;
 mod doubao;
+/// 会话驱动 plumbing: WS 引擎共用的双输入单通道骨架(C37 提炼, 见文件头)
+pub(crate) mod driver;
 /// 内置网关子进程生命周期管理(denpa-asr): 随机端口登记/探活收尸/两段式停止/日志尾部。
 /// 与 local.rs(WS 客户端引擎)配对——客户端连的就是这个网关。
 pub mod gateway;

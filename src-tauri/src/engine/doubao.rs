@@ -68,7 +68,7 @@ impl<E: Fn(AsrEvent) + Send + 'static> super::AsrEngine<E> for Doubao {
 async fn run(
     self,
     ctx: super::EngineCtx,
-    mut rx: mpsc::Receiver<Cmd>,
+    rx: mpsc::Receiver<Cmd>,
     emit: E,
 ) {
     let hotwords = ctx.hotwords;
@@ -103,7 +103,7 @@ async fn run(
             return;
         }
     };
-    let (mut sink, mut stream) = ws.split();
+    let (mut sink, stream) = ws.split();
 
     // 全量请求帧(type=full-client ser=json comp=gzip)
     let mut request = json!({
@@ -123,47 +123,18 @@ async fn run(
         return;
     }
 
-    // C37: 会话循环重构——单通道 + timeout_at(替代三路 select)
-    // 实测三路 select 在 finish 后连必到的 watchdog 都静默(疑与分支 poll 有关), 改为:
-    //   stream 读取拆独立 task 转发进统一通道; 主循环单 recv, watchdog 用 timeout_at 包裹
+    // C37 骨架(plumbing 共享自 driver.rs): 双输入转单通道, 主循环单 recv,
+    // watchdog 用 timeout_at 包裹——三路 select 实测会静默吞掉就绪分支。
     // C33: 豆包 2.0 的 partial/definite text 均为会话全量文本——单变量替换, 禁止拼接
-    enum Inner {
-        Cmd(Cmd),
-        Ws(Option<Message>), // None = 流结束/断连
-    }
-    let latest_text = String::new();
-    let mut latest_text = latest_text;
+    use super::driver::Inner;
+    let mut latest_text = String::new();
     let mut finish_sent = false;
     let mut fed_once = false;
     let mut watchdog: Option<tokio::time::Instant> = None;
 
-    let (itx, mut irx) = mpsc::channel::<Inner>(64);
-    // 外部命令转发
-    let itx2 = itx.clone();
-    tokio::spawn(async move {
-        while let Some(c) = rx.recv().await {
-            if itx2.send(Inner::Cmd(c)).await.is_err() {
-                break;
-            }
-        }
-    });
-    // WS 读取转发(独立 task)
-    let itx3 = itx.clone();
-    tokio::spawn(async move {
-        loop {
-            match stream.next().await {
-                Some(Ok(m)) => {
-                    if itx3.send(Inner::Ws(Some(m))).await.is_err() {
-                        break;
-                    }
-                }
-                _ => {
-                    let _ = itx3.send(Inner::Ws(None)).await;
-                    break;
-                }
-            }
-        }
-    });
+    let (itx, mut irx) = mpsc::channel::<Inner<Message>>(64);
+    super::driver::forward_cmds(rx, itx.clone());
+    super::driver::forward_ws(stream, itx);
 
     loop {
         let got = match watchdog {
