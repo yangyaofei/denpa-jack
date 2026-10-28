@@ -75,57 +75,8 @@ export function common(this: AppThis) {
           : `下载中 ${mb(p.downloaded)} MB`;
       });
 
-      // C46 主窗轮询(组件作用域 this 可用): 800ms 拉版本, 变化才刷新
-      let lastHistVer = -1;
-      let lastCfgVer = -1;
-      let lastMicVer = -1;
-      let lastPollRecording: { v: boolean | null } = { v: null }; // 后端录音值, 仅后端值变化才同步到按钮
-      let lastReruns = ""; // R1: rerun_active 集合签名, 变化才同步镜像
-      let lastQueueSig = ""; // 队列状态条签名
-      let tick = 0;
-      setInterval(async () => {
-        try {
-          tick++;
-          const v = await invoke<any>("poll_versions");
-          // R1: 进行中重转集合镜像(后端单一事实源; 完成时 history 版本也变, 一并刷新)
-          const rs = (v.reruns || []).join(",");
-          if (rs !== lastReruns) {
-            lastReruns = rs;
-            this.rerunning = new Set<string>(v.reruns || []);
-          }
-          // 队列状态条镜像(与 HUD 同源投影): 在途段有变化才写
-          const qs = (v.queue || []).map((s: any) => `${s.state}|${s.source}|${s.text}`).join("\n");
-          if (qs !== lastQueueSig) {
-            lastQueueSig = qs;
-            this.queueView = v.queue || [];
-          }
-          // 录音状态同步: 热键/托盘录音 → 主窗试音按钮跟随(core 事实投影)。
-          // 只在后端值自身变化时写入——试音点击的乐观置位不被 800ms 轮询覆盖
-          // (ctrl_start 前置链冷启动慢, core 置位前乐观值是唯一正确显示)
-          if (typeof v.recording === "boolean" && v.recording !== lastPollRecording.v) {
-            lastPollRecording.v = v.recording;
-            this.recording = v.recording;
-          }
-          if (tick % 10 === 1) invoke("ui_log", { msg: `poll alive histVer=${v.history}` }).catch(() => {});
-          if (v.history !== lastHistVer) {
-            const from = lastHistVer;
-            lastHistVer = v.history;
-            await this.refreshHistory();
-            invoke("ui_log", { msg: `history ${from}→${v.history} 刷新完成 ${this.history.length} 条` }).catch(() => {});
-          }
-          if (v.config !== lastCfgVer) {
-            lastCfgVer = v.config;
-            await this.loadCfg();
-          }
-          if (v.mics !== lastMicVer) {
-            lastMicVer = v.mics;
-            await this.refreshMics();
-            invoke("ui_log", { msg: `mics →${v.mics} 重扫完成 ${this.mics.length} 个设备` }).catch(() => {});
-          }
-        } catch (e) {
-          invoke("ui_log", { msg: `poll 异常: ${e}` }).catch(() => {});
-        }
-      }, 800);
+      // C46 主窗轮询启动(实现见 startVersionPolling: 800ms 拉版本, 差量才刷新)
+      startVersionPolling(this);
     },
 
     async loadCfg(this: AppThis) {
@@ -306,4 +257,61 @@ export function common(this: AppThis) {
       ] as HistoryRecord[];
     },
   };
+}
+
+/// C46 主窗轮询(从 init 内联块抽出的具名函数): 800ms 拉版本, 差量才刷新。
+/// 这是主窗一切镜像状态(recording/rerunning/queueView/history/config/mics)
+/// 的唯一写入点——页面只读不写。设计说明: 未引入独立 store 层——Alpine 组件
+/// 模式下"类型一行+此处一行+页面一行"已是最小路径, store 会多一层间接。
+export function startVersionPolling(app: AppThis) {
+  let lastHistVer = -1;
+  let lastCfgVer = -1;
+  let lastMicVer = -1;
+  let lastPollRecording: { v: boolean | null } = { v: null }; // 后端录音值, 仅后端值变化才同步到按钮
+  let lastReruns = ""; // rerun_active 集合签名, 变化才同步镜像
+  let lastQueueSig = ""; // 队列状态条签名
+  let tick = 0;
+  setInterval(async () => {
+    try {
+      tick++;
+      const v = await invoke<any>("poll_versions");
+      // 进行中重转集合镜像(后端单一事实源; 完成时 history 版本也变, 一并刷新)
+      const rs = (v.reruns || []).join(",");
+      if (rs !== lastReruns) {
+        lastReruns = rs;
+        app.rerunning = new Set<string>(v.reruns || []);
+      }
+      // 队列状态条镜像(与 HUD 同源投影): 在途段有变化才写
+      const qs = (v.queue || []).map((s: any) => `${s.state}|${s.source}|${s.text}`).join("\n");
+      if (qs !== lastQueueSig) {
+        lastQueueSig = qs;
+        app.queueView = v.queue || [];
+      }
+      // 录音状态同步: 热键/托盘录音 → 主窗试音按钮跟随(core 事实投影)。
+      // 只在后端值自身变化时写入——试音点击的乐观置位不被 800ms 轮询覆盖
+      // (ctrl_start 前置链冷启动慢, core 置位前乐观值是唯一正确显示)
+      if (typeof v.recording === "boolean" && v.recording !== lastPollRecording.v) {
+        lastPollRecording.v = v.recording;
+        app.recording = v.recording;
+      }
+      if (tick % 10 === 1) invoke("ui_log", { msg: `poll alive histVer=${v.history}` }).catch(() => {});
+      if (v.history !== lastHistVer) {
+        const from = lastHistVer;
+        lastHistVer = v.history;
+        await app.refreshHistory();
+        invoke("ui_log", { msg: `history ${from}→${v.history} 刷新完成 ${app.history.length} 条` }).catch(() => {});
+      }
+      if (v.config !== lastCfgVer) {
+        lastCfgVer = v.config;
+        await app.loadCfg();
+      }
+      if (v.mics !== lastMicVer) {
+        lastMicVer = v.mics;
+        await app.refreshMics();
+        invoke("ui_log", { msg: `mics →${v.mics} 重扫完成 ${app.mics.length} 个设备` }).catch(() => {});
+      }
+    } catch (e) {
+      invoke("ui_log", { msg: `poll 异常: ${e}` }).catch(() => {});
+    }
+  }, 800);
 }
