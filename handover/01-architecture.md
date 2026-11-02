@@ -1,5 +1,8 @@
 # 架构：活动目标探测、截图与浮窗
 
+> 2026-11 四域结构重构后, 全库结构契约见 `docs/ARCHITECTURE.md`（capture/pipeline/model/ui 四域+门面闸）。
+> 本文专题(活动目标探测)的模块已归位 capture/ 域, 路径已更新。
+
 ## 一句话
 
 按下热键时**探测一次**"当前正在用的东西"（焦点窗口 → 指针窗口 → 指针所在屏），截图与浮窗共用这一份结果。
@@ -8,12 +11,12 @@
 
 | 模块 | 职责 | 关键函数 |
 |---|---|---|
-| `src-tauri/src/active_target.rs` | **唯一的**活动目标探测 | `detect_active_target() -> ActiveTarget` |
-| `src-tauri/src/screen_context.rs` | 截图（只做截图）+ 窗口列表两个原子 | `window_at()`、`focused_window()`、`pick_window_at()`（纯规则）、`capture()`、`capture_with_sck()` |
-| `src-tauri/src/delivery/` | 交付层（`ax.rs` AX 能力 / `paste.rs` 粘贴事务）；`ax.rs` 附带提供 AX 焦点信息 | `focused_element_info() -> Option<FocusInfo{pid, frame}>`（在 `ax.rs`） |
+| `src-tauri/src/capture/active_target.rs` | **唯一的**活动目标探测 | `detect_active_target() -> ActiveTarget` |
+| `src-tauri/src/capture/screen.rs` | 截图（只做截图）+ 窗口列表两个原子 | `window_at()`、`focused_window()`、`pick_window_at()`（纯规则）、`capture()`、`capture_with_sck()` |
+| `src-tauri/src/pipeline/delivery/` | 交付层（`ax.rs` AX 能力 / `paste.rs` 粘贴事务）；AX 焦点信息已归位 `capture/focus.rs`（批1） | `focused_element_info() -> Option<FocusInfo{pid, frame}>`（在 `ax.rs`） |
 | `src-tauri/src/overlay.rs` | 光标、显示器、浮窗定位（AppKit） | `cursor_point()`、`display_target_at(point)`、`main_display_target()`、`position_hud(app, Option<&DisplayTarget>)` |
 | `src-tauri/src/hud.rs` | 浮窗内容与显隐 | `recording_started(app, &DisplayTarget)` |
-| `src-tauri/src/recording.rs` | 接线：一次探测，两处消费 | 见下 |
+| `src-tauri/src/capture/recording.rs` | 接线：一次探测，两处消费 | 见下 |
 
 ## 数据流
 
@@ -22,7 +25,7 @@ recording.rs（按下热键）
   mode   = parse_target(cfg.detect_active_target)     // off / active_window / active_display
   target = active_target::detect_active_target()      // ActiveTarget { display, window }
         │
-        ├─ 截图线程：screen_context::capture_and_prune(dir, "ctx", &target, mode)
+        ├─ 截图线程：capture::screen::capture_and_prune(dir, "ctx", &target, mode)
         │      capture() → capture_with_sck()          // SCK 枚举 → 过滤器 → 截图 → PNG → 清理旧图
         │
         └─ 浮窗：hud::recording_started(app, &target.display)
@@ -40,9 +43,9 @@ pub struct ActiveTarget {
 
 ## 探测规则（三级）
 
-文件：`src-tauri/src/active_target.rs`
+文件：`src-tauri/src/capture/active_target.rs`
 
-1. **焦点窗口**（键盘光标所在）：`screen_context::focused_window()`
+1. **焦点窗口**（键盘光标所在）：`capture::screen::focused_window()`
    - AX 系统级焦点元素 → `AXWindow` 的 `AXPosition`/`AXSize` → 在 CoreGraphics 窗口列表里按框匹配（±2px）。
    - 拿不到窗口框（Electron 常见）→ 用焦点元素的 pid，取该应用在 CG 列表里最前面的合格窗口。
    - AX 整体不可用（实测 OpenChamber 返回 `kAXErrorCannotComplete`，-25204）→ 回退"全系统最前面的普通窗口"。
@@ -53,7 +56,7 @@ pub struct ActiveTarget {
 
 ## 截图
 
-文件：`src-tauri/src/screen_context.rs`
+文件：`src-tauri/src/capture/screen.rs`
 
 - 实现：ScreenCaptureKit（进程内，macOS 14+）：`SCShareableContent` → `SCContentFilter` → `SCScreenshotManager.captureImage` → ImageIO 写 PNG。
 - 窗口模式：`SCContentFilter(desktopIndependentWindow:)`。
@@ -82,7 +85,7 @@ pub struct ActiveTarget {
 
 ## 依赖关系
 
-- `active_target.rs` 依赖 `screen_context`（窗口）与 `overlay`（光标/显示器）。
-- `screen_context.rs` 的 `capture` 依赖 `active_target::ActiveTarget`（只读 target，不再自行挑选）。
-- `delivery/ax.rs` 提供 AX 焦点信息，不依赖上述模块。
+- `capture/active_target.rs` 依赖 `capture::screen`（窗口）与 `ui::overlay`（光标/显示器, 经 ui 门面）。
+- `capture/screen.rs` 的 `capture` 依赖 `active_target::ActiveTarget`（只读 target，不再自行挑选）。
+- AX 焦点探测在 `capture/focus.rs`（感知）, 直写在 `pipeline/delivery/ax.rs`（动作）——批1 分家。
 - 无循环初始化、无全局可变状态；每次探测都是独立快照。

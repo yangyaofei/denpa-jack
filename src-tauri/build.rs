@@ -55,12 +55,9 @@ fn main() {
                 ("pipeline", &["SessionHandoff", "mark_cancelled", "cancel_latest", "submit_live", "submit_failed", "record_no_speech"]),
                 ("ui", &["recording_started", "recording_ended", "dismiss", "refresh_status", "display_scale", "DisplayTarget", "cursor_point", "display_target_at", "main_display_target"]),
             ];
-            // 存量豁免(前缀匹配): 每条登记去向
-            let exempt: &[(&str, &str)] = &[
-                ("crate::pipeline::history::wav_header", "批5 评估: wav 工具归基座 util(zhipu 拼头/history 切块两域共用)"),
-                ("crate::pipeline::delivery::", "批5: 键击/粘贴细节收口(装配壳消费)"),
-                ("crate::model::speech::gateway", "装配期网关预热经壳调用, 存量观察"),
-            ];
+            // 存量豁免(前缀匹配): 批5 已清零——domain 间只剩门面符号与 core 两条通道。
+            // 新增跨域需求: 进 FACADE 门面, 或反向通知走 core; 严禁再登记豁免。
+            let exempt: &[(&str, &str)] = &[];
             for dom in ["capture", "model", "pipeline", "ui"] {
                 if dom == src_domain {
                     continue;

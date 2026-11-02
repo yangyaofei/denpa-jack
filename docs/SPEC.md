@@ -71,29 +71,22 @@
 - **配置读取失败**：该段按 Failed 处理（warning=配置读取失败）。
 - **管线 panic**：`catch_unwind` 兜底，HUD 不卡。
 
-## 3. 架构（src-tauri/src/，2026-10-24 阶段A 后）
+## 3. 架构（src-tauri/src/，2026-11 四域结构重构后）
+
+> 结构契约（目录/门面/调用律/闸）的权威文档是 `docs/ARCHITECTURE.md`；本节记行为事实。
 
 ### 3.0 数据流总纲
 
-热键/托盘/试音 → `send_ctrl`（单一真源）→ **协调器**（三规则状态机）→ 效果线程执行 `ctrl_start/ctrl_stop/ctrl_abort` → 采集（audio.rs，cpal 16k mono i16le 200ms 分片）+ 引擎会话（engine/，专用 current_thread runtime）→ AsrEvent → **分段队列**（segment_queue，单 worker 串行）→ `pipeline::post_process`（词典 → 可选 LLM → 交付 → 历史）→ delivery/（AX 直写 | 回执式粘贴）→ core 版本计数 bump → 前端轮询刷新。
+热键/托盘/试音 → `send_ctrl`（单一真源）→ **协调器**（三规则状态机）→ 效果线程执行 `capture::recording::ctrl_*` → 采集（capture/audio，cpal 16k mono i16le 200ms 分片）+ 引擎会话（model/speech，专用 current_thread runtime）→ AsrEvent → **分段队列**（pipeline/segment_queue，单 worker 串行）→ `pipeline::post_process`（词典 → 可选 LLM → 交付 → 历史）→ pipeline/delivery（AX 直写 | 回执式粘贴）→ core 版本计数 bump → 前端轮询刷新。浮窗提示走 `core::hud_emit`（HUD 事件泵 100ms 消费）；浮窗显隐走 ui 门面（同步）。
 
-- `core.rs`：全局可变状态唯一居所（CoreState：队列/会话/配置·历史·设备三计数，一把 std Mutex + 版本号）；前端轮询协议的读接口。
-- `transcription_coordinator.rs`：纯状态机（无副作用）；Effect 由专职效果线程执行。
-- `recording.rs`：会话状态机（RecordingSession 闭包；resolve/编排）。麦克风解析在 `audio.rs`，截图编排在 `screen_context.rs`。
-- `engine/`：`contract.rs`（Cmd/AsrEvent）+ `mod.rs`（trait AsrEngine + spawn_session 分派 + resolve_asr + settle）+ `doubao.rs`/`zhipu.rs`/`local.rs` 三引擎 + `gateway.rs`（网关子进程生命周期：随机端口登记/探活收尸/两段式停止/日志尾部）。
-- `segment_queue.rs`：FIFO 队列 + 单 worker（100ms 轮询驱动）；成功/失败/NoSpeech 三类落历史与音频。
-- `pipeline.rs`：SessionHandoff（pcm/focus/gen/audio_path/screenshot）+ post_process + deliver 编排 + 时间戳。
-- `delivery/`：`ax.rs`（AX FFI/AxGuard RAII/ax_insert/ax_trusted）+ `mod.rs`（frontmost_bundle/FocusLock/cg_key_tap）+ `paste.rs`（回执式粘贴 + ClipboardSnapshot）。
-- `dict.rs`：三级纠错管道（正则规范化 → 变体精确替换 → 拼音窗口模糊）+ 热词预算（budget_hotwords，100 token 分层）。
-- `llm.rs`：OpenAI 兼容调用（submit_corrected_text 工具优先/content 兜底）+ DEFAULT_LLM_PROMPT + selftest + list_models + tool_used 直读。
-- `history.rs`：HistoryRecord JSONL + save_wav + wav_header/wav_data_chunk（FLLR 安全）+ prune。
-- `config.rs` + `config/paths.rs`（APP_ID/data_dir 恒定解析/write_config_atomic）+ `config/migrate.rs`（一次性迁移：bindings/F5 兜底/内置引擎/VAD 归零）。
-- `active_target.rs` + `screen_context.rs`：活动目标一次探测（焦点窗口→指针窗口→指针屏），截图与浮窗共用；ScreenCaptureKit 进程内截图（弃 screencapture 命令行——曾卡 134.6s）。
-- `hud.rs`/`overlay.rs`：浮窗内容接口（唯一写者）/坐标与窗口（build.rs 契约闸：坐标 API 只准 overlay.rs）。
-- `tray.rs`/`tray_events.rs`：objc2 NSStatusItem；状态行三点刷新（ctrl_start 尾/stop/abort）。
-- `shortcut.rs`：handy-keys HotkeyManager（transcribe 绑定）+ C55 后端组合录制 + Esc 全键观察。
-- `permissions.rs`/`mic_watch.rs`/`log.rs`/`crash_log.rs`/`update.rs`/`autotest.rs`：权限/设备热插拔监控/日志/崩溃捕获/应用内更新/自测通道。
-- `commands.rs`：Tauri command 薄壳（业务在域内；llm_selftest 已下沉 llm::selftest）。
+- **四域+基座+装配壳**（批 1-5 结构重构）：
+  - 基座：`core.rs`（全局可变状态唯一居所：队列/会话/三计数/段投影/HUD 事件槽，一把 std Mutex + 版本号）；`config/`；`util.rs`（跨域纯函数，现只有 wav_header）；`log.rs`/`crash_log.rs`。
+  - **capture/**（采集+决策）：`key.rs`（热键三规则+Esc 全键观察，收窗=监听线程自查 core）、`recording.rs`（会话状态机）、`audio.rs`/`feedback.rs`/`mic_watch.rs`、`screen.rs`+`active_target.rs`（活动目标一次探测，截图与浮窗共用；ScreenCaptureKit 进程内截图）、`focus.rs`（前台/焦点/AX 权限感知）、`permissions.rs`。
+  - **pipeline/**（流程编排）：`mod.rs`（SessionHandoff+post_process+deliver 编排）、`segment_queue.rs`（FIFO+单 worker）、`rerun.rs`（历史重转编排：入队投影+结算回写+find_by_ts）、`delivery/`（`ax.rs` 直写/`paste.rs` 回执粘贴/键击）、`history.rs`。
+  - **model/**（模型能力）：`speech/`（`contract.rs` Cmd/AsrEvent + `mod.rs` trait AsrEngine+transcribe_session 驱动器+resolve_engine + `doubao`/`zhipu`/`local` 三引擎 + `gateway.rs` 网关子进程 + `driver.rs` WS 骨架）、`dict.rs`（三级纠错+热词预算）、`llm.rs`（refine 纠错管线+自测+list_models）。
+  - **ui/**（展示）：`hud.rs`（浮窗状态机+事件泵）、`overlay.rs`（坐标与窗口）、`tray.rs`/`tray_events.rs`、`update.rs`。
+  - 装配壳：`lib.rs`（效果分派+send_ctrl）、`commands.rs`（command 薄壳）、`autotest.rs`、`transcription_coordinator.rs`。
+- **门面律**：跨域只走①门面符号（意图动词，如 model::transcribe / pipeline::submit_live / capture::ctrl_start，build.rs FACADE 白名单强制）②core（反向通知写状态+版本计数）。豁免表已清零。
 
 ### 3.1 关键机制（保留有效的细节描述）
 
@@ -106,7 +99,7 @@
 
 ### 3.2 契约闸与自测
 
-- build.rs 递归扫描 src/：坐标 API 只准 overlay.rs（mouseLocation 豁免 autotest.rs）；主线程 API 必须带调度标记；hud 快照 API 白名单。违反=编译 panic。
+- build.rs 递归扫描 src/：坐标 API 只准 overlay.rs（mouseLocation 豁免 autotest.rs）；主线程 API 必须带调度标记；hud 快照 API 白名单；**门面闸**（跨域 use 必须命中 FACADE 白名单，豁免表已清零——新跨域需求进门面或走 core）。违反=编译 panic。
 - autotest.rs：`VOICEMAC_AUTOTEST=file`（文件回放全链）`timelimit`（超长截断+哑火 4 断言）`ui`（主窗数据链 vs 磁盘真值；**需先起 vite dev server**，无 dev server 时 WebView 空白=假绿）`e2e`（真麦）`update[/install]`。`VOICEMAC_DATA_DIR` 隔离数据目录。
 - 日志：`<数据目录>/app.log`，前缀 `[diag]/[voice]/[ui]/[audio]/[perm]/[shortcut]/[queue]/[pipeline]/[paste-tx]/[llm]/[ctx]/[hud]/[deliver]`。
 

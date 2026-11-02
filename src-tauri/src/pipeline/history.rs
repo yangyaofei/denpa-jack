@@ -178,46 +178,14 @@ pub fn prune_recordings(app: &tauri::AppHandle, keep: usize) {
 }
 
 /// PCM(16k mono i16) → WAV 写盘
-/// 标准 WAV 44B 头(16k mono i16le)——落盘与上传共用, 只写一次
-pub fn wav_header(data_len: usize) -> [u8; 44] {
-    let mut h = vec![0u8; 44];
-    h[0..4].copy_from_slice(b"RIFF");
-    let total = (36 + data_len) as u32;
-    h[4..8].copy_from_slice(&total.to_le_bytes());
-    h[8..12].copy_from_slice(b"WAVE");
-    h[12..16].copy_from_slice(b"fmt ");
-    h[16..20].copy_from_slice(&16u32.to_le_bytes());
-    h[20..22].copy_from_slice(&1u16.to_le_bytes());
-    h[22..24].copy_from_slice(&1u16.to_le_bytes());
-    h[24..28].copy_from_slice(&16000u32.to_le_bytes());
-    h[28..32].copy_from_slice(&32000u32.to_le_bytes());
-    h[32..34].copy_from_slice(&2u16.to_le_bytes());
-    h[34..36].copy_from_slice(&16u16.to_le_bytes());
-    h[36..40].copy_from_slice(b"data");
-    h[40..44].copy_from_slice(&(data_len as u32).to_le_bytes());
-    let mut out = [0u8; 44];
-    out.copy_from_slice(&h);
-    out
-}
+/// wav_header 已归位基座 util(批5: zhipu 拼上传体与这里落盘共用同一格式)
 
 pub fn save_wav(app: &tauri::AppHandle, pcm: &[u8]) -> Option<String> {
     let ts = chrono_like_ts();
     let path = recordings_dir(app).join(format!("{ts}.wav"));
-    let mut out = vec![];
-    let sample_rate = 16000u32;
-    let data_len = pcm.len() as u32;
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len).to_le_bytes());
-    out.extend_from_slice(b"WAVEfmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
-    out.extend_from_slice(&sample_rate.to_le_bytes());
-    out.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
-    out.extend_from_slice(&2u16.to_le_bytes()); // block align
-    out.extend_from_slice(&16u16.to_le_bytes()); // bits
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data_len.to_le_bytes());
+    // 头与 PCM 一次写全(44B 头来自基座 util; 旧手写头与 wav_header 函数是重复实现, 批5 合一)
+    let mut out = Vec::with_capacity(44 + pcm.len());
+    out.extend_from_slice(&crate::util::wav_header(pcm.len()));
     out.extend_from_slice(pcm);
     fs::write(&path, out).ok()?;
     path.to_str().map(|s| s.to_string())
@@ -284,7 +252,8 @@ mod tests {
     #[test]
     fn wav_header_valid_pcm16_mono_16k() {
         // C40 回归: 曾因半字节拷贝把 audio_format 写成 0x0101(257) 智谱拒收
-        let h = wav_header(1000);
+        // (wav_header 已归位基座 util, 用例留此随 save_wav 消费方一起防回归)
+        let h = crate::util::wav_header(1000);
         assert_eq!(&h[0..4], b"RIFF");
         assert_eq!(&h[8..12], b"WAVE");
         assert_eq!(&h[12..16], b"fmt ");

@@ -1,6 +1,7 @@
 // 基座: 状态中枢与横切关注点
 pub mod core;
 pub mod log;
+pub mod util;
 pub mod crash_log;
 pub mod config;
 

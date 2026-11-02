@@ -7,22 +7,22 @@ macOS 菜单栏语音输入：**按住热键说话 → ASR → 词典纠错 →�
 
 ## 一句话架构
 
-Rust 后端（`src-tauri/src/`）负责录音、识别、纠错、交付；WebView 前端（`src/`）只负责展示与配置。
-两端唯一通道 = Tauri command（调用）+ 事件（推送，含轮询兜底，见 `docs/SYNC.md`）。
-数据流总纲：热键 → 协调器 → `recording`（采集+会话）→ `engine`（ASR）→ `segment_queue`（串行化）→ `pipeline`（词典纠错 → 可选 LLM → 交付）→ `delivery`（AX 直写/回执式粘贴）；全局可变状态集中在 `core`（单锁+版本计数，前端 800ms 轮询投影）。
-`docs/SPEC.md` 为需求与架构原始文档（**部分滞后于 2026-10 结构重构，模块结构以本文件目录表为准**）。
+Rust 后端（`src-tauri/src/`）按**四域**组织：`ui`（展示）/ `capture`（采集+决策）/ `pipeline`（流程编排）/ `model`（模型能力），加基座（`core` 单锁状态中枢+版本计数、`config`、`util`、`log`、`crash_log`）与装配壳（`lib`/`commands`/`autotest`/`transcription_coordinator`）。
+跨域只走两条通道：**门面符号**（意图动词，build.rs 门面闸强制白名单）与 **core**（反向通知=写状态+版本计数，消费方轮询自取）。
+数据流：热键 → 协调器 → `capture::recording`（采集+会话）→ `model::speech`（ASR）→ `pipeline::segment_queue`（串行化→词典纠错→可选 LLM→交付 `pipeline::delivery`）；浮窗提示经 `core::hud_emit` 事件泵，浮窗显隐走 `ui` 门面。
+结构契约的权威文档 = `docs/ARCHITECTURE.md`（四域树/门面清单/命名律/调用律）；`SPEC.md` 记行为事实。
 
 ## 目录
 
 | 路径 | 内容 |
 |---|---|
-| `src-tauri/src/` | 后端模块（2026-10-24 阶段A 结构重构后）：`core`（全局状态单锁+版本计数轮询协议）`recording`（会话状态机）`transcription_coordinator`（协调器）`segment_queue`（分段队列）`pipeline`（后处理/交付编排）`engine/`（ASR 引擎域：`contract` 事件契约 + `doubao`/`zhipu`/`local` 三引擎 + `mod` 调度）`delivery/`（交付域：`ax` AX 能力 / `paste` 回执式粘贴 / `mod` 焦点探测）`audio`（采集/麦克风解析）`screen_context`（截图/窗口列表）`active_target`（活动目标探测）`dict`（词典纠错/热词预算）`llm`（润色+默认提示词）`history`（历史/WAV 解析）`config/`（配置域：主文件 `config.rs` + `paths` 路径解析 + `migrate` 配置迁移）`tray`/`hud`/`overlay`（菜单栏/浮窗/定位）`shortcut`（键盘）`permissions`/`mic_watch`/`log`/`crash_log`/`local_service`（网关进程管理）`autotest`（自测通道） |
-| `src-tauri/build.rs` | 编译期契约闸（**递归**扫描 `src/` 子目录）：坐标 API 只能在 `overlay.rs`、hud 快照 API 白名单、主线程 API 必须有调度标记——违反直接 panic（`docs/CONTRACTS.md`） |
+| `src-tauri/src/` | 四域+基座+装配壳（2026-11 结构重构，见 `docs/ARCHITECTURE.md`）：**基座** `core`（全局状态单锁+版本计数+段投影+HUD 事件槽）`config/`（主文件+`paths`+`migrate`）`util`（跨域纯函数，如 wav 头）`log`/`crash_log`；**capture/** `key`（热键三规则+Esc 监听）`recording`（会话状态机）`audio`/`feedback`/`mic_watch`（麦克风）`screen`（截图/窗口）`active_target`（活动目标）`focus`（前台/焦点感知）`permissions`；**pipeline/** `mod`（结算总装 post_process）`segment_queue`（分段队列）`rerun`（历史重转编排）`delivery/`（`ax` 直写/`paste` 回执粘贴/键击）`history`；**model/** `speech/`（`contract`+`doubao`/`zhipu`/`local` 三引擎+`gateway` 本地网关+`driver` WS 骨架+`transcribe_session` 驱动器）`dict`（词典纠错/热词预算）`llm`（refine 纠错管线/自测）；**ui/** `hud`（浮窗状态机+事件泵）`overlay`（窗口/坐标）`tray`/`tray_events`/`update`；**装配壳** `lib`（效果分派+send_ctrl）`commands` `autotest` `transcription_coordinator` |
+| `src-tauri/build.rs` | 编译期契约闸（**递归**扫描）：坐标 API 只能在 `overlay.rs`、hud 快照 API 白名单、主线程 API 必须有调度标记、**门面闸**（跨域 use 必须命中 FACADE 白名单，豁免表已清零）——违反直接 panic（`docs/CONTRACTS.md` + `docs/ARCHITECTURE.md`） |
 | `src/` | `main.ts`（主窗入口：组合+启动，44 行）`app/`（主窗组件按页拆分：`types` AppThis 形状 / `util` / `common` 横切 / `asr`/`llm`/`dict`/`history`/`general`/`about` 六页域）`hud.ts`（浮窗）`style.css`（设计 token 与组件样式）`pages/*.html`（六个页面片段，经 `?raw` 注入） |
 | `index.html` / `hud.html` | **两个前端入口**：vite 的 `rollupOptions.input` 指向它们，构建产物供主窗与浮窗两个 WebView 加载 |
 | `vite.config.ts` | 前端开发服务器（:1420，与 `tauri.conf.json` 的 `devUrl` 对应）与构建配置（双入口、target chrome105） |
 | `tsconfig.json` / `tsconfig.node.json` | TypeScript 配置（前者含 `src/**`，后者给 `vite.config.ts` 用，经 `references` 关联） |
-| `docs/` | 全部文档（README 除外）。`SPEC.md` = 需求与架构；`CONTRACTS.md` = 跨边界契约；索引见下 |
+| `docs/` | 全部文档（README 除外）。`ARCHITECTURE.md` = 结构契约（四域/门面/闸）；`SPEC.md` = 行为事实；`CONTRACTS.md` = 跨边界技术契约；索引见下 |
 | `handover/` | 交接文档（产品要求/改动流程/验证体系/发布运维/协作纪律/教训——零上下文入门用） |
 | `REQUIREMENTS.md` | 2026-10 全库审核转化出的需求清单与 D 编号决议记录 |
 | `scripts/regression.sh` | 回归闸门：`cargo test` → 文件回放链路 → 前端检查 → UI 数据链 → e2e 真麦 → 打包签名 |
