@@ -1,7 +1,7 @@
-// 交付域·AX 辅助功能(阶段A 第4步从 deliver.rs 分家):
-// AX FFI/焦点元素探测/AX 直写/权限检测——全部走 Accessibility API 的能力集中在此。
+// 交付域·AX 直写(阶段A 第4步从 deliver.rs 分家; 2026-11-02 焦点探测族归位 capture/focus.rs):
+// 只留"写入"能力(AX 直写+回读确认); 只读探测(焦点元素/窗口框/权限)在 capture::focus。
+// 注: 直写本身需要定位焦点元素, 故此处保留 SystemWide FFI 与 KAX_FOCUSED_ELEMENT。
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
-use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 
 type AXUIElementRef = core_foundation::base::CFTypeRef; // *const c_void
@@ -9,119 +9,13 @@ type AXUIElementRef = core_foundation::base::CFTypeRef; // *const c_void
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
-    fn AXUIElementCopyAttributeValue(
-        el: AXUIElementRef,
-        attr: CFStringRef,
-        out: *mut CFTypeRef,
-    ) -> i32;
+    fn AXUIElementCopyAttributeValue(el: AXUIElementRef, attr: CFStringRef, out: *mut CFTypeRef) -> i32;
     fn AXUIElementSetAttributeValue(el: AXUIElementRef, attr: CFStringRef, val: CFTypeRef) -> i32;
-    fn AXIsProcessTrustedWithOptions(opts: core_foundation::dictionary::CFDictionaryRef) -> bool;
-    fn AXValueGetValue(value: CFTypeRef, the_type: u32, value_ptr: *mut std::ffi::c_void) -> bool;
-    fn AXUIElementGetPid(el: AXUIElementRef, pid: *mut i32) -> i32;
-}
-
-// AXValue 的几何类型（AXValueType: kAXValueCGPointType = 1, kAXValueCGSizeType = 2）
-const K_AX_VALUE_CG_POINT: u32 = 1;
-const K_AX_VALUE_CG_SIZE: u32 = 2;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AxPoint {
-    x: f64,
-    y: f64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AxSize {
-    width: f64,
-    height: f64,
-}
-
-fn ax_attr_owned(el: AXUIElementRef, attr: &str) -> Option<CFType> {
-    let name = CFString::new(attr);
-    let mut out: CFTypeRef = std::ptr::null_mut();
-    let r = unsafe { AXUIElementCopyAttributeValue(el, name.as_concrete_TypeRef(), &mut out) };
-    if r != 0 || out.is_null() {
-        return None;
-    }
-    Some(unsafe { CFType::wrap_under_create_rule(out) })
-}
-
-pub struct FocusInfo {
-    pub pid: i32,
-    pub frame: Option<(f64, f64, f64, f64)>,
-}
-
-/// 当前键盘焦点（光标所在）元素：所属进程 + 窗口框。
-///
-/// 窗口框取不到不要紧——`screen_context::focused_window` 会用 pid 回退到该应用最前面的窗口
-/// （Electron 等应用的焦点元素常拿不到 AXWindow）。
-/// 最多试 3 次（AX 服务在应用切换瞬间会返回 kAXErrorCannotComplete）。
-pub fn focused_element_info() -> Option<FocusInfo> {
-    for attempt in 0..3 {
-        if let Some(f) = focused_element_info_once() {
-            return Some(f);
-        }
-        if attempt < 2 {
-            std::thread::sleep(std::time::Duration::from_millis(30));
-        }
-    }
-    None
-}
-
-fn focused_element_info_once() -> Option<FocusInfo> {
-    unsafe {
-        let _sys = AxGuard(AXUIElementCreateSystemWide());
-        if _sys.0.is_null() {
-            return None;
-        }
-        let focused = ax_attr_owned(_sys.0, KAX_FOCUSED_ELEMENT)?;
-        let mut pid: i32 = 0;
-        if AXUIElementGetPid(focused.as_concrete_TypeRef(), &mut pid) != 0 || pid <= 0 {
-            return None;
-        }
-        Some(FocusInfo {
-            pid,
-            frame: window_frame_of(focused.as_concrete_TypeRef()),
-        })
-    }
-}
-
-fn window_frame_of(focused: AXUIElementRef) -> Option<(f64, f64, f64, f64)> {
-    unsafe {
-        let win = ax_attr_owned(focused, KAX_WINDOW)?;
-        let pos = ax_attr_owned(win.as_concrete_TypeRef(), KAX_POSITION)?;
-        let size = ax_attr_owned(win.as_concrete_TypeRef(), KAX_SIZE)?;
-        let mut p = AxPoint { x: 0.0, y: 0.0 };
-        let mut s = AxSize { width: 0.0, height: 0.0 };
-        if !AXValueGetValue(
-            pos.as_concrete_TypeRef(),
-            K_AX_VALUE_CG_POINT,
-            &mut p as *mut AxPoint as *mut std::ffi::c_void,
-        ) {
-            return None;
-        }
-        if !AXValueGetValue(
-            size.as_concrete_TypeRef(),
-            K_AX_VALUE_CG_SIZE,
-            &mut s as *mut AxSize as *mut std::ffi::c_void,
-        ) {
-            return None;
-        }
-        if s.width < 1.0 || s.height < 1.0 {
-            return None;
-        }
-        Some((p.x, p.y, s.width, s.height))
-    }
 }
 
 const KAX_SELECTED_TEXT: &str = "AXSelectedText";
 const KAX_VALUE: &str = "AXValue";
 const KAX_FOCUSED_ELEMENT: &str = "AXFocusedUIElement";
-const KAX_WINDOW: &str = "AXWindow";
-const KAX_POSITION: &str = "AXPosition";
-const KAX_SIZE: &str = "AXSize";
 
 fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
     let name = CFString::new(attr);
@@ -209,17 +103,7 @@ pub fn ax_insert(text: &str) -> Result<(), String> {
     }
 }
 
-/// 辅助功能权限: quiet=仅查询; 否则弹系统授权窗
-pub fn ax_trusted(prompt: bool) -> bool {
-    let key = CFString::new("AXTrustedCheckOptionPrompt");
-        let val = if prompt {
-        core_foundation::boolean::CFBoolean::true_value()
-    } else {
-        core_foundation::boolean::CFBoolean::false_value()
-    };
-    let opts = CFDictionary::from_CFType_pairs(&[(key, val)]);
-    unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) }
-}
+// ax_trusted 已归位 capture/focus.rs(权限查询是感知, 不是交付动作)
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {

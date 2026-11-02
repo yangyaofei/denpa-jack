@@ -1,6 +1,9 @@
 pub mod audio;
 mod audio_feedback;
 mod autotest;
+/// capture 域: 从世界拿信号并决策(docs/ARCHITECTURE.md 四域之一)——
+/// 首个归位子域 focus(前台/焦点感知); 批 2 起 key/audio/screen/permissions 陆续迁入
+pub mod capture;
 mod commands;
 pub mod crash_log;
 /// 应用核心状态(唯一事实源, 见 docs/CORE-DESIGN.md)——执行模块只连 core
@@ -127,7 +130,7 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_millis(800));
                 }
                 // 辅助功能: 带引导提示的检查(AXIsProcessTrustedWithOptions(prompt))
-                let ax = delivery::ax_trusted(!autotest);
+                let ax = capture::ax_trusted(!autotest);
                 let missing = crate::permissions::missing();
                 if missing.is_empty() {
                     log::log(&h, "[perm] 权限齐备: 麦克风 + 辅助功能");

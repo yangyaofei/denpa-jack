@@ -59,6 +59,71 @@ pub struct SegmentEntry {
     pub asr_failed: bool,
 }
 
+// ───────── 段投影（只读视图）─────────
+// 投影与数据同居: 谁持有数据谁出视图。消费方(ui/tray/commands/浮窗前端)
+// 一律从 core 读, 不越过数据主人去问执行者(segment_queue 是写侧)。
+
+/// 给前端的段视图(浮窗渲染用; 只有 state + text, 不带段号等多余信息——用户定则)
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SegView {
+    /// 录音中 | transcribing | queued | failed
+    pub state: String,
+    /// live | rerun —— 段来源(展示端自决怎么显示, 如重转段标 ↻)
+    pub source: String,
+    pub text: String,
+}
+
+/// 浮窗视图: (当前段, 队列其余段)
+///
+/// 当前段 = 正在转写的那段(录音中的"当前"由浮窗用 HUD 快照里的 partial 表示,
+/// 见 commands::hud_poll —— 录音中的段还不属于队列)。
+/// cur 位(正在结算的主链路段)只给 Live——Rerun 段虽是 Transcribing 但
+/// 自带会话不占交付位, 显示进队列列表(带 rerun 标记, 展示端自决)。
+pub fn views() -> (Option<SegView>, Vec<SegView>) {
+    let c = lock();
+    let src = |s: &SegmentEntry| if s.source == SegSource::Rerun { "rerun".to_string() } else { "live".to_string() };
+    let cur = c
+        .queue
+        .items
+        .iter()
+        .find(|s| s.state == SegState::Transcribing && s.source == SegSource::Live)
+        .map(|s| SegView { state: "transcribing".into(), source: src(s), text: s.raw.clone() });
+    let queue: Vec<SegView> = c
+        .queue
+        .items
+        .iter()
+        .filter(|s| !(s.state == SegState::Transcribing && s.source == SegSource::Live))
+        .map(|s| SegView {
+            state: match s.state {
+                SegState::Failed => "failed".into(),
+                SegState::Transcribing => "transcribing".into(),
+                SegState::Queued => "queued".into(),
+            },
+            source: src(s),
+            text: s.raw.clone(),
+        })
+        .collect();
+    (cur, queue)
+}
+
+/// 队列里是否还有活(排队或转写中)——浮窗存活规则与托盘都用它
+pub fn busy() -> bool {
+    let c = lock();
+    c.queue.items.iter().any(|s| s.state == SegState::Queued || s.state == SegState::Transcribing)
+}
+
+/// 队列里是否有未处理的失败段
+pub fn has_failed() -> bool {
+    let c = lock();
+    c.queue.items.iter().any(|s| s.state == SegState::Failed)
+}
+
+/// 队列里失败段中最早的一个 id(浮窗"重试"按钮用)
+pub fn first_failed_id() -> Option<u64> {
+    let c = lock();
+    c.queue.items.iter().find(|s| s.state == SegState::Failed).map(|s| s.id)
+}
+
 /// 段队列域状态
 pub struct QueueState {
     /// 段按处理顺序; 交付成功即离场, 失败段保留待重试

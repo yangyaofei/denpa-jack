@@ -10,7 +10,7 @@ use tokio::sync::mpsc as ttx;
 pub(crate) static LAST_GEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
 
 use crate::audio;
-use crate::delivery;
+use crate::capture;
 use crate::engine;
 use crate::pipeline;
 use crate::config::{self, Config};
@@ -22,7 +22,7 @@ pub struct RecordingSession {
     pub rec: audio::Recording,
     cmd_tx: ttx::Sender<engine::Cmd>,
     started_at: std::time::Instant,
-    focus: delivery::FocusLock,
+    focus: capture::FocusLock,
     gen: u64,
     /// 交接箱: stop 写入, 引擎 Result 到达时 take——会话数据随会话管道流动
     handoff: Arc<Mutex<Option<pipeline::SessionHandoff>>>,
@@ -210,7 +210,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     };
     // 交接箱: 会话作用域——stop 写, 引擎 Result 读(唯一交接点, 无全局)
     let handoff = Arc::new(Mutex::new(None));
-    let focus = delivery::FocusLock::snapshot();
+    let focus = capture::FocusLock::snapshot();
     engine::spawn_session(
         app.clone(),
         profile.provider.clone(),
@@ -373,7 +373,7 @@ pub fn ctrl_cancel_queued(app: &tauri::AppHandle) -> Result<(), String> {
 /// 两个窗口不一致导致用户的 Esc 永远没人听(R2 根因)。
 /// 调用点: 段终态出队/NoSpeech/abort/太短丢弃。
 pub fn esc_maybe_end() {
-    if !crate::segment_queue::busy() && !crate::core::session_recording() {
+    if !crate::core::busy() && !crate::core::session_recording() {
         esc_listen_end();
     }
 }

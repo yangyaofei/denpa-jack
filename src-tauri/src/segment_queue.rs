@@ -46,15 +46,8 @@
 
 use crate::core::{SegSource, SegState, SegmentEntry};
 
-/// 给前端的段视图(浮窗渲染用; 只有 state + text, 不带段号等多余信息——用户定则)
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct SegView {
-    /// 录音中 | transcribing | queued | failed
-    pub state: String,
-    /// live | rerun —— 段来源(展示端自决怎么显示, 如重转段标 ↻)
-    pub source: String,
-    pub text: String,
-}
+// 段投影(SegView/views/busy/has_failed/first_failed_id)已归位 core.rs:
+// 数据主人出视图, 本模块只留写侧(入队/出队/状态推进)。消费方从 core 读。
 
 /// worker 单段执行结果(内部): 失败时携带纠正稿与 llm_used, 留痕不降级
 enum WorkOutcome {
@@ -392,56 +385,8 @@ pub fn dismiss_failed() -> usize {
     n
 }
 
-/// 浮窗视图: (当前段, 队列其余段)
-///
-/// 当前段 = 正在转写的那段(录音中的"当前"由浮窗用 HUD 快照里的 partial 表示,
-/// 见 commands::hud_poll —— 录音中的段还不属于队列)。
-pub fn views() -> (Option<SegView>, Vec<SegView>) {
-    let c = crate::core::lock();
-    let src = |s: &SegmentEntry| if s.source == SegSource::Rerun { "rerun".to_string() } else { "live".to_string() };
-    // cur 位(正在结算的主链路段)只给 Live——Rerun 段虽是 Transcribing 但
-    // 自带会话不占交付位, 显示进队列列表(带 rerun 标记, 展示端自决)
-    let cur = c
-        .queue
-        .items
-        .iter()
-        .find(|s| s.state == SegState::Transcribing && s.source == SegSource::Live)
-        .map(|s| SegView { state: "transcribing".into(), source: src(s), text: s.raw.clone() });
-    let queue: Vec<SegView> = c
-        .queue
-        .items
-        .iter()
-        .filter(|s| !(s.state == SegState::Transcribing && s.source == SegSource::Live))
-        .map(|s| SegView {
-            state: match s.state {
-                SegState::Failed => "failed".into(),
-                SegState::Transcribing => "transcribing".into(),
-                SegState::Queued => "queued".into(),
-            },
-            source: src(s),
-            text: s.raw.clone(),
-        })
-        .collect();
-    (cur, queue)
-}
-
-/// 队列里是否还有活(排队或转写中)——浮窗存活规则与托盘都用它
-pub fn busy() -> bool {
-    let c = crate::core::lock();
-    c.queue.items.iter().any(|s| s.state == SegState::Queued || s.state == SegState::Transcribing)
-}
-
-/// 队列里是否有未处理的失败段
-pub fn has_failed() -> bool {
-    let c = crate::core::lock();
-    c.queue.items.iter().any(|s| s.state == SegState::Failed)
-}
-
-/// 队列里失败段中最早的一个 id(浮窗"重试"按钮用)
-pub fn first_failed_id() -> Option<u64> {
-    let c = crate::core::lock();
-    c.queue.items.iter().find(|s| s.state == SegState::Failed).map(|s| s.id)
-}
+// 段投影已归位 core.rs(views/busy/has_failed/first_failed_id/SegView):
+// 数据主人出视图, 本模块只留写侧(入队/出队/状态推进)。消费方从 core 读。
 
 /// 出队一段(重试用; ASR 重跑前把原段移掉)
 fn remove(id: u64) {
@@ -523,9 +468,9 @@ mod tests {
         let ids = debug_ids();
         assert_eq!(ids, vec![(1, SegState::Transcribing), (2, SegState::Queued), (3, SegState::Queued)]);
         // busy/has_failed 的判定
-        assert!(busy() && !has_failed());
+        assert!(crate::core::busy() && !crate::core::has_failed());
         debug_reset();
-        assert!(!busy() && !has_failed());
+        assert!(!crate::core::busy() && !crate::core::has_failed());
     }
 
     #[test]
@@ -535,9 +480,9 @@ mod tests {
         debug_push(1, SegState::Failed);
         debug_push(2, SegState::Queued);
         // 失败段留在队列里(可重试), 后面的段照常可被取走(不阻塞)
-        assert!(has_failed());
-        assert_eq!(first_failed_id(), Some(1));
-        let (cur, q) = views();
+        assert!(crate::core::has_failed());
+        assert_eq!(crate::core::first_failed_id(), Some(1));
+        let (cur, q) = crate::core::views();
         assert!(cur.is_none());
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].state, "failed");
@@ -561,8 +506,8 @@ mod tests {
         }
         assert_eq!(crate::core::version(), v0 + 2);
         // 纯读取不递增
-        let _ = views();
-        let _ = busy();
+        let _ = crate::core::views();
+        let _ = crate::core::busy();
         assert_eq!(crate::core::version(), v0 + 2);
         debug_reset();
     }
@@ -584,15 +529,15 @@ mod tests {
             asr_failed: false,
         });
         crate::core::lock().version += 1;
-        assert!(busy(), "Rerun 段算在途");
-        let (cur, q) = views();
+        assert!(crate::core::busy(), "Rerun 段算在途");
+        let (cur, q) = crate::core::views();
         assert!(cur.is_none(), "Rerun 段不占 cur 位");
         assert_eq!(q.len(), 1);
         assert_eq!(q[0].source, "rerun");
         assert_eq!(q[0].state, "transcribing");
         assert_eq!(crate::core::rerun_active(), vec!["ts-x".to_string()], "进行中重转=队列投影");
         finish_rerun(100);
-        assert!(!busy());
+        assert!(!crate::core::busy());
         assert!(crate::core::rerun_active().is_empty(), "出队即从投影消失");
         debug_reset();
     }

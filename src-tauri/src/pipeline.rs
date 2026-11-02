@@ -7,7 +7,7 @@ pub struct SessionHandoff {
     pub audio_path: Option<String>,
     /// 待落盘 PCM(交付线程异步存盘, 停止路径不阻塞——Handy spawn_blocking 等价)
     pub pcm: std::sync::Arc<Vec<u8>>,
-    pub focus: crate::delivery::FocusLock,
+    pub focus: crate::capture::FocusLock,
     pub duration_ms: u64,
     pub engine: String,
     /// 会话代: 交付前与 CANCELLED_GEN 比对, 被取消的会话跳过粘贴只入历史
@@ -231,9 +231,9 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 
 
 
-fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crate::delivery::FocusLock) -> Result<String, String> {
+fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crate::capture::FocusLock) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    let ax_ok = crate::delivery::ax_trusted(false);
+    let ax_ok = crate::capture::ax_trusted(false);
     let focus_ok = focus.still_valid();
     crate::log::elog(&format!(
         "[deliver] ax_trusted={ax_ok} focus_bundle={:?} focus_ok={focus_ok}",

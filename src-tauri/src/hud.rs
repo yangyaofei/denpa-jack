@@ -57,9 +57,9 @@ pub struct Snapshot {
     /// 错误(一次性; 录音中不打扰, 不采纳——见 `apply_error`)
     pub err: Option<String>,
     /// 左栏: 当前段(录音中 = 实时文字; 否则 = 正在转写的那段)
-    pub seg_current: Option<crate::segment_queue::SegView>,
+    pub seg_current: Option<crate::core::SegView>,
     /// 右栏: 队列里其余段(空 = 右栏不显示)
-    pub seg_queue: Vec<crate::segment_queue::SegView>,
+    pub seg_queue: Vec<crate::core::SegView>,
     /// 是否有未处理的失败段(存活规则: 只剩失败时 2.5s 后收起)
     pub seg_failed: bool,
 }
@@ -251,7 +251,7 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
 ///   左栏 = 录音中显示实时文字; 没在录音时 = 正在转写的那段
 ///   右栏 = 队列里其余段(录音时, 正在转写的那段退到右栏)
 pub fn poll() -> Snapshot {
-    let (cur, queue) = crate::segment_queue::views();
+    let (cur, queue) = crate::core::views();
     // HUD 不显示重转段(用户定则: 重转是后台任务, 录音浮窗只管语音链路的段;
     // 重转状态看主窗历史页)。views() 保持全量, 各投影端自决过滤
     let queue: Vec<_> = queue.into_iter().filter(|s| s.source != "rerun").collect();
@@ -263,7 +263,7 @@ pub fn poll() -> Snapshot {
     g.level = level;
     g.partial.clone_from(&partial);
     g.seg_current = if recording {
-        Some(crate::segment_queue::SegView {
+        Some(crate::core::SegView {
             state: "recording".into(),
             source: "live".into(),
             text: partial,
@@ -282,7 +282,7 @@ pub fn poll() -> Snapshot {
     } else {
         queue
     };
-    g.seg_failed = crate::segment_queue::has_failed();
+    g.seg_failed = crate::core::has_failed();
     if core_ver != LAST_CORE_VER.load(Ordering::SeqCst) {
         LAST_CORE_VER.store(core_ver, Ordering::SeqCst);
         g.version += 1;

@@ -143,7 +143,7 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
     // 观察窗: 每秒把队列状态写进日志(排队/转写中/失败 + 文本前缀),
     // 让"顺序、不丢段、失败不阻塞"可以在日志里逐秒核对
     for t in 0..40 {
-        let (cur, q) = crate::segment_queue::views();
+        let (cur, q) = crate::core::views();
         let cur_s = cur
             .as_ref()
             .map(|c| format!("{}«{}»", c.state, short(&c.text)))
@@ -154,12 +154,12 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
             &format!(
                 "AUTOTEST-FILES: t={}s busy={} 当前={} 队列=[{}]",
                 t,
-                crate::segment_queue::busy(),
+                crate::core::busy(),
                 cur_s,
                 q_s.join(", ")
             ),
         );
-        if t >= 3 && !crate::segment_queue::busy() && !crate::segment_queue::has_failed() {
+        if t >= 3 && !crate::core::busy() && !crate::core::has_failed() {
             log::log(&app, "AUTOTEST-FILES: 队列已跑空");
             break;
         }
@@ -277,12 +277,12 @@ fn run_timelimit(app: tauri::AppHandle) {
 
     // 第一段已被截断入队转写, 等它跑完(交付与否如实记录, 不断言——环境音内容不可控)
     for _t in 0..20u64 {
-        if !crate::segment_queue::busy() && !crate::segment_queue::has_failed() {
+        if !crate::core::busy() && !crate::core::has_failed() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(1000));
     }
-    log::log(&app, &format!("AUTOTEST-TL: 队列收尾 busy={} failed={}", crate::segment_queue::busy(), crate::segment_queue::has_failed()));
+    log::log(&app, &format!("AUTOTEST-TL: 队列收尾 busy={} failed={}", crate::core::busy(), crate::core::has_failed()));
     let all = p1 && p2 && p3 && p4;
     log::log(&app, &format!("AUTOTEST-TL: {} ({}/{})", if all { "PASS" } else { "FAIL" }, [p1, p2, p3, p4].iter().filter(|x| **x).count(), 4));
     app.exit(if all { 0 } else { 1 });

@@ -2,7 +2,7 @@
 use tauri::AppHandle;
 
 use crate::audio;
-use crate::delivery;
+use crate::capture;
 use crate::engine;
 use crate::history;
 use crate::pipeline;
@@ -113,7 +113,7 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
         audio_path: Some(audio_path.clone()),
         pcm: std::sync::Arc::new(Vec::new()),
-        focus: delivery::FocusLock::snapshot(),
+        focus: capture::FocusLock::snapshot(),
         duration_ms: 0,
         engine: profile.provider.clone(),
         gen: 0,
@@ -397,7 +397,7 @@ pub fn hud_poll() -> crate::hud::Snapshot {
 /// 重试队列里最早的一段失败段(浮窗「重试」按钮)
 #[tauri::command]
 pub fn queue_retry(app: tauri::AppHandle) -> Result<(), String> {
-    let id = crate::segment_queue::first_failed_id().ok_or("没有失败段")?;
+    let id = crate::core::first_failed_id().ok_or("没有失败段")?;
     crate::segment_queue::retry(&app, id)
 }
 
@@ -431,7 +431,7 @@ pub struct Versions {
 #[tauri::command]
 pub fn poll_versions() -> Versions {
     // 队列投影(主窗状态条): 在途段一览, 段数最多个位数, 800ms 轮询带上无压力
-    let (cur, queue) = crate::segment_queue::views();
+    let (cur, queue) = crate::core::views();
     let mut segs: Vec<SegLite> = Vec::new();
     if let Some(c) = cur {
         segs.push(SegLite { state: c.state, source: c.source, text: c.text });

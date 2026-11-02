@@ -312,7 +312,7 @@ pub fn spawn_session(
                     // 全局单槽的粘贴事务(paste_tx::PENDING)导致前一段只进剪贴板。
                     let ho = handoff.lock().unwrap().take();
                     let id = crate::segment_queue::enqueue(&app, t.clone(), ho);
-                    crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::segment_queue::busy()));
+                    crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::core::busy()));
                     ("asr-result", t)
                 }
                 AsrEvent::NoSpeech(t) => {
