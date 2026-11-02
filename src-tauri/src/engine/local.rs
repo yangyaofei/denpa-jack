@@ -66,6 +66,8 @@ async fn run(
     let context = context_from_hotwords(&hotwords);
     let mut first_feed = true;
     let mut finish_sent = false;
+    // 本会话累计喂入的音频字节数: 收尾超时按时长缩放的依据(16k×16bit mono=32000B/s)
+    let mut fed_bytes: usize = 0;
 
     // C37 骨架(与 doubao 共用 driver plumbing): 双输入转单通道, 主循环单 recv,
     // 收尾等待 watchdog(timeout_at)——select 双臂曾是此引擎的结构, 统一后
@@ -102,6 +104,7 @@ async fn run(
                     if finish_sent {
                         continue; // 收尾中迟到的分片不再投喂
                     }
+                    fed_bytes += pcm16.len();
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&pcm16);
                     let msg = if first_feed {
                         first_feed = false;
@@ -119,7 +122,14 @@ async fn run(
                     finish_sent = true;
                     let _ = sink.send(tokio_tungstenite::tungstenite::Message::Text(
                         json!({"type": "input_audio_buffer.commit"}).to_string().into())).await;
-                    watchdog = Some(tokio::time::Instant::now() + Duration::from_secs(super::FINALIZE_TIMEOUT_SECS));
+                    // 收尾超时按音频时长缩放: 网关 twopass 的二遍全句重解时长随音频线性
+                    // 增长(实测 2 分钟口述重解超 30s, 固定上限会把"还在算"误判成超时——
+                    // 网关日志静默 2 分 13 秒后客户端已断, 2026-11-02 真机铁证)。
+                    // 公式: 30s 基线 + 音频时长全额(重解不会慢于实时)。
+                    let audio_secs = fed_bytes as u64 / 32000;
+                    let timeout = std::cmp::max(super::FINALIZE_TIMEOUT_SECS, audio_secs + 30);
+                    crate::log::elog(&format!("[local-asr] 收尾窗口 {timeout}s (音频约 {audio_secs}s)"));
+                    watchdog = Some(tokio::time::Instant::now() + Duration::from_secs(timeout));
                 }
             },
             Some(Inner::Ws(Some(m))) => {
