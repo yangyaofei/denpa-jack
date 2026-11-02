@@ -20,10 +20,8 @@ pub mod speech;
 // 批3 门面收口: 外部经 crate::model::<门面符号> 调用。白名单由 build.rs 门面闸强制。
 // ───────── 门面(点名导出)─────────
 // model::transcribe — 提交一段转写(录音松开后; 原 spawn_session)
-// model::retranscribe — 历史重转(后台重算回写, 原 spawn_rerun_session)
-// model::resolve_engine — 配置→可用引擎档案+key(原 resolve_asr)
-// model::cancel_current — 取消转写中的会话(Esc 中止)
+// model::transcribe_session — 引擎会话驱动器(裸机制: 分派+跑完会话; 编排方注入事件桥)
 // model::refine — 纠错管线(词典→LLM→降级); selftest/list_models — LLM 自检
-pub use speech::{cancel_current, retranscribe, resolve_engine, transcribe, AsrEvent, Cmd};
+pub use speech::{cancel_current, resolve_engine, transcribe, transcribe_session, EngineCtx, HandoffBox, AsrEvent, Cmd};
 pub use llm::{list_models, refine, selftest};
 pub use dict::budget_hotwords; // 会话构造时算热词(recording/commands 传参; 显式数据流, 不下沉)

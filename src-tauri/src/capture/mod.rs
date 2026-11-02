@@ -34,9 +34,9 @@ pub mod screen;
 // ───────── 门面(点名导出; 外部只许经这些符号)─────────
 // crate::send_ctrl(留 lib.rs 根) — 热键/托盘/试音的唯一信号入口
 // capture::ctrl_start / ctrl_stop / ctrl_abort — 会话状态机(效果分派调)
-// capture::esc_listen_begin / esc_maybe_end — Esc 取消窗(豁免: pipeline 段完成时调, 批4 改 capture 自查 core)
+// capture::esc_listen_begin — Esc 取消窗(收窗由监听线程自查 core, 批4 起 pipeline 不再反调)
 pub use key::esc_listen_begin;
-pub use recording::{ctrl_abort, ctrl_start, ctrl_stop, esc_maybe_end, RecordingSession};
+pub use recording::{ctrl_abort, ctrl_start, ctrl_stop, RecordingSession};
 pub use audio::{list_mics, resolve_mic};
 // 感知(批1 归位): 焦点快照/权限
 pub use focus::{ax_trusted, focused_element_info, frontmost_bundle, FocusInfo, FocusLock};

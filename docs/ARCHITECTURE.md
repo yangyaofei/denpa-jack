@@ -43,8 +43,9 @@ src-tauri/src/
 
 ```
 装配层(lib 效果分派 · commands · autotest) → 可调四域任意门面
-capture → model → pipeline → core        顺流程单向
-ui      → 只读 core 投影                  浮窗内容=状态(core)，浮窗显隐=同步效果(仅分派层调)
+capture → pipeline → core            顺流程单向
+pipeline ⇄ model                     双向经门面(编排调能力: transcribe_session; 能力交结果: submit_live)
+ui      → 只读 core 投影              浮窗内容=core 事件+状态(hud 泵消费), 浮窗显隐=同步效果(ui 门面, 分派层与 capture 可调)
 反向通知 → 一律走 core（写状态+版本计数，消费方轮询自取）
 域内自由 → settle 调 deliver/history 不过门面（同域）
 ```
@@ -92,11 +93,11 @@ build.rs 强制跨域引用白名单（FACADE 表）；存量违规走 EXEMPT �
 
 | 批 | 内容 | 状态 |
 |---|---|---|
-| 1 | 投影归位 core（views/has_failed/busy 等）· 焦点族搬 capture/focus（首个域目录） | 进行中 |
-| 2 | 四域目录全部立起：git mv 归位+引用切换+门面 re-export+域注释 | 待 |
-| 3 | 门面签名按命名律改造（transcribe 会话对象化 / submit 收口 / 收回内部符号）+ build.rs 门面闸 | 待 |
-| 4 | 巨文件拆层：screen_context 三层 · pipeline(settle) 拆纯 · engine/mod 分家 speech/编排 | 待 |
-| 5 | 文档对齐：SPEC §架构 · AGENTS.md 目录表 · handover/01 速查 | 待 |
+| 1 | 投影归位 core（views/has_failed/busy 等）· 焦点族搬 capture/focus（首个域目录） | ✅ 34177d4 |
+| 2 | 四域目录全部立起：git mv 归位+引用切换+门面 re-export+域注释 | ✅ 5fa1d3b |
+| 3 | 门面签名按命名律改造（transcribe/submit_live 意图名 + 收回机制符号）+ build.rs 门面闸 | ✅ f673933 |
+| 4 | 清豁免：Esc 自查 / 浮窗提示走 core 泵 / rerun 编排归位 pipeline | ✅ 本批 |
+| 5 | 文档对齐：SPEC §架构 · AGENTS.md 目录表 · handover/01 速查；豁免表尾项(wav_header/delivery/gateway)评估 | 待 |
 
 批 1 特例说明：recording/pipeline/engine 内的 hud 直调（同步提示）随批 2 域搬迁时统一改
 "内容走 core + 显隐走分派层"，避免同批文件改两遍。

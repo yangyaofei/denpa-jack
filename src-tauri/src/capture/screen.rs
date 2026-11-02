@@ -389,7 +389,7 @@ fn display_scale_for_center(displays: &NSArray<SCDisplay>, cx: f64, cy: f64) -> 
             && cy >= f.origin.y
             && cy <= f.origin.y + f.size.height
         {
-            return crate::ui::overlay::display_scale(unsafe { d.displayID() });
+            return crate::ui::display_scale(unsafe { d.displayID() });
         }
     }
     2.0
@@ -498,7 +498,7 @@ fn capture_with_sck(
                         )
                     };
                     let cfg = unsafe { SCStreamConfiguration::new() };
-                    let scale = crate::ui::overlay::display_scale(dt.id);
+                    let scale = crate::ui::display_scale(dt.id);
                     unsafe {
                         cfg.setWidth((dt.size.0 * scale).round().max(1.0) as usize);
                         cfg.setHeight((dt.size.1 * scale).round().max(1.0) as usize);
@@ -774,7 +774,7 @@ mod tests {
     fn capture_fails_gracefully_on_bad_dir() {
         // 目录不可创建时返回 Err 而不是 panic（调用方据此退回纯文本）
         let target = crate::capture::active_target::ActiveTarget {
-            display: crate::ui::overlay::DisplayTarget {
+            display: crate::ui::DisplayTarget {
                 index: 1,
                 id: 1,
                 origin: (0.0, 0.0),

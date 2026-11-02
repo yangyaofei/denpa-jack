@@ -18,12 +18,14 @@
 // 后处理链: asr-result → 词典纠错 → 可选 LLM → 剪贴板/粘贴 → 历史 → asr-final
 pub mod delivery;
 pub mod history;
+pub mod rerun;
 pub mod segment_queue;
 
 // 批2 路径约定: 外部经 crate::pipeline::<子模块>::<符号>(如 pipeline::segment_queue)。
 // 批3 门面收口时改为 crate::pipeline::submit_live 直达意图符号。
-pub use delivery::ax::ax_insert;
-pub use delivery::paste::{reliable_paste, ClipboardSnapshot};
+// ───────── 门面(点名导出)─────────
+// Live 事件桥(model speech)提交用: submit_live / submit_failed / record_no_speech
+pub use segment_queue::{submit_failed, submit_live, record_no_speech};
 pub use segment_queue::*;
 
 use crate::config::Config;
@@ -129,7 +131,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             let msg = format!("配置读取失败: {e}");
             let payload = serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg});
             // 交付完成只"报事实"给 HUD(它自己决定是否采纳——录音中不覆盖当前回显)
-            crate::ui::hud::delivered(&app, payload);
+            crate::core::hud_emit(crate::core::HudEvent::Delivered(payload));
             return Outcome::Failed { reason: msg, final_text: raw, llm_used: false };
         }
     };
@@ -139,7 +141,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             "raw": raw, "final": "", "llm_used": false, "delivered": "none",
             "warning": "未识别到语音内容",
         });
-        crate::ui::hud::delivered(&app, payload);
+        crate::core::hud_emit(crate::core::HudEvent::Delivered(payload));
         return Outcome::NoSpeech;
     }
 
@@ -147,7 +149,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 
     // 1+2) 纠错管线(词典→可选 LLM→降级词典版): llm::refine 是唯一实现,
     // 重转/自测与这里共用同一根管线。HUD 的"润色中"广播是编排职责, 留在这里。
-    crate::ui::hud::polishing(&app);
+    crate::core::hud_emit(crate::core::HudEvent::Polishing);
     let refined = tauri::async_runtime::block_on(crate::model::refine(
         &raw,
         Some(&cfg),
@@ -242,7 +244,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     });
     // 交付结束 = 报事实给 HUD: 它会清掉阶段并带上交付载荷; 若此刻正在录新一段,
     // 它不采纳(不会把新一段的回显清掉——旧实现在这里无条件 clear, 就是用户看到的"内容消失又重新出现")。
-    crate::ui::hud::delivered(&app, fin_payload);
+    crate::core::hud_emit(crate::core::HudEvent::Delivered(fin_payload));
     // 托盘复位交给队列统一处理(队列里可能还有别的段在排队/转写)
     if delivered == "failed" {
         Outcome::Failed {

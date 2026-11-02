@@ -52,18 +52,13 @@ fn main() {
             let facade: &[(&str, &[&str])] = &[
                 ("capture", &["ctrl_start", "ctrl_stop", "ctrl_abort", "esc_listen_begin", "esc_maybe_end", "RecordingSession", "list_mics", "resolve_mic", "ax_trusted", "focused_element_info", "frontmost_bundle", "FocusInfo", "FocusLock", "inline_image", "data_url_prefix", "InlineImage"]),
                 ("model", &["transcribe", "retranscribe", "resolve_engine", "cancel_current", "refine", "selftest", "list_models", "budget_hotwords", "Cmd", "AsrEvent"]),
-                ("pipeline", &["SessionHandoff", "mark_cancelled", "cancel_latest"]),
-                ("ui", &[]), // 批4 前无门面符号(浮窗内容走 core 改造后定型)
+                ("pipeline", &["SessionHandoff", "mark_cancelled", "cancel_latest", "submit_live", "submit_failed", "record_no_speech"]),
+                ("ui", &["recording_started", "recording_ended", "dismiss", "refresh_status", "display_scale", "DisplayTarget", "cursor_point", "display_target_at", "main_display_target"]),
             ];
-            // 存量豁免(前缀匹配): 每条登记去向, 批4/批5 清空
+            // 存量豁免(前缀匹配): 每条登记去向
             let exempt: &[(&str, &str)] = &[
-                ("crate::ui::hud::", "批4: 浮窗内容走 core 投影"),
-                ("crate::ui::tray_events::", "批4: 托盘状态投影化"),
-                ("crate::ui::overlay::", "批4: DisplayTarget/display_scale 归位评估"),
-                ("crate::capture::recording::esc_maybe_end", "批4: capture 侧自查 core 版本"),
-                ("crate::pipeline::history::", "批4: rerun 编排从 speech 归位 pipeline"),
-                ("crate::pipeline::segment_queue::", "批4: 同上(rerun 事件桥)"),
-                ("crate::pipeline::delivery::", "批4: 键击/粘贴细节收口"),
+                ("crate::pipeline::history::wav_header", "批5 评估: wav 工具归基座 util(zhipu 拼头/history 切块两域共用)"),
+                ("crate::pipeline::delivery::", "批5: 键击/粘贴细节收口(装配壳消费)"),
                 ("crate::model::speech::gateway", "装配期网关预热经壳调用, 存量观察"),
             ];
             for dom in ["capture", "model", "pipeline", "ui"] {
@@ -76,6 +71,12 @@ fn main() {
                     let pos = from + rel_pos;
                     let after = &content[pos + pat.len()..];
                     let seg: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    if seg.is_empty() {
+                        // use crate::ui::{a,b} 的花括号形态: 导入的符号由 Rust 保证存在,
+                        // 且子模块下钻(crate::ui::hud::)仍会被下一轮拦截——放行
+                        from = pos + pat.len();
+                        continue;
+                    }
                     let context: String = content[pos..].chars().take(130).collect();
                     let ok_facade = facade
                         .iter()

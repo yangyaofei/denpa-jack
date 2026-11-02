@@ -169,22 +169,24 @@ pub fn recording_ended(app: &tauri::AppHandle) {
     update(apply_recording_ended);
 }
 
-/// 进入 AI 润色阶段
-pub fn polishing(app: &tauri::AppHandle) {
+/// 进入 AI 润色阶段(域内: 外部经 core::hud_emit(HudEvent::Polishing), 泵线程分派到此)
+fn polishing(app: &tauri::AppHandle) {
     let _ = app;
     let r = crate::core::session_recording();
     update(|g| apply_polishing(g, r));
 }
 
 /// 一次性提示(静音提醒/太短丢弃/已达上限/权限缺失…)。确保窗口可见(但不重新定位)。
-pub fn notify(app: &tauri::AppHandle, msg: &str) {
+/// (域内: 外部经 core::hud_emit(HudEvent::Notify))
+fn notify(app: &tauri::AppHandle, msg: &str) {
     let m = msg.to_string();
     update(|g| g.msg = m);
     crate::ui::overlay::show_window(app);
 }
 
 /// 交付完成(带载荷: raw/final/llm_used/delivered/warning)
-pub fn delivered(app: &tauri::AppHandle, payload: serde_json::Value) {
+/// (域内: 外部经 core::hud_emit(HudEvent::Delivered))
+fn delivered(app: &tauri::AppHandle, payload: serde_json::Value) {
     let _ = app;
     let r = crate::core::session_recording();
     update(|g| apply_delivered(g, r, payload));
@@ -201,19 +203,38 @@ fn apply_no_speech(g: &mut Snapshot, reason: &str) {
 /// 事实: 这一段**不会再有交付了** → 必须把阶段一起收掉, 否则 status 停在 "transcribing",
 /// 前端按"转写中"判定为忙 → 永不收起(用户实测: 提示停留特别久, 见 issue #9)。
 /// 顺带发一次性提示; 前端 2.5s 后按存活规则收窗。
-pub fn no_speech(app: &tauri::AppHandle, reason: &str) {
+/// (域内: 外部经 core::hud_emit(HudEvent::NoSpeech))
+fn no_speech(app: &tauri::AppHandle, reason: &str) {
     let r = reason.to_string();
     update(|g| apply_no_speech(g, &r));
     crate::ui::overlay::show_window(app);
 }
 
 /// 出错(引擎/交付级)。录音中只落日志, 不打扰录音。
-pub fn error(app: &tauri::AppHandle, reason: &str) {
+/// (域内: 外部经 core::hud_emit(HudEvent::Error))
+fn error(app: &tauri::AppHandle, reason: &str) {
     let _ = app;
     crate::log::elog(&format!("[hud] error: {reason}"));
     let r = crate::core::session_recording();
     let rs = reason.to_string();
     update(|g| apply_error(g, r, &rs));
+}
+
+/// 事件泵(批4): 提示类浮窗事件的唯一消费口——capture/model/pipeline 写 core,
+/// 本线程 100ms drain 一次分派到域内函数。装配期由 lib.rs 启动。
+pub fn start_event_pump(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        for ev in crate::core::hud_drain() {
+            match ev {
+                crate::core::HudEvent::Notify(m) => notify(&app, &m),
+                crate::core::HudEvent::Error(r) => error(&app, &r),
+                crate::core::HudEvent::NoSpeech(r) => no_speech(&app, &r),
+                crate::core::HudEvent::Delivered(p) => delivered(&app, p),
+                crate::core::HudEvent::Polishing => polishing(&app),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    });
 }
 
 /// 前端请求隐藏(唯一隐藏入口)。带最短显示守卫:

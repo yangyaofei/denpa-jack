@@ -142,152 +142,20 @@ mod tests {
     }
 }
 
-/// R1: 历史重转专用会话——与主链路同构(专用 rt + 引擎 run), 但事件桥不同:
-/// Result/NoSpeech/Error **直接回写该历史条目**(词典→可选 LLM→update_by_ts),
-/// 不入队、不交付、不碰 HUD(用户定则: 重转是后台重算, 不是语音输入重放)。
-pub fn retranscribe(
-    app: tauri::AppHandle,
-    provider: String,
-    api_key: String,
-    base_url: String,
-    hotwords: Vec<String>,
-    ts: String,
-    handoff: HandoffBox,
-    rx: tokio::sync::mpsc::Receiver<Cmd>,
-) {
-    crate::log::elog(&format!("[rerun] spawn provider={provider} key_len={}", api_key.len()));
-    // 任务登记: Rerun 段入 core 队列(Transcribing 态, 自带会话不经 worker)。
-    // 状态推进全收在本会话: 入队→结算→出队, 投影端(HUD/主窗)从 core 看全程。
-    // ts 走显式参数(rerun_ts 字段), audio_path 回归纯语义(wav 路径)——
-    // 不再用 R1 时期的 audio_path 双关
-    let seg_id = crate::pipeline::segment_queue::submit_rerun(
-        &ts,
-        handoff.lock().unwrap().clone().unwrap_or_default(),
-    );
-    let ts_for_settle = ts.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("rerun rt");
-        // 出队保护: Drop guard 保证任何退出路径(正常/panic——2026-10-25 真机
-        // block_on 嵌套 panic 曾让段永挂"重转中")都把段移出队列
-        struct RerunOut(u64);
-        impl Drop for RerunOut {
-            fn drop(&mut self) { crate::pipeline::segment_queue::finish_rerun(self.0); }
-        }
-        let _out = RerunOut(seg_id);
-        rt.block_on(async move {
-        let ts = ts_for_settle;
-        let app_settle = app.clone();
-        let emit = move |ev: AsrEvent| match ev {
-            AsrEvent::Partial(_) => {}
-            AsrEvent::Result(raw) => {
-                drop(handoff.lock().unwrap().take());
-                // 结算在独立线程: rerun_settle_ok 里有 tauri::async_runtime::block_on
-                // (LLM 调用), 而 emit 运行在引擎 runtime 的 async 线程——
-                // 在 async 上下文里 block_on 会 panic "Cannot start a runtime
-                // from within a runtime"(tokio 禁止), 真机已炸过一次
-                let app2 = app_settle.clone();
-                let ts2 = ts.clone();
-                std::thread::spawn(move || rerun_settle_ok(&app2, &raw, &ts2));
-            }
-            AsrEvent::NoSpeech(m) => {
-                drop(handoff.lock().unwrap().take());
-                let app2 = app_settle.clone();
-                let ts2 = ts.clone();
-                std::thread::spawn(move || rerun_settle_fail(&app2, &ts2, &format!("重转未识别到内容: {m}")));
-            }
-            AsrEvent::Error(e) => {
-                drop(handoff.lock().unwrap().take());
-                let app2 = app_settle.clone();
-                let ts2 = ts.clone();
-                std::thread::spawn(move || rerun_settle_fail(&app2, &ts2, &format!("重转失败: {e}")));
-            }
-        };
-        let ctx = EngineCtx { api_key, base_url, hotwords };
-        run_engine(provider, ctx, rx, emit).await;
-        // 出队由 _out guard 统一负责(含 panic 路径), 这里不再显式调
-        });
-    });
-}
+// R1 重转编排已归位 pipeline/rerun.rs(批4): 会话驱动用 model::transcribe_session,
+// 业务(入队投影/结算回写/find_by_ts)在 pipeline 域。
 
-/// 引擎分派(spawn_session / spawn_rerun_session 共用)
-async fn run_engine<E: Fn(AsrEvent) + Send + 'static>(provider: String, ctx: EngineCtx, rx: tokio::sync::mpsc::Receiver<Cmd>, emit: E) {
+/// 引擎会话驱动器(spawn_session / rerun 共用)——模型域能力本体:
+/// 按档案分派引擎并跑完整个会话(连接→Feed*→Finish→恰好一次结算), 事件经 on_event 报出。
+/// 批4 起 rerun 编排(pipeline/rerun.rs)也经此驱动, 业务桥由调用方注入。
+pub async fn transcribe_session<E: Fn(AsrEvent) + Send + 'static>(provider: String, ctx: EngineCtx, rx: tokio::sync::mpsc::Receiver<Cmd>, on_event: E) {
     match provider.as_str() {
-        "zhipu" => zhipu::Zhipu.run(ctx, rx, emit).await,
+        "zhipu" => zhipu::Zhipu.run(ctx, rx, on_event).await,
         // 本地网关(local-asr/gateway.py): 无鉴权, 走 base_url;
         // 热词经首帧 context 注入(网关同时用于流式与二遍全句重解)
-        "local" => local::LocalGateway.run(ctx, rx, emit).await,
-        _ => doubao::Doubao.run(ctx, rx, emit).await,
+        "local" => local::LocalGateway.run(ctx, rx, on_event).await,
+        _ => doubao::Doubao.run(ctx, rx, on_event).await,
     }
-}
-
-/// R1: 重转成功结算——词典纠错 → 可选 LLM(失败降级词典版, 与主链路 D1 一致) → 回写条目。
-/// 完成后 bump history 版本(前端轮询刷新)。
-fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
-    let Ok(mut rec) = find_by_ts(app, &ts) else {
-        crate::log::elog(&format!("[rerun] 回写失败: 未找到 ts={ts} 的条目"));
-        return;
-    };
-    // 纠错管线与 Live 结算共用同一实现(llm::refine); 重转无截图(事后屏幕会误导纠错)
-    let cfg = crate::config::get_config(app.clone()).ok();
-    let r = tauri::async_runtime::block_on(crate::model::llm::refine(raw, cfg.as_ref(), None, None));
-    rec.raw = raw.to_string();
-    rec.final_text = r.text;
-    rec.llm_used = r.llm_used;
-    rec.llm_thinking = r.thinking;
-    rec.warning = r.warning.map(|w| format!("重转 {w}, 已用词典纠错版"));
-    match crate::pipeline::history::update_by_ts(app, &ts, &rec) {
-        Ok(()) => {
-            crate::core::bump_history();
-        crate::log::elog(&format!("[rerun] 回写完成 ts={ts} llm_used={}", r.llm_used));
-        }
-        Err(e) => crate::log::elog(&format!("[rerun] 回写失败: {e}")),
-    }
-}
-
-/// R1: 重转失败/未识别结算——原条目加 warning(原文保留, 用户可再试)
-fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
-    if let Ok(mut rec) = find_by_ts(app, ts) {
-        rec.warning = Some(msg.to_string());
-        if let Err(e) = crate::pipeline::history::update_by_ts(app, ts, &rec) {
-            crate::log::elog(&format!("[rerun] 回写失败: {e}"));
-            return;
-        }
-        crate::core::bump_history();
-    }
-    crate::log::elog(&format!("[rerun] {msg} ts={ts}"));
-}
-
-fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::pipeline::history::HistoryRecord, String> {
-    let path = crate::config::data_dir(app).join("history.jsonl");
-    let recs = crate::pipeline::history::read_all_from(&path);
-    if let Some(r) = recs.iter().find(|r| r.ts == ts) {
-        return Ok(r.clone());
-    }
-    // 防御性兜底(真机 2026-10-25 出现过"文件里有这行但强类型解析后找不到"):
-    // 用 Value 逐行匹配 ts, 绕过 HistoryRecord 字段级解析差异; 命中再转强类型
-    if let Ok(raw) = std::fs::read_to_string(&path) {
-        for line in raw.lines() {
-            if !line.contains(ts) { continue; }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if v["ts"].as_str() == Some(ts) {
-                    if let Ok(r) = serde_json::from_str::<crate::pipeline::history::HistoryRecord>(line) {
-                        crate::log::elog("[rerun] 强类型未命中但 Value 兜底命中(版本迁移期字段差异?)");
-                        return Ok(r);
-                    }
-                }
-            }
-        }
-    }
-    let first = recs.first().map(|r| r.ts.clone()).unwrap_or_default();
-    let last = recs.last().map(|r| r.ts.clone()).unwrap_or_default();
-    crate::log::elog(&format!(
-        "[rerun] find_by_ts 未命中: path={} 共{}条 首={} 尾={}",
-        path.display(), recs.len(), first, last
-    ));
-    Err(format!("未找到 ts={ts}"))
 }
 
 pub fn transcribe(
@@ -317,7 +185,7 @@ pub fn transcribe(
                     // worker 串行执行 —— 交付顺序恒等于录音顺序; 同时避免并行段互相结算
                     // 全局单槽的粘贴事务(paste_tx::PENDING)导致前一段只进剪贴板。
                     let ho = handoff.lock().unwrap().take();
-                    let id = crate::pipeline::segment_queue::submit_live(&app, t.clone(), ho);
+                    let id = crate::pipeline::submit_live(&app, t.clone(), ho);
                     crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::core::busy()));
                     ("asr-result", t)
                 }
@@ -329,7 +197,7 @@ pub fn transcribe(
                     let app2 = app.clone();
                     let msg = t.clone();
                     std::thread::spawn(move || {
-                        let _ = crate::pipeline::segment_queue::record_no_speech(&app2, ho, &msg);
+                        let _ = crate::pipeline::record_no_speech(&app2, ho, &msg);
                     });
                     // 提示走 msg 通道(浮窗按一次性提示显示 2.5s), 不走 err(那是失败条)
                     ("asr-nospeech", t)
@@ -340,7 +208,7 @@ pub fn transcribe(
                     let ho = handoff.lock().unwrap().take();
                     let app2 = app.clone();
                     let msg = t.clone();
-                    let id = crate::pipeline::segment_queue::submit_failed(&app2, msg, ho);
+                    let id = crate::pipeline::submit_failed(&app2, msg, ho);
                     crate::log::elog(&format!("[queue] asr-error 失败段入队 id={id}"));
                     ("asr-error", t)
                 }
@@ -349,14 +217,14 @@ pub fn transcribe(
             // 旧写法是各层直接改同一份共享快照, 已全部收敛到 hud 模块的接口。
             match tag {
                 "asr-partial" => crate::core::session_partial(&payload),
-                "asr-nospeech" => crate::ui::hud::no_speech(&app, &payload),
-                "asr-error" => crate::ui::hud::error(&app, &payload),
+                "asr-nospeech" => crate::core::hud_emit(crate::core::HudEvent::NoSpeech(payload.clone())),
+                "asr-error" => crate::core::hud_emit(crate::core::HudEvent::Error(payload.clone())),
                 // asr-result: 队列/阶段由 hud 的 poll 现算, 不需要在这里写状态
                 _ => {}
             }
         };
         let ctx = EngineCtx { api_key, base_url, hotwords };
-        run_engine(provider, ctx, rx, emit).await;
+        transcribe_session(provider, ctx, rx, emit).await;
         });
     });
 }

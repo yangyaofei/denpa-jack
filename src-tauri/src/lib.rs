@@ -94,6 +94,8 @@ pub fn run() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
             }
             ui::tray_events::spawn_tray(app.handle()).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            // 浮窗提示事件泵(批4): capture/model/pipeline 写 core, hud 消费(100ms)
+            ui::hud::start_event_pump(app.handle().clone());
             // 分段转写队列 worker: 松开热键后的后处理全部进队列串行执行
             // (规则与理由见 segment_queue.rs 顶部注释: 顺序保证 + 不丢段 + 失败不阻塞)
             pipeline::segment_queue::start(app.handle().clone());
@@ -128,7 +130,7 @@ pub fn run() {
                     );
                     use tauri::Emitter;
                     let _ = Emitter::emit_to(&h, "main", "permissions", &crate::capture::permissions::all());
-                    crate::ui::hud::notify(&h, &format!("缺少权限: {}", missing.join("、")));
+                    crate::core::hud_emit(crate::core::HudEvent::Notify(format!("缺少权限: {}", missing.join("、"))));
                     if let Some(w) = h.get_webview_window("main") {
                         let _ = w.show();
                         let _ = w.set_focus();

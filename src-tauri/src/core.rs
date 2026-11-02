@@ -162,6 +162,37 @@ pub struct CoreState {
     pub session: SessionState,
     /// 控制域: 版本计数(第 3 步收口)
     pub ctrl: CtrlState,
+    /// 浮窗事件槽(批4): capture/model/pipeline 不再直调 ui——提示类事件进这里,
+    /// hud 自己的泵线程 drain 后分派(延迟≤100ms, 提示类无感)。cap 32 防御性截断。
+    pub hud_events: VecDeque<HudEvent>,
+}
+
+/// 浮窗提示事件(批4 反向通知走 core 的第一批)。
+/// 显隐类(recording_started/ended/hide)仍是同步效果经 ui 门面直调——
+/// 浮窗出现/收起不能滞后, 提示内容变化 100ms 无感, 两类分治。
+pub enum HudEvent {
+    Notify(String),
+    Error(String),
+    NoSpeech(String),
+    /// 交付完成(payload 结构与 hud::delivered 原参数一致)
+    Delivered(serde_json::Value),
+    Polishing,
+}
+
+/// 发一条浮窗提示事件(capture/model/pipeline 调——方向合法: 一律写 core)
+pub fn hud_emit(e: HudEvent) {
+    let mut c = lock();
+    if c.hud_events.len() >= 32 {
+        c.hud_events.pop_front();
+    }
+    c.hud_events.push_back(e);
+    c.version += 1;
+}
+
+/// hud 泵线程专用: 取走全部积压事件
+pub fn hud_drain() -> Vec<HudEvent> {
+    let mut c = lock();
+    c.hud_events.drain(..).collect()
 }
 
 static CORE: Mutex<CoreState> = Mutex::new(CoreState {
@@ -169,6 +200,7 @@ static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     queue: QueueState { items: VecDeque::new(), next_id: 1 },
     session: SessionState { recording: false, level: 0, partial: String::new() },
     ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
+    hud_events: VecDeque::new(),
 });
 
 /// 取 core 锁(中毒时取出数据继续——见模块头"锁中毒策略")

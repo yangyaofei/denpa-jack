@@ -93,7 +93,6 @@ pub fn start(app: tauri::AppHandle) {
         // 3) 回写: 成功出队; 失败保留(可重试), 并把音频与原文补进历史(不丢段)。
         //    失败留痕由这里统一写(pipeline 交付失败不再自写历史——修双写, 审核a-6)
         let mut fail_record: Option<(String, String, bool, crate::pipeline::SessionHandoff, String)> = None;
-        let mut esc_check = false;
         {
             let mut c = crate::core::lock();
             if let Some(pos) = c.queue.items.iter().position(|s| s.id == id) {
@@ -101,9 +100,6 @@ pub fn start(app: tauri::AppHandle) {
                     WorkOutcome::Done => {
                         c.queue.items.remove(pos);
                         c.version += 1;
-                        // R2: 段终态后可能要收 Esc 监听(取消窗口=到交付完成)。
-                        // 判断放临界区外(esc_maybe_end 自己加锁读队列与录音态)
-                        esc_check = true;
                     }
                     WorkOutcome::Failed { reason, final_text, llm_used } => {
                         let s = &mut c.queue.items[pos];
@@ -122,9 +118,8 @@ pub fn start(app: tauri::AppHandle) {
             let p = record_failed(&app, &raw, &final_text, llm_used, &ho, &reason);
             log_debug(&format!("后处理失败已入历史 audio={:?}", p));
         }
-        if esc_check {
-            crate::capture::recording::esc_maybe_end();
-        }
+        // R2+批4: Esc 收窗不再由 pipeline 反调 capture——监听线程自查 core
+        // (busy/recording 归静后 200ms 内自关), 见 capture/key.rs esc_listen_begin
         log_debug("队列状态变化");
     });
 }
@@ -290,8 +285,7 @@ pub fn record_no_speech(
     };
     crate::pipeline::history::append(app, &rec);
     log_debug("空转写已入历史(不进队列)");
-    // R2: NoSpeech 也是段终态(不进队列)——收 Esc 监听(统一判据: 队列无活+不在录)
-    crate::capture::recording::esc_maybe_end();
+    // R2+批4: NoSpeech 也是段终态(不进队列)——Esc 收窗由监听线程自查 core, 此处不再反调
     audio
 }
 

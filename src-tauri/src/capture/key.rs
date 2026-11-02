@@ -39,6 +39,12 @@ pub fn esc_listen_begin() {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     *ESC_STOP.lock().unwrap() = Some(stop_tx);
     std::thread::spawn(move || {
+        // R2+批4: 关窗判据自查化——监听窗生命周期由本线程看 core 状态决定:
+        // 见过活跃(录音或队列有活)之后, 一旦"既没在录音, 队列也没活"即自行收窗。
+        // (原来是 pipeline 段终态反向调 capture::esc_maybe_end, 批4 消除反向依赖;
+        //   自查周期 200ms, 比显式调用晚一点, 但 Esc 命中后 idle 分支本就是空操作)
+        let mut saw_active = false;
+        let mut tick: u32 = 0;
         loop {
             if stop_rx.try_recv().is_ok() {
                 break;
@@ -52,8 +58,19 @@ pub fn esc_listen_begin() {
                     crate::send_cancel();
                 }
             }
+            tick += 1;
+            if tick % 20 == 0 {
+                let active = crate::core::busy() || crate::core::session_recording();
+                if active {
+                    saw_active = true;
+                } else if saw_active {
+                    break; // 活跃过后归于平静 → 收窗(等价旧 esc_maybe_end)
+                }
+            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // 自查退出与显式 esc_listen_end 同一清理: 清空单槽(幂等, 槽可能已被 end 清过)
+        *ESC_STOP.lock().unwrap() = None;
         crate::log::elog("[shortcut] Esc 监听退出");
     });
     crate::log::elog("[shortcut] Esc 监听开始");

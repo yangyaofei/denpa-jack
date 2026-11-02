@@ -88,7 +88,7 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
                 if silent_frames == 21 && !warned {
                     warned = true;
                     crate::log::log(&app, "录音中静音提醒: 已连续 2.5s 无输入电平");
-                    crate::ui::hud::notify(&app, "⚠️ 还没听到声音");
+                    crate::core::hud_emit(crate::core::HudEvent::Notify("⚠️ 还没听到声音".into()));
                 }
             } else {
                 silent_frames = 0;
@@ -110,7 +110,7 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
         }
         log::log(&app, "B5: 录音超长, 发自动截断信号(走协调器)");
         crate::send_autostop();
-        crate::ui::hud::notify(&app, "⚠️ 录音已达上限, 自动截断");
+        crate::core::hud_emit(crate::core::HudEvent::Notify("⚠️ 录音已达上限, 自动截断".into()));
     });
 }
 
@@ -133,8 +133,8 @@ fn session_cleanup(app: &tauri::AppHandle, cue: Option<crate::capture::feedback:
 ///
 /// 位置规则不变（屏幕底部居中，按 overlay_position），只是"哪块屏"跟随目标窗口，
 /// 不再跟随鼠标——多屏时浮窗和截图不会再指向两个不同的东西。
-fn show_recording_ui(app: &tauri::AppHandle, display: &crate::ui::overlay::DisplayTarget) {
-    crate::ui::hud::recording_started(app, display);
+fn show_recording_ui(app: &tauri::AppHandle, display: &crate::ui::DisplayTarget) {
+    crate::ui::recording_started(app, display);
 }
 
 // 试音三命令已归位 commands.rs(装配壳): command 是 Tauri 装配层概念, 域内只留状态机。
@@ -161,7 +161,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             "[perm] 录音被拒绝: 麦克风未授权({})",
             crate::capture::permissions::mic_status_text()
         ));
-        crate::ui::hud::notify(&app, msg);
+        crate::core::hud_emit(crate::core::HudEvent::Notify(msg.into()));
         return Err(msg.into());
     }
     let mic = audio::resolve_mic(&app, &mut cfg);
@@ -255,7 +255,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         spawn_max_timer(app.clone(), secs, cancel);
     }
     log::log(&app, &format!("录音开始 engine={} mic={:?}", profile.provider, mic_name));
-    crate::ui::tray_events::refresh_status(&app);
+    crate::ui::refresh_status(&app);
     if cfg.audio_feedback {
         crate::capture::feedback::play_on_main(&app, crate::capture::feedback::Cue::Start);
     }
@@ -301,7 +301,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
         let _ = cmd_tx.try_send(model::Cmd::Abort);
         session_cleanup(&app, None);
-        crate::ui::hud::hide(&app);
+        crate::ui::dismiss(&app);
         log::log(&app, &format!("录音太短已丢弃 {}ms", ho.duration_ms));
         return Err("录音太短已丢弃".into());
     }
@@ -315,21 +315,21 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
-        crate::ui::hud::error(&app, "引擎会话异常中断");
+        crate::core::hud_emit(crate::core::HudEvent::Error("引擎会话异常中断".into()));
     }
     session_cleanup(&app, Some(crate::capture::feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
     // 松手 = 告诉 HUD 一个事实:"这一条录完了"。阶段/文案/延时全部由 HUD 自己决定;
     // 这里不再直接改快照, 也不再重复 show 窗口(重复 show 就是用户看到的"瞬间消失再出现")。
-    crate::ui::hud::recording_ended(&app);
-    crate::ui::tray_events::refresh_status(&app);
+    crate::ui::recording_ended(&app);
+    crate::ui::refresh_status(&app);
     Ok(())
 }
 
 /// R2: 取消最近一个在途段(排队/转写中)。多段在途时只取消最新一段——
 /// 浮窗当前显示的就是它; 连按 Esc 逐段往回取消。无在途段时 no-op。
 /// 标记进 CANCELLED_GENS, 消费由 post_process 两道闸完成(短路或拦交付)。
-pub fn ctrl_cancel_queued(app: &tauri::AppHandle) -> Result<(), String> {
+pub fn ctrl_cancel_queued(_app: &tauri::AppHandle) -> Result<(), String> {
     let gen = {
         let c = crate::core::lock();
         c.queue
@@ -348,7 +348,7 @@ pub fn ctrl_cancel_queued(app: &tauri::AppHandle) -> Result<(), String> {
     };
     crate::pipeline::mark_cancelled(gen);
     log::elog(&format!("[queue] Esc: 已标记取消段 gen={gen}"));
-    crate::ui::hud::notify(app, "已取消");
+    crate::core::hud_emit(crate::core::HudEvent::Notify("已取消".into()));
     Ok(())
 }
 
@@ -386,9 +386,9 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
         crate::model::cancel_current(app);
     }
     session_cleanup(app, None);
-    crate::ui::hud::notify(app, "已取消");
-    crate::ui::hud::hide(app);
-    crate::ui::tray_events::refresh_status(app);
+    crate::core::hud_emit(crate::core::HudEvent::Notify("已取消".into()));
+    crate::ui::dismiss(app);
+    crate::ui::refresh_status(app);
     log::log(app, "录音取消(esc)");
     Ok(())
 }
