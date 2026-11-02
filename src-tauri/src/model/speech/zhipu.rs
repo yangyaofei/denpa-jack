@@ -102,7 +102,7 @@ fn json_to_str(v: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::AsrEngine;
+    use crate::model::speech::AsrEngine;
 
     #[tokio::test]
     async fn short_audio_is_nospeech_not_error() {
@@ -125,7 +125,7 @@ mod tests {
 /// PCM(16k mono i16) → WAV(RIFF 44B 头)
 pub fn wrap_wav(pcm: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(44 + pcm.len());
-    out.extend_from_slice(&crate::history::wav_header(pcm.len()));
+    out.extend_from_slice(&crate::pipeline::history::wav_header(pcm.len()));
     out.extend_from_slice(pcm);
     out
 }

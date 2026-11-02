@@ -5,9 +5,9 @@
 //   VOICEMAC_AUTOTEST=quit        2 秒后走正常退出路径(验证"正常退出"标记与会话文件清理)
 use tauri::{AppHandle, Manager};
 
-use crate::engine;
+use crate::model::speech;
 use crate::log;
-use crate::history::wav_data_chunk;
+use crate::pipeline::history::wav_data_chunk;
 use crate::AppState;
 
 pub fn maybe_spawn(app: &AppHandle) {
@@ -65,7 +65,7 @@ pub fn maybe_spawn(app: &AppHandle) {
 fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        match crate::engine::resolve_asr(cfg) {
+        match crate::model::speech::resolve_asr(cfg) {
             Ok(x) => return Ok(x),
             Err(e) => {
                 let msg = e.to_string();
@@ -116,27 +116,27 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
                 return;
             }
         };
-        let (tx, rx) = tokio::sync::mpsc::channel::<engine::Cmd>(64);
-        let handoff: crate::engine::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
-        crate::engine::spawn_session(
+        let (tx, rx) = tokio::sync::mpsc::channel::<speech::Cmd>(64);
+        let handoff: crate::model::speech::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
+        crate::model::speech::spawn_session(
             app.clone(),
             profile.provider.clone(),
             key,
             profile.base_url.clone(),
-            crate::dict::budget_hotwords(&cfg.dict),
+            crate::model::dict::budget_hotwords(&cfg.dict),
             handoff.clone(),
             rx,
         );
         app.state::<std::sync::Mutex<AppState>>().lock().unwrap().engine_mirror = Some(tx.clone());
         for (i, chunk) in pcm.chunks(6400).enumerate() {
             log::elog(&format!("[at] 段{} feed #{}", idx + 1, i + 1));
-            let _ = tx.try_send(engine::Cmd::Feed(chunk.to_vec()));
+            let _ = tx.try_send(speech::Cmd::Feed(chunk.to_vec()));
             if feed_ms > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(feed_ms));
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let _ = tx.try_send(engine::Cmd::Finish);
+        let _ = tx.try_send(speech::Cmd::Finish);
         log::log(&app, &format!("AUTOTEST-FILES: 第 {} 段 fed+finish", idx + 1));
         std::thread::sleep(std::time::Duration::from_millis(400));
     }
@@ -187,15 +187,15 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             // 自建会话: resolve→spawn→mirror, 与 ctrl_start 完全隔离(无双输入)
             use tauri::Manager;
             let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
-            let (profile, key) = match crate::engine::resolve_asr(&cfg) {
+            let (profile, key) = match crate::model::speech::resolve_asr(&cfg) {
                 Ok(x) => x,
                 Err(e) => { log::log(&app, &format!("AUTOTEST-FILE: resolve 失败: {e}")); app.exit(1); return; }
             };
-            let (tx, rx) = tokio::sync::mpsc::channel::<engine::Cmd>(64);
-            let handoff: crate::engine::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
-            crate::engine::spawn_session(
+            let (tx, rx) = tokio::sync::mpsc::channel::<speech::Cmd>(64);
+            let handoff: crate::model::speech::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
+            crate::model::speech::spawn_session(
                 app.clone(), profile.provider.clone(), key, profile.base_url.clone(),
-                crate::dict::budget_hotwords(&cfg.dict), handoff.clone(), rx,
+                crate::model::dict::budget_hotwords(&cfg.dict), handoff.clone(), rx,
             );
             {
                 let st = app.state::<std::sync::Mutex<AppState>>();
@@ -203,11 +203,11 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             }
             for (i, chunk) in pcm.chunks(6400).enumerate() {
                 log::elog(&format!("[at] feed #{}", i + 1));
-                let _ = tx.try_send(engine::Cmd::Feed(chunk.to_vec()));
+                let _ = tx.try_send(speech::Cmd::Feed(chunk.to_vec()));
                 std::thread::sleep(std::time::Duration::from_millis(190));
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
-            let _ = tx.try_send(engine::Cmd::Finish);
+            let _ = tx.try_send(speech::Cmd::Finish);
             log::log(&app, "AUTOTEST-FILE: fed+finish");
             // 交付期间 engine_mirror 保留给 pipeline 可用(pipeline 不用 mirror, 无碍)
             std::thread::sleep(std::time::Duration::from_millis(15000));
@@ -351,7 +351,7 @@ fn run_ui_chain(app: tauri::AppHandle) {
     let disk_lines = std::fs::read_to_string(&jsonl)
         .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
-    let got = crate::history::recent(&app, 500);
+    let got = crate::pipeline::history::recent(&app, 500);
     let expect = disk_lines.min(500);
     crate::log::elog(&format!("[ui-chain] history: 函数返回 {} 条, 磁盘 {} 行(比较基准 {})", got.len(), disk_lines, expect));
     assert_eq!(got.len(), expect, "recent() 与 history.jsonl 行数不一致");
@@ -369,15 +369,15 @@ fn run_ui_chain(app: tauri::AppHandle) {
     // 3) 实时性: append→版本递增→recent 立即可见(pipeline 交付后前端 800ms 轮询的实际数据源)
     //    (旧的"poll_versions 递增"测试项是 fetch_add(0) 空操作假测试, 已删——版本断言由
     //     commands::gap_tests::poll_versions_reflects_history_and_config_counters 覆盖)
-    let v0 = crate::history::history_version();
-    let probe = crate::history::HistoryRecord {
+    let v0 = crate::pipeline::history::history_version();
+    let probe = crate::pipeline::history::HistoryRecord {
         ts: "PROBE".into(), engine: "uitest".into(), raw: "实时性探针".into(),
         final_text: "实时性探针".into(), llm_used: false, delivered: "test".into(),
         audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
     };
-    crate::history::append(&app, &probe);
-    let v1 = crate::history::history_version();
-    let visible = crate::history::recent(&app, 3).iter().any(|r| r.ts == "PROBE");
+    crate::pipeline::history::append(&app, &probe);
+    let v1 = crate::pipeline::history::history_version();
+    let visible = crate::pipeline::history::recent(&app, 3).iter().any(|r| r.ts == "PROBE");
     crate::log::elog(&format!("[ui-chain] 实时性: 版本 {}→{} 探针可见={}", v0, v1, visible));
     assert!(v1 > v0 && visible, "append 后版本未递增或 recent 不可见");
     // 清理探针行(重写 jsonl)
@@ -497,7 +497,7 @@ fn run_update_chain(app: tauri::AppHandle) {
         return;
     };
     rt.block_on(async {
-        match crate::update::update_check(app.clone()).await {
+        match crate::ui::update::update_check(app.clone()).await {
             Ok(Some(info)) => {
                 crate::log::elog(&format!(
                     "[update-chain] 有新版本 {} (当前 {}) date={:?}",
@@ -505,7 +505,7 @@ fn run_update_chain(app: tauri::AppHandle) {
                 ));
                 if do_install {
                     crate::log::elog("[update-chain] 开始安装（成功后进程会重启）");
-                    match crate::update::update_install(app.clone()).await {
+                    match crate::ui::update::update_install(app.clone()).await {
                         Ok(()) => crate::log::elog("[update-chain] install 返回（通常不会到这里）"),
                         Err(e) => {
                             crate::log::elog(&format!("[update-chain] FAIL: 安装失败 {e}"));

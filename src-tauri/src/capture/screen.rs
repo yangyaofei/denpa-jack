@@ -389,7 +389,7 @@ fn display_scale_for_center(displays: &NSArray<SCDisplay>, cx: f64, cy: f64) -> 
             && cy >= f.origin.y
             && cy <= f.origin.y + f.size.height
         {
-            return crate::overlay::display_scale(unsafe { d.displayID() });
+            return crate::ui::overlay::display_scale(unsafe { d.displayID() });
         }
     }
     2.0
@@ -444,7 +444,7 @@ fn write_png(img: &CGImage, path: &Path) -> Result<(), String> {
 /// 全程有超时（枚举 5s、截图 5s），不会像外部进程那样无限期挂住。
 fn capture_with_sck(
     path: &Path,
-    target: &crate::active_target::ActiveTarget,
+    target: &crate::capture::active_target::ActiveTarget,
     use_window: bool,
 ) -> Result<String, String> {
     let (tx, rx) = mpsc::channel::<Result<String, String>>();
@@ -498,7 +498,7 @@ fn capture_with_sck(
                         )
                     };
                     let cfg = unsafe { SCStreamConfiguration::new() };
-                    let scale = crate::overlay::display_scale(dt.id);
+                    let scale = crate::ui::overlay::display_scale(dt.id);
                     unsafe {
                         cfg.setWidth((dt.size.0 * scale).round().max(1.0) as usize);
                         cfg.setHeight((dt.size.1 * scale).round().max(1.0) as usize);
@@ -543,7 +543,7 @@ fn capture_with_sck(
 pub fn capture(
     dir: &Path,
     tag: &str,
-    target: &crate::active_target::ActiveTarget,
+    target: &crate::capture::active_target::ActiveTarget,
     mode: ShotTarget,
 ) -> Result<Shot, String> {
     if mode == ShotTarget::Off {
@@ -601,7 +601,7 @@ pub fn data_url_prefix(data_url: &str) -> String {
 /// 权限预检/落盘/清理/指纹日志都是截图域的事; 会话域只消费槽。
 pub fn spawn_session_capture(
     app: &tauri::AppHandle,
-    target: &crate::active_target::ActiveTarget,
+    target: &crate::capture::active_target::ActiveTarget,
     cfg_target: &str,
 ) -> std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>> {
     let slot: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>> =
@@ -685,7 +685,7 @@ pub fn prune(dir: &Path, keep: usize) {
 pub fn capture_and_prune(
     data_dir: &Path,
     tag: &str,
-    target: &crate::active_target::ActiveTarget,
+    target: &crate::capture::active_target::ActiveTarget,
     mode: ShotTarget,
 ) -> Result<Shot, String> {
     let dir = data_dir.join(DIR_NAME);
@@ -773,8 +773,8 @@ mod tests {
     #[test]
     fn capture_fails_gracefully_on_bad_dir() {
         // 目录不可创建时返回 Err 而不是 panic（调用方据此退回纯文本）
-        let target = crate::active_target::ActiveTarget {
-            display: crate::overlay::DisplayTarget {
+        let target = crate::capture::active_target::ActiveTarget {
+            display: crate::ui::overlay::DisplayTarget {
                 index: 1,
                 id: 1,
                 origin: (0.0, 0.0),

@@ -1,4 +1,31 @@
+//! pipeline 域：流程编排——识别之后到落屏之间的一切（docs/ARCHITECTURE.md 四域之一）。
+//!
+//! 门面（外部只许经 pipeline:: 调这些）：
+//!   - submit_live / enqueue_* — 段入流程（Live 主链路）
+//!   - cancel_latest / mark_cancelled — 取消在途段
+//!   - post_process — 结算总装（由 flow 消费调用）
+//!   - delivery::ax_insert / paste_tx / cg_cmd_key — 落屏动作（域内自由, 外部经 pipeline::）
+//!   - history::recent / read_all / update_by_ts / rerun — 历史与重放
+//!   - 类型 SessionHandoff / SegView(core 出)
+//!
+//! 内部（域外不可见，改组不影响调用方）：
+//!   - mod.rs — 会话交接+结算总装(post_process)+取消代
+//!   - segment_queue.rs — 段队列(FIFO 编排, Live/Rerun 统一)
+//!   - delivery/ — AX 直写/键击/粘贴事务（动作, 感知在 capture::focus）
+//!   - history.rs — JSONL 存储+重放+重跑
+//!
+//! 禁止：感知环境（焦点/麦克风来自 capture 传入）；直接操作窗口（展示交 ui）。
 // 后处理链: asr-result → 词典纠错 → 可选 LLM → 剪贴板/粘贴 → 历史 → asr-final
+pub mod delivery;
+pub mod history;
+pub mod segment_queue;
+
+// 批2 路径约定: 外部经 crate::pipeline::<子模块>::<符号>(如 pipeline::segment_queue)。
+// 批3 门面收口时改为 crate::pipeline::submit_live 直达意图符号。
+pub use delivery::ax::ax_insert;
+pub use delivery::paste::{reliable_paste, ClipboardSnapshot};
+pub use segment_queue::*;
+
 use crate::config::Config;
 
 /// 会话交接数据(由 RecordingSession 产生, 随 Result 事件流入)——会话级状态不进全局
@@ -82,7 +109,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             .map(|c| if ho.engine.is_empty() { c.active_asr_id.clone() } else { ho.engine.clone() })
             .unwrap_or_else(|| ho.engine.clone());
         crate::log::elog("[pipeline] 会话已被取消(esc): 队列段短路, 只入历史");
-        crate::history::append(&app, &crate::history::HistoryRecord {
+        crate::pipeline::history::append(&app, &crate::pipeline::history::HistoryRecord {
             llm_thinking: None,
             ts: now_local_pub(),
             engine: engine_name,
@@ -102,7 +129,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             let msg = format!("配置读取失败: {e}");
             let payload = serde_json::json!({"raw": raw, "final": raw, "llm_used": false, "warning": msg});
             // 交付完成只"报事实"给 HUD(它自己决定是否采纳——录音中不覆盖当前回显)
-            crate::hud::delivered(&app, payload);
+            crate::ui::hud::delivered(&app, payload);
             return Outcome::Failed { reason: msg, final_text: raw, llm_used: false };
         }
     };
@@ -112,7 +139,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             "raw": raw, "final": "", "llm_used": false, "delivered": "none",
             "warning": "未识别到语音内容",
         });
-        crate::hud::delivered(&app, payload);
+        crate::ui::hud::delivered(&app, payload);
         return Outcome::NoSpeech;
     }
 
@@ -120,8 +147,8 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 
     // 1+2) 纠错管线(词典→可选 LLM→降级词典版): llm::refine 是唯一实现,
     // 重转/自测与这里共用同一根管线。HUD 的"润色中"广播是编排职责, 留在这里。
-    crate::hud::polishing(&app);
-    let refined = tauri::async_runtime::block_on(crate::llm::refine(
+    crate::ui::hud::polishing(&app);
+    let refined = tauri::async_runtime::block_on(crate::model::llm::refine(
         &raw,
         Some(&cfg),
         None,
@@ -162,7 +189,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     //    rerun 会话自带 audio_path(原始音频), 保留优先, 不被新落盘覆盖。
     let raw_for_payload = raw.clone();
     if delivered != "failed" {
-        let rec = crate::history::HistoryRecord {
+        let rec = crate::pipeline::history::HistoryRecord {
             llm_thinking: history_thinking.clone(),
             ts: now_local_pub(),
             engine: if ho.engine.is_empty() { cfg.active_asr_id.clone() } else { ho.engine.clone() },
@@ -182,7 +209,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
         let ho_pcm = ho.pcm.clone();
         std::thread::spawn(move || {
             let disk_path = if !ho_pcm.is_empty() {
-                let p = crate::history::save_wav(&app2, &ho_pcm);
+                let p = crate::pipeline::history::save_wav(&app2, &ho_pcm);
                 if let Some(ref path) = p {
                     use tauri::Manager;
                     app2.state::<std::sync::Mutex<crate::AppState>>()
@@ -196,10 +223,10 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             if rec.audio_path.is_empty() {
                 rec.audio_path = disk_path.unwrap_or_default();
             }
-            crate::history::append(&app2, &rec);
-            crate::history::enforce_limit(&app2, hist_limit);
+            crate::pipeline::history::append(&app2, &rec);
+            crate::pipeline::history::enforce_limit(&app2, hist_limit);
             if !ho_pcm.is_empty() {
-                crate::history::prune_recordings(&app2, keep);
+                crate::pipeline::history::prune_recordings(&app2, keep);
             }
             crate::log::elog(&format!(
                 "[pipeline] delivered={} history appended audio={}",
@@ -215,7 +242,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     });
     // 交付结束 = 报事实给 HUD: 它会清掉阶段并带上交付载荷; 若此刻正在录新一段,
     // 它不采纳(不会把新一段的回显清掉——旧实现在这里无条件 clear, 就是用户看到的"内容消失又重新出现")。
-    crate::hud::delivered(&app, fin_payload);
+    crate::ui::hud::delivered(&app, fin_payload);
     // 托盘复位交给队列统一处理(队列里可能还有别的段在排队/转写)
     if delivered == "failed" {
         Outcome::Failed {
@@ -241,7 +268,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     ));
     // D3: 原剪贴板快照必须在第一次写剪贴板之前取——粘贴回执后的"恢复"恢复的是这份,
     // 旧实现在 reliable_paste 内部快照, 读到的是已写入的转写文本, 恢复=没恢复。
-    let saved = crate::delivery::paste::ClipboardSnapshot::take(app);
+    let saved = crate::pipeline::delivery::paste::ClipboardSnapshot::take(app);
     // 焦点是本 app(设置窗等) → 只复制, 粘贴到自身无意义
     if focus.bundle.as_deref() == Some(crate::config::APP_ID) {
         app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
@@ -262,7 +289,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         ));
     }
     if !clipboard_only && focus_ok && !ax_skip {
-        match crate::delivery::ax_insert(text) {
+        match crate::pipeline::delivery::ax_insert(text) {
             Ok(()) => return Ok("pasted-ax".into()),
             Err(e) => crate::log::elog(&format!("[deliver] ax_insert 失败: {e}")),
         }
@@ -280,7 +307,7 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
     let text2 = text.to_string();
     let saved2 = saved;
     let r = app.run_on_main_thread(move || {
-        let _ = crate::delivery::paste::reliable_paste(&text2, &app2_h, &cfg_h, saved2);
+        let _ = crate::pipeline::delivery::paste::reliable_paste(&text2, &app2_h, &cfg_h, saved2);
     });
     if r.is_err() {
         // 审计#11: 兜底也先写文本再注入(Handy clipboard.rs:74 注入失败路径同样先写)
@@ -302,7 +329,7 @@ fn ax_paste_only(apps: &[String], bundle: Option<&str>) -> bool {
 /// 模拟 Cmd+V —— CGEvent 直发(线程安全; enigo 内部走 HIToolbox 输入法 API
 /// 有主线程 dispatch_assert_queue 断言, 后台线程调用直接 SIGTRAP——C39 崩溃实锤)
 fn paste_cmd_v() -> Result<(), String> {
-    crate::delivery::cg_cmd_key(0x09) // kVK_ANSI_V
+    crate::pipeline::delivery::cg_cmd_key(0x09) // kVK_ANSI_V
 }
 
 pub fn now_local_pub() -> String {

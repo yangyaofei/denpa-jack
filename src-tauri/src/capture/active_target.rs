@@ -10,8 +10,8 @@
 //! 3. **鼠标下也没有窗口**：没有主窗口；显示器 = 指针所在屏
 //!
 //! 因此：`display` 一定有值；`window` 可能为 None（桌面/本应用/过小窗口/无焦点）。
-use crate::overlay::{self, DisplayTarget};
-use crate::screen_context::WindowRef;
+use crate::ui::overlay::{self, DisplayTarget};
+use crate::capture::screen::WindowRef;
 
 #[derive(Clone)]
 pub struct ActiveTarget {
@@ -24,7 +24,7 @@ pub struct ActiveTarget {
 /// 探测当前活动目标（每次用时探测一次，截图与浮窗共用同一个结果）
 pub fn detect_active_target() -> ActiveTarget {
     // 1. 光标：键盘焦点所在窗口（AX 焦点元素 → 窗口框 → CG 窗口列表匹配）
-    if let Some(w) = crate::screen_context::focused_window() {
+    if let Some(w) = crate::capture::screen::focused_window() {
         let display = display_of_window(&w);
         return ActiveTarget {
             display,
@@ -36,7 +36,7 @@ pub fn detect_active_target() -> ActiveTarget {
     let display = cursor
         .and_then(overlay::display_target_at)
         .unwrap_or_else(overlay::main_display_target);
-    let window = cursor.and_then(crate::screen_context::window_at);
+    let window = cursor.and_then(crate::capture::screen::window_at);
     ActiveTarget { display, window }
 }
 

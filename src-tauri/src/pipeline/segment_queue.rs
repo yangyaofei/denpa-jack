@@ -123,7 +123,7 @@ pub fn start(app: tauri::AppHandle) {
             log_debug(&format!("后处理失败已入历史 audio={:?}", p));
         }
         if esc_check {
-            crate::recording::esc_maybe_end();
+            crate::capture::recording::esc_maybe_end();
         }
         log_debug("队列状态变化");
     });
@@ -227,14 +227,14 @@ fn record_failed(
     use tauri::Manager;
     let mut audio = ho.audio_path.clone();
     if !ho.pcm.is_empty() {
-        if let Some(p) = crate::history::save_wav(app, &ho.pcm) {
+        if let Some(p) = crate::pipeline::history::save_wav(app, &ho.pcm) {
             app.state::<std::sync::Mutex<crate::AppState>>().lock().unwrap().last_audio = Some(p.clone());
             audio = Some(p);
         }
     }
     let keep = crate::config::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
-    crate::history::prune_recordings(app, keep);
-    let rec = crate::history::HistoryRecord {
+    crate::pipeline::history::prune_recordings(app, keep);
+    let rec = crate::pipeline::history::HistoryRecord {
         ts: crate::pipeline::now_local_pub(),
         engine: ho.engine.clone(),
         raw: raw.to_string(),
@@ -246,7 +246,7 @@ fn record_failed(
         duration_ms: ho.duration_ms,
         llm_thinking: None,
     };
-    crate::history::append(app, &rec);
+    crate::pipeline::history::append(app, &rec);
     audio
 }
 
@@ -263,14 +263,14 @@ pub fn record_no_speech(
     let ho = ho.unwrap_or_default();
     let mut audio = ho.audio_path.clone();
     if !ho.pcm.is_empty() {
-        if let Some(p) = crate::history::save_wav(app, &ho.pcm) {
+        if let Some(p) = crate::pipeline::history::save_wav(app, &ho.pcm) {
             app.state::<std::sync::Mutex<crate::AppState>>().lock().unwrap().last_audio = Some(p.clone());
             audio = Some(p);
         }
     }
     let keep = crate::config::get_config(app.clone()).map(|c| c.keep_audio_count.max(1) as usize).unwrap_or(20);
-    crate::history::prune_recordings(app, keep);
-    let rec = crate::history::HistoryRecord {
+    crate::pipeline::history::prune_recordings(app, keep);
+    let rec = crate::pipeline::history::HistoryRecord {
         ts: crate::pipeline::now_local_pub(),
         engine: ho.engine.clone(),
         raw: String::new(),
@@ -282,10 +282,10 @@ pub fn record_no_speech(
         duration_ms: ho.duration_ms,
         llm_thinking: None,
     };
-    crate::history::append(app, &rec);
+    crate::pipeline::history::append(app, &rec);
     log_debug("空转写已入历史(不进队列)");
     // R2: NoSpeech 也是段终态(不进队列)——收 Esc 监听(统一判据: 队列无活+不在录)
-    crate::recording::esc_maybe_end();
+    crate::capture::recording::esc_maybe_end();
     audio
 }
 
@@ -345,9 +345,9 @@ pub fn clear(app: &tauri::AppHandle) -> usize {
     let n = dropped.len();
     for s in dropped {
         if !s.ho.pcm.is_empty() {
-            let _ = crate::history::save_wav(app, &s.ho.pcm);
+            let _ = crate::pipeline::history::save_wav(app, &s.ho.pcm);
         }
-        let rec = crate::history::HistoryRecord {
+        let rec = crate::pipeline::history::HistoryRecord {
             ts: crate::pipeline::now_local_pub(),
             engine: s.ho.engine.clone(),
             raw: s.raw.clone(),
@@ -359,7 +359,7 @@ pub fn clear(app: &tauri::AppHandle) -> usize {
             duration_ms: s.ho.duration_ms,
             llm_thinking: None,
         };
-        crate::history::append(app, &rec);
+        crate::pipeline::history::append(app, &rec);
     }
     log_debug("清空队列");
     n

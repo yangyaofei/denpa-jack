@@ -67,10 +67,10 @@ pub fn settle(emit: &impl Fn(AsrEvent), text: &str) {
 pub fn resolve_asr(cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
     // 不占档案列表、零配置, 地址来自 gateway 登记的随机端口(联动)
-    if cfg.active_asr_id == crate::engine::gateway::BUILTIN_ID {
-        let base = crate::engine::gateway::builtin_base_url()?;
+    if cfg.active_asr_id == crate::model::speech::gateway::BUILTIN_ID {
+        let base = crate::model::speech::gateway::builtin_base_url()?;
         let p = crate::config::AsrProfile {
-            id: crate::engine::gateway::BUILTIN_ID.into(),
+            id: crate::model::speech::gateway::BUILTIN_ID.into(),
             name: "内置本地引擎".into(),
             provider: "local".into(),
             api_key: String::new(),
@@ -154,7 +154,7 @@ pub fn spawn_rerun_session(
     // 状态推进全收在本会话: 入队→结算→出队, 投影端(HUD/主窗)从 core 看全程。
     // ts 走显式参数(rerun_ts 字段), audio_path 回归纯语义(wav 路径)——
     // 不再用 R1 时期的 audio_path 双关
-    let seg_id = crate::segment_queue::enqueue_rerun(
+    let seg_id = crate::pipeline::segment_queue::enqueue_rerun(
         &ts,
         handoff.lock().unwrap().clone().unwrap_or_default(),
     );
@@ -168,7 +168,7 @@ pub fn spawn_rerun_session(
         // block_on 嵌套 panic 曾让段永挂"重转中")都把段移出队列
         struct RerunOut(u64);
         impl Drop for RerunOut {
-            fn drop(&mut self) { crate::segment_queue::finish_rerun(self.0); }
+            fn drop(&mut self) { crate::pipeline::segment_queue::finish_rerun(self.0); }
         }
         let _out = RerunOut(seg_id);
         rt.block_on(async move {
@@ -226,13 +226,13 @@ fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
     };
     // 纠错管线与 Live 结算共用同一实现(llm::refine); 重转无截图(事后屏幕会误导纠错)
     let cfg = crate::config::get_config(app.clone()).ok();
-    let r = tauri::async_runtime::block_on(crate::llm::refine(raw, cfg.as_ref(), None, None));
+    let r = tauri::async_runtime::block_on(crate::model::llm::refine(raw, cfg.as_ref(), None, None));
     rec.raw = raw.to_string();
     rec.final_text = r.text;
     rec.llm_used = r.llm_used;
     rec.llm_thinking = r.thinking;
     rec.warning = r.warning.map(|w| format!("重转 {w}, 已用词典纠错版"));
-    match crate::history::update_by_ts(app, &ts, &rec) {
+    match crate::pipeline::history::update_by_ts(app, &ts, &rec) {
         Ok(()) => {
             crate::core::bump_history();
         crate::log::elog(&format!("[rerun] 回写完成 ts={ts} llm_used={}", r.llm_used));
@@ -245,7 +245,7 @@ fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
 fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
     if let Ok(mut rec) = find_by_ts(app, ts) {
         rec.warning = Some(msg.to_string());
-        if let Err(e) = crate::history::update_by_ts(app, ts, &rec) {
+        if let Err(e) = crate::pipeline::history::update_by_ts(app, ts, &rec) {
             crate::log::elog(&format!("[rerun] 回写失败: {e}"));
             return;
         }
@@ -254,9 +254,9 @@ fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
     crate::log::elog(&format!("[rerun] {msg} ts={ts}"));
 }
 
-fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::history::HistoryRecord, String> {
+fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::pipeline::history::HistoryRecord, String> {
     let path = crate::config::data_dir(app).join("history.jsonl");
-    let recs = crate::history::read_all_from(&path);
+    let recs = crate::pipeline::history::read_all_from(&path);
     if let Some(r) = recs.iter().find(|r| r.ts == ts) {
         return Ok(r.clone());
     }
@@ -267,7 +267,7 @@ fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::history::Histor
             if !line.contains(ts) { continue; }
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 if v["ts"].as_str() == Some(ts) {
-                    if let Ok(r) = serde_json::from_str::<crate::history::HistoryRecord>(line) {
+                    if let Ok(r) = serde_json::from_str::<crate::pipeline::history::HistoryRecord>(line) {
                         crate::log::elog("[rerun] 强类型未命中但 Value 兜底命中(版本迁移期字段差异?)");
                         return Ok(r);
                     }
@@ -311,7 +311,7 @@ pub fn spawn_session(
                     // worker 串行执行 —— 交付顺序恒等于录音顺序; 同时避免并行段互相结算
                     // 全局单槽的粘贴事务(paste_tx::PENDING)导致前一段只进剪贴板。
                     let ho = handoff.lock().unwrap().take();
-                    let id = crate::segment_queue::enqueue(&app, t.clone(), ho);
+                    let id = crate::pipeline::segment_queue::enqueue(&app, t.clone(), ho);
                     crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::core::busy()));
                     ("asr-result", t)
                 }
@@ -323,7 +323,7 @@ pub fn spawn_session(
                     let app2 = app.clone();
                     let msg = t.clone();
                     std::thread::spawn(move || {
-                        let _ = crate::segment_queue::record_no_speech(&app2, ho, &msg);
+                        let _ = crate::pipeline::segment_queue::record_no_speech(&app2, ho, &msg);
                     });
                     // 提示走 msg 通道(浮窗按一次性提示显示 2.5s), 不走 err(那是失败条)
                     ("asr-nospeech", t)
@@ -334,7 +334,7 @@ pub fn spawn_session(
                     let ho = handoff.lock().unwrap().take();
                     let app2 = app.clone();
                     let msg = t.clone();
-                    let id = crate::segment_queue::enqueue_asr_failed(&app2, msg, ho);
+                    let id = crate::pipeline::segment_queue::enqueue_asr_failed(&app2, msg, ho);
                     crate::log::elog(&format!("[queue] asr-error 失败段入队 id={id}"));
                     ("asr-error", t)
                 }
@@ -343,8 +343,8 @@ pub fn spawn_session(
             // 旧写法是各层直接改同一份共享快照, 已全部收敛到 hud 模块的接口。
             match tag {
                 "asr-partial" => crate::core::session_partial(&payload),
-                "asr-nospeech" => crate::hud::no_speech(&app, &payload),
-                "asr-error" => crate::hud::error(&app, &payload),
+                "asr-nospeech" => crate::ui::hud::no_speech(&app, &payload),
+                "asr-error" => crate::ui::hud::error(&app, &payload),
                 // asr-result: 队列/阶段由 hud 的 poll 现算, 不需要在这里写状态
                 _ => {}
             }

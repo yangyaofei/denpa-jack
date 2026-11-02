@@ -1,36 +1,18 @@
-pub mod audio;
-mod audio_feedback;
-mod autotest;
-/// capture 域: 从世界拿信号并决策(docs/ARCHITECTURE.md 四域之一)——
-/// 首个归位子域 focus(前台/焦点感知); 批 2 起 key/audio/screen/permissions 陆续迁入
-pub mod capture;
-mod commands;
-pub mod crash_log;
-/// 应用核心状态(唯一事实源, 见 docs/CORE-DESIGN.md)——执行模块只连 core
+// 基座: 状态中枢与横切关注点
 pub mod core;
-/// 活动目标探测（焦点窗口/指针窗口 + 显示器；截图与浮窗共用）
-pub mod active_target;
-mod delivery;
-pub mod dict;
-/// 引擎域: 契约 + 四引擎 + 会话调度(阶段A trait 化归位)
-pub mod engine;
-mod history;
-pub mod hud;
-pub mod llm;
-mod log;
-mod mic_watch;
-mod overlay;
-mod permissions;
-mod pipeline;
-pub mod recording;
-pub mod screen_context;
-mod segment_queue;
-mod update;
+pub mod log;
+pub mod crash_log;
 pub mod config;
-mod shortcut;
-#[allow(unused_unsafe)]
-mod tray;
-mod tray_events;
+
+// 四域(docs/ARCHITECTURE.md): ui 展示 · capture 感知决策 · pipeline 流程 · model 模型
+pub mod ui;
+pub mod capture;
+pub mod pipeline;
+pub mod model;
+
+// 装配壳: 入口+command+自测
+mod commands;
+mod autotest;
 mod transcription_coordinator;
 
 
@@ -38,11 +20,11 @@ use tauri::Manager;
 // global-shortcut 插件仅剩 Esc 动态注册使用(见 shortcut.rs), 触发已全走 handy-keys 引擎
 
 pub struct AppState {
-    pub session: Option<crate::recording::RecordingSession>,
+    pub session: Option<crate::capture::recording::RecordingSession>,
     /// 最近一次已保存录音(hud 重试用)——会话产物, 归 AppState 而非全局
     pub last_audio: Option<String>,
     /// 当前引擎命令镜像(转写中 abort / 测试通道用)——会话产物
-    pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::engine::Cmd>>,
+    pub engine_mirror: Option<tokio::sync::mpsc::Sender<crate::model::speech::Cmd>>,
 }
 impl Default for AppState {
     fn default() -> Self {
@@ -108,15 +90,15 @@ pub fn run() {
             // 死亡诊断: 会话文件(判定上次是否正常运行结束) + 崩溃报告扫描 + 心跳
             crate::crash_log::begin_session(&crate::config::data_dir(app.handle()));
             crate::crash_log::spawn_heartbeat();
-            if let Err(e) = mic_watch::start() {
+            if let Err(e) = capture::mic_watch::start() {
                 log::log(app.handle(), &format!("mic_watch 注册失败: {e}"));
             }
-            tray_events::spawn_tray(app.handle()).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            ui::tray_events::spawn_tray(app.handle()).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             // 分段转写队列 worker: 松开热键后的后处理全部进队列串行执行
             // (规则与理由见 segment_queue.rs 顶部注释: 顺序保证 + 不丢段 + 失败不阻塞)
-            segment_queue::start(app.handle().clone());
+            pipeline::segment_queue::start(app.handle().clone());
             // 方案 B: local 引擎网关自动探活/拉起(异步, 不阻塞启动; 手动 serve 的实例直接复用)
-            engine::gateway::prewarm(app.handle());
+            model::speech::gateway::prewarm(app.handle());
             // 权限总检查: 一次性查清全部必需权限(麦克风 + 辅助功能)
             // 缺项 → 落日志 + 推给前端 + 把主窗拉出来, 让用户第一眼就看到"缺什么、会怎样"
             let h = app.handle().clone();
@@ -125,13 +107,13 @@ pub fn run() {
                 // 测试常常在非交互环境下跑（也可能用独立 bundle id 的副本），弹窗只会留下无人处理的气泡
                 let autotest = std::env::var("VOICEMAC_AUTOTEST").is_ok();
                 // 麦克风未决定 → 弹系统授权框; 已拒绝不会再弹(需去系统设置)
-                if !autotest && crate::permissions::mic_status_code() == 0 {
-                    crate::permissions::request_mic();
+                if !autotest && crate::capture::permissions::mic_status_code() == 0 {
+                    crate::capture::permissions::request_mic();
                     std::thread::sleep(std::time::Duration::from_millis(800));
                 }
                 // 辅助功能: 带引导提示的检查(AXIsProcessTrustedWithOptions(prompt))
                 let ax = capture::ax_trusted(!autotest);
-                let missing = crate::permissions::missing();
+                let missing = crate::capture::permissions::missing();
                 if missing.is_empty() {
                     log::log(&h, "[perm] 权限齐备: 麦克风 + 辅助功能");
                 } else {
@@ -140,13 +122,13 @@ pub fn run() {
                         &format!(
                             "[perm] 缺失权限 {:?} (麦克风={}, 辅助功能={})",
                             missing,
-                            crate::permissions::mic_status_text(),
+                            crate::capture::permissions::mic_status_text(),
                             ax
                         ),
                     );
                     use tauri::Emitter;
-                    let _ = Emitter::emit_to(&h, "main", "permissions", &crate::permissions::all());
-                    crate::hud::notify(&h, &format!("缺少权限: {}", missing.join("、")));
+                    let _ = Emitter::emit_to(&h, "main", "permissions", &crate::capture::permissions::all());
+                    crate::ui::hud::notify(&h, &format!("缺少权限: {}", missing.join("、")));
                     if let Some(w) = h.get_webview_window("main") {
                         let _ = w.show();
                         let _ = w.set_focus();
@@ -169,8 +151,8 @@ pub fn run() {
             .shadow(false)
             .inner_size(480.0, 200.0)
             .build()?;
-            overlay::position_hud_at_cursor(&app.handle().clone());
-            // C55: 快捷键注册全部由 shortcut::init_shortcuts 统一完成(bindings 单一真相)
+            ui::overlay::position_hud_at_cursor(&app.handle().clone());
+            // C55: 快捷键注册全部由 capture::key::init_shortcuts 统一完成(bindings 单一真相)
             // C13(修正版): 引擎回调只发信号到控制线程, 由它执行 start/stop/abort
             // 协调器线程(Handy 状态机) + 效果执行线程
             let (ctx, crx) = std::sync::mpsc::channel::<transcription_coordinator::CoordCmd>();
@@ -183,10 +165,10 @@ pub fn run() {
                     use transcription_coordinator::Effect;
                     let st = app_ctrl.state::<std::sync::Mutex<AppState>>();
                     let r = match effect {
-                        Effect::Start => recording::ctrl_start(app_ctrl.clone(), &st),
-                        Effect::Stop => recording::ctrl_stop(app_ctrl.clone(), &st),
-                        Effect::Abort => recording::ctrl_abort(&app_ctrl, &st),
-                        Effect::CancelQueued => recording::ctrl_cancel_queued(&app_ctrl),
+                        Effect::Start => capture::recording::ctrl_start(app_ctrl.clone(), &st),
+                        Effect::Stop => capture::recording::ctrl_stop(app_ctrl.clone(), &st),
+                        Effect::Abort => capture::recording::ctrl_abort(&app_ctrl, &st),
+                        Effect::CancelQueued => capture::recording::ctrl_cancel_queued(&app_ctrl),
                     };
                     if let Err(e) = &r {
                         log::log(&app_ctrl, &format!("effect {effect:?} 失败: {e}"));
@@ -205,7 +187,7 @@ pub fn run() {
             // (实测教训: 文件回放测试期间用户真实口述, 副本也收到热键, 两进程
             //  同时录音——还撞上本地网关的单流限制)
             if std::env::var("VOICEMAC_AUTOTEST").is_err() {
-                shortcut::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
+                capture::key::init_shortcuts(&app.handle().clone(), Box::new(send_ctrl))
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             }
             // 触发模式缓存初始化(hold/toggle)
@@ -229,11 +211,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping, commands::list_mics, commands::get_active_mic, commands::list_llm_models, commands::llm_selftest, commands::get_default_prompt, commands::ui_log, commands::get_history,
             commands::clear_history, commands::copy_text, commands::get_hotwords,
-            recording::recording_start, recording::recording_stop,
-            recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::app_version,
+            crate::capture::recording::recording_start, crate::capture::recording::recording_stop,
+            crate::capture::recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::app_version,
 
             commands::queue_retry, commands::queue_clear, commands::queue_dismiss,
-            update::update_check, update::update_install,
+            crate::ui::update::update_check, crate::ui::update::update_install,
             commands::open_config_file, commands::open_data_dir,
             commands::rerun_history,
             commands::local_service_status, commands::local_service_start, commands::local_service_stop,
@@ -251,7 +233,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { code, .. } => {
                 log::log(app, &format!("ExitRequested code={code:?}"));
                 // 收掉内置网关子进程(两段式: SIGTERM→5s→SIGKILL; 外部实例不在登记处不受影响)
-                engine::gateway::stop();
+                model::speech::gateway::stop();
             }
             tauri::RunEvent::Exit => {
                 crate::crash_log::end_session(&crate::config::data_dir(app));

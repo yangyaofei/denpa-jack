@@ -102,7 +102,7 @@ impl MacTray {
         let status_bar = unsafe { NSStatusBar::systemStatusBar() };
         let item = unsafe { status_bar.statusItemWithLength(-1f64) }; // NSVariableStatusItemLength
         // C41: 菜单栏图标沿用 Swift 版自绘(声波→箭头→文本框), 恒定不变(见上方 MacTray 注释)
-        let png: &[u8] = include_bytes!("../icons/menubar.png");
+        let png: &[u8] = include_bytes!("../../icons/menubar.png");
         let data = unsafe { NSData::dataWithBytes_length(png.as_ptr() as *const std::ffi::c_void, png.len()) };
         let icon = unsafe { NSImage::initWithData(NSImage::alloc(), &data) }.ok_or("menubar.png 解码失败")?;
         unsafe {

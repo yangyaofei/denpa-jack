@@ -3,7 +3,7 @@ use tauri::{Emitter, Manager};
 
 use crate::commands::{open_config_file, open_data_dir};
 use crate::config::{self, Config};
-use crate::tray;
+use crate::ui::tray;
 
 pub static TRAY: std::sync::Mutex<Option<tray::MacTray>> = std::sync::Mutex::new(None);
 

@@ -1,14 +1,14 @@
 // Tauri command 层(对齐 Handy commands/): 薄壳, 业务在各自模块
 use tauri::AppHandle;
 
-use crate::audio;
+use crate::capture::audio;
 use crate::capture;
-use crate::engine;
-use crate::history;
+use crate::model::speech;
+use crate::pipeline::history;
 use crate::pipeline;
 use crate::config::Config;
 use tokio::sync::mpsc as ttx;
-use crate::dict::budget_hotwords;
+use crate::model::dict::budget_hotwords;
 use crate::config;
 
 #[tauri::command]
@@ -52,7 +52,7 @@ pub fn get_hotwords(app: tauri::AppHandle) -> Vec<String> {
 #[tauri::command]
 pub fn hud_hide(app: tauri::AppHandle) {
     // 隐藏的唯一入口(hud.rs): 含最短显示守卫与快照清理——策略不在 command 层
-    crate::hud::hide(&app);
+    crate::ui::hud::hide(&app);
 }
 
 #[tauri::command]
@@ -78,7 +78,7 @@ pub fn app_version() -> String {
 
 /// R1: 历史条目重转——后台重算回写条目, 不入队/不交付/不弹 HUD。
 /// 音频按 180ms/6400B 节奏重放给引擎(与主链路同构), 结算在
-/// engine::spawn_rerun_session 的事件桥里(词典→可选 LLM→update_by_ts)。
+/// speech::spawn_rerun_session 的事件桥里(词典→可选 LLM→update_by_ts)。
 #[tauri::command]
 pub fn rerun_history(app: tauri::AppHandle, ts: String, audio_path: String) -> Result<(), String> {
     if audio_path.is_empty() {
@@ -104,12 +104,12 @@ fn rerun_blocking(app: tauri::AppHandle, ts: String, audio_path: String) -> Resu
 /// locate_ts=None ⇒ 失败段重试(spawn_session, 走主链路入队交付)。
 fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: String) -> Result<(), String> {
     let cfg: Config = config::get_config(app.clone())?;
-    let (profile, key) = crate::engine::resolve_asr(&cfg)?;
+    let (profile, key) = crate::model::speech::resolve_asr(&cfg)?;
     let raw = std::fs::read(&audio_path).map_err(|e| format!("读音频失败: {e}"))?;
     // 剥 WAV 头取 PCM: 复用 wav_data_chunk(跳过 FLLR 填充块)——旧 raw[44..]
     // 假设会把 fmt 头当 PCM 喂引擎(C40 教训的重演, 审核a-9)
-    let pcm = crate::history::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
-    let (tx, rx) = ttx::channel::<engine::Cmd>(64);
+    let pcm = crate::pipeline::history::wav_data_chunk(&raw).unwrap_or_else(|| raw.clone());
+    let (tx, rx) = ttx::channel::<speech::Cmd>(64);
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(Some(pipeline::SessionHandoff {
         audio_path: Some(audio_path.clone()),
         pcm: std::sync::Arc::new(Vec::new()),
@@ -121,18 +121,18 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
         screenshot: None,
     })));
     match locate_ts {
-        Some(ts) => engine::spawn_rerun_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), ts, handoff, rx),
-        None => engine::spawn_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
+        Some(ts) => speech::spawn_rerun_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), ts, handoff, rx),
+        None => speech::spawn_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
     }
     // 重放节奏与真实录音相当(200ms 分片×~0.9), 过快会塞爆通道或触发流式限速
     tauri::async_runtime::spawn(async move {
         for chunk in pcm.chunks(6400) {
-            if tx.try_send(engine::Cmd::Feed(chunk.to_vec())).is_err() {
+            if tx.try_send(speech::Cmd::Feed(chunk.to_vec())).is_err() {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(180)).await;
         }
-        let _ = tx.try_send(engine::Cmd::Finish);
+        let _ = tx.try_send(speech::Cmd::Finish);
     });
     Ok(())
 }
@@ -142,7 +142,7 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
 pub(crate) fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     let state = app
-        .try_state::<crate::shortcut::ShortcutState>()
+        .try_state::<crate::capture::key::ShortcutState>()
         .ok_or("快捷键引擎未初始化")?;
     state.inner().unregister_all()?;
     let cfg = config::get_config(app.clone())?;
@@ -155,22 +155,22 @@ pub(crate) fn reapply_hotkey(app: tauri::AppHandle) -> Result<(), String> {
 /// 录制期间挂起全部绑定(真注销)——command 壳已删, Rust 侧直接调 shortcut::suspend_all
 /// 权限总检查: 返回全部必需权限(麦克风/辅助功能)的当前状态, 缺项时同时推事件给前端
 #[tauri::command]
-pub fn check_permissions(_app: AppHandle) -> Vec<crate::permissions::PermState> {
+pub fn check_permissions(_app: AppHandle) -> Vec<crate::capture::permissions::PermState> {
     // 列表含必需项与可选项(屏幕录制), 前端按 required 区分展示; 提示只看必需项
     // (事件广播通道 C43b 不可达且无监听者: 返回值就是前端数据源)
-    crate::permissions::all()
+    crate::capture::permissions::all()
 }
 
 /// 主动请求屏幕录制权限(开关打开时调用; 首次会触发系统引导)
 #[tauri::command]
 pub fn request_screen_permission() -> bool {
-    crate::screen_context::request()
+    crate::capture::screen::request()
 }
 
 /// 打开截图归档目录(事后判读/复现用)
 #[tauri::command]
 pub fn open_screen_context_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = crate::config::data_dir(&app).join(crate::screen_context::DIR_NAME);
+    let dir = crate::config::data_dir(&app).join(crate::capture::screen::DIR_NAME);
     let _ = std::fs::create_dir_all(&dir);
     tauri_plugin_opener::open_path(dir.to_str().unwrap_or("."), None::<&str>).map_err(|e| e.to_string())
 }
@@ -178,7 +178,7 @@ pub fn open_screen_context_dir(app: tauri::AppHandle) -> Result<(), String> {
 /// 主动请求麦克风权限(未决定时弹系统框; 已拒绝不会弹, 需去系统设置)
 #[tauri::command]
 pub fn request_microphone() {
-    crate::permissions::request_mic();
+    crate::capture::permissions::request_mic();
 }
 
 /// 打开系统设置的指定隐私面板(权限引导用; 只允许系统设置 URL)
@@ -214,7 +214,7 @@ pub fn autostart_disable(app: tauri::AppHandle) -> Result<(), String> {
 // 浮窗宽度切换(单栏 480 ↔ 两栏 664)。只改宽度: 高度由窗口固定, 长文本在框内滚动
 #[tauri::command]
 pub fn hud_resize(app: tauri::AppHandle, width: f64) {
-    crate::hud::resize_width(&app, width);
+    crate::ui::hud::resize_width(&app, width);
 }
 
 /// 当前将使用/已使用的输入设备(uid+name)——设置页"当前输入设备"显示这个。
@@ -223,8 +223,8 @@ pub fn hud_resize(app: tauri::AppHandle, width: f64) {
 pub fn get_active_mic(app: tauri::AppHandle) -> Option<(String, String)> {
     // 每次都按当前配置解析(优先级→指定→默认): 配置一改, 显示立即跟手
     let mut cfg = crate::config::get_config(app.clone()).unwrap_or_default();
-    let uid = crate::audio::resolve_mic(&app, &mut cfg)?;
-    let name = crate::audio::list_mics()
+    let uid = crate::capture::audio::resolve_mic(&app, &mut cfg)?;
+    let name = crate::capture::audio::list_mics()
         .into_iter()
         .find(|(u, _)| *u == uid)
         .map(|(_, n)| n)?;
@@ -251,7 +251,7 @@ pub async fn list_llm_models(
         "[llm-models] 拉取: provider={provider} base_url={base_url} key_len={}",
         key.len()
     ));
-    match crate::llm::list_models(&provider, &base_url, &key).await {
+    match crate::model::llm::list_models(&provider, &base_url, &key).await {
         Ok(v) => {
             crate::log::elog(&format!("[llm-models] 成功: {} 个模型", v.len()));
             Ok(v)
@@ -315,7 +315,7 @@ pub async fn llm_selftest(
         thinking: o.thinking,
         effort: if o.effort.is_empty() { "low".into() } else { o.effort },
     });
-    let r = crate::llm::selftest(&cfg, o).await?;
+    let r = crate::model::llm::selftest(&cfg, o).await?;
     Ok(LlmSelftestResult {
         dict_text: r.dict_text,
         llm_text: r.llm_text,
@@ -328,24 +328,24 @@ pub async fn llm_selftest(
 /// 内置润色 prompt 原文(前端编辑回填用)
 #[tauri::command]
 pub fn get_default_prompt() -> String {
-    crate::llm::DEFAULT_LLM_PROMPT.to_string()
+    crate::model::llm::DEFAULT_LLM_PROMPT.to_string()
 }
 
 /// UI v6 已废除独立设置窗: 托盘"设置"入口直接聚焦主窗(tray_events.rs 内联实现)
 /// C55 后端录制(用户定则): begin→poll→end(提交/取消), 轮询通道
 #[tauri::command]
 pub fn capture_begin(app: tauri::AppHandle) -> Result<(), String> {
-    crate::shortcut::capture_begin(&app)
+    crate::capture::key::capture_begin(&app)
 }
 
 #[tauri::command]
-pub fn capture_poll() -> crate::shortcut::CaptureSnapshot {
-    crate::shortcut::capture_poll()
+pub fn capture_poll() -> crate::capture::key::CaptureSnapshot {
+    crate::capture::key::capture_poll()
 }
 
 #[tauri::command]
 pub fn capture_end(app: tauri::AppHandle, confirm: bool, combo: Option<String>) -> Result<(), String> {
-    crate::shortcut::capture_end(&app, confirm, combo)
+    crate::capture::key::capture_end(&app, confirm, combo)
 }
 
 /// C54 前端录制模式(Handy 同构): 前端 window keydown/keyup 收集组合,
@@ -369,7 +369,7 @@ pub fn add_binding(app: tauri::AppHandle, combo: String) -> Result<(), String> {
         set.current.push(combo);
     }
     crate::config::save_config(app.clone(), cfg)?;
-    crate::shortcut::resume_all(&app)?;
+    crate::capture::key::resume_all(&app)?;
     Ok(())
 }
 
@@ -389,30 +389,30 @@ pub fn remove_binding(app: tauri::AppHandle, combo: String) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn hud_poll() -> crate::hud::Snapshot {
+pub fn hud_poll() -> crate::ui::hud::Snapshot {
     // 前端唯一读接口(快照组装 + 队列派生 + 一次性字段的取后清都在 hud.rs)
-    crate::hud::poll()
+    crate::ui::hud::poll()
 }
 
 /// 重试队列里最早的一段失败段(浮窗「重试」按钮)
 #[tauri::command]
 pub fn queue_retry(app: tauri::AppHandle) -> Result<(), String> {
     let id = crate::core::first_failed_id().ok_or("没有失败段")?;
-    crate::segment_queue::retry(&app, id)
+    crate::pipeline::segment_queue::retry(&app, id)
 }
 
 /// 清空队列(浮窗「清空」按钮; 前端两步确认后调用)
 /// 语义: 不转写 ≠ 丢数据 —— 排队段的音频与原文先进历史(delivered="cancelled")
 #[tauri::command]
 pub fn queue_clear(app: tauri::AppHandle) -> usize {
-    crate::segment_queue::clear(&app)
+    crate::pipeline::segment_queue::clear(&app)
 }
 
 /// 关闭失败提示(浮窗「关闭」按钮)
 /// 语义: 只是不再提示; 失败段的音频与原文已在历史里(delivered="failed"), 可去主窗重跑
 #[tauri::command]
 pub fn queue_dismiss() -> usize {
-    crate::segment_queue::dismiss_failed()
+    crate::pipeline::segment_queue::dismiss_failed()
 }
 
 #[derive(serde::Serialize)]
@@ -471,7 +471,7 @@ pub struct LocalSvcStatus {
 
 #[tauri::command]
 pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
-    let s = crate::engine::gateway::snapshot();
+    let s = crate::model::speech::gateway::snapshot();
     let state = if s.healthy {
         "running".to_string()
     } else if s.alive {
@@ -486,14 +486,14 @@ pub fn local_service_status(app: tauri::AppHandle) -> LocalSvcStatus {
         port: s.port,
         elapsed_secs: s.started_at.map(|t| t.elapsed().as_secs()),
         exit: s.exit.clone(),
-        tail: crate::engine::gateway::log_tail(&app, 80),
+        tail: crate::model::speech::gateway::log_tail(&app, 80),
     }
 }
 
 #[tauri::command]
 pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
     let cfg = crate::config::get_config(app.clone())?;
-    match crate::engine::gateway::start(&app, &cfg) {
+    match crate::model::speech::gateway::start(&app, &cfg) {
         Ok(info) => Ok(info),
         Err(e) if e.starts_with("already-starting") => Ok(e), // 不是失败, 是"已在启动中"
         Err(e) => Err(e),
@@ -502,7 +502,7 @@ pub fn local_service_start(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn local_service_stop() -> Result<String, String> {
-    if crate::engine::gateway::stop() {
+    if crate::model::speech::gateway::stop() {
         Ok("stopped".into())
     } else {
         Ok("not-ours".into()) // 登记处没有自有子进程(外部手动实例 APP 不动)

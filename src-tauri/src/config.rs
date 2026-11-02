@@ -421,7 +421,7 @@ pub fn save_config(app: tauri::AppHandle, mut config: Config) -> Result<(), Stri
     config.hotkey.key = normalize_key(&config.hotkey.key); // 兼容读(旧字段仅迁移用)
     // 配置变更可能改麦克风选择(优先级/指定设备): 必须清解析缓存, 否则仍用旧设备
     // (此前 MIC_CACHE 只在 open 失败时失效 → 改优先级后实际仍录旧麦, 用户报“设了 USB 优先却还用内置麦”)
-    crate::audio::invalidate_mic_cache();
+    crate::capture::audio::invalidate_mic_cache();
     // D10: 数据目录**不**在此失效——中途切换会让 app.log(已打开的句柄)/history.jsonl
     // 写到一半分叉到新目录, 两边各半。data_dir 缓存只在启动解析一次, 改配置后
     // 由前端提示"重启生效"(common.ts saveCfg 比对 data_dir 变化)。

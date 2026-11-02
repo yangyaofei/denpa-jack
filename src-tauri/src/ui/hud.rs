@@ -153,13 +153,13 @@ fn apply_error(g: &mut Snapshot, recording: bool, reason: &str) {
 
 /// 一条新录音开始了(按下热键)。定位并显示浮窗, 清掉上一条的内容。
 /// 事实(在录/电平/partial 归零)迁移进 core; 这里只编排展示与窗口。
-pub fn recording_started(app: &tauri::AppHandle, display: &crate::overlay::DisplayTarget) {
+pub fn recording_started(app: &tauri::AppHandle, display: &crate::ui::overlay::DisplayTarget) {
     crate::core::session_started();
     update(apply_recording_started);
     // 与截图共用同一个目标显示器（capture_target::resolve 的快照）
-    crate::overlay::position_hud(app, Some(display));
+    crate::ui::overlay::position_hud(app, Some(display));
     LAST_SHOW_MS.store(now_ms(), Ordering::SeqCst);
-    crate::overlay::show_window(app);
+    crate::ui::overlay::show_window(app);
 }
 
 /// 这一条录完了(松手)。只表达事实, 显示成什么样由本模块决定。
@@ -180,7 +180,7 @@ pub fn polishing(app: &tauri::AppHandle) {
 pub fn notify(app: &tauri::AppHandle, msg: &str) {
     let m = msg.to_string();
     update(|g| g.msg = m);
-    crate::overlay::show_window(app);
+    crate::ui::overlay::show_window(app);
 }
 
 /// 交付完成(带载荷: raw/final/llm_used/delivered/warning)
@@ -204,7 +204,7 @@ fn apply_no_speech(g: &mut Snapshot, reason: &str) {
 pub fn no_speech(app: &tauri::AppHandle, reason: &str) {
     let r = reason.to_string();
     update(|g| apply_no_speech(g, &r));
-    crate::overlay::show_window(app);
+    crate::ui::overlay::show_window(app);
 }
 
 /// 出错(引擎/交付级)。录音中只落日志, 不打扰录音。
@@ -237,13 +237,13 @@ pub fn hide(app: &tauri::AppHandle) {
         g.err = None;
         g.msg.clear();
     });
-    crate::overlay::hide_window(app);
+    crate::ui::overlay::hide_window(app);
 }
 
 /// 前端上报浮窗宽度(单栏 480 / 两栏 664)。**只改宽度, 高度固定**:
 /// 高度固定后窗口位置在"按下定位一次"之后就再也不动(用户报过"位置跟原来不完全一样")。
 pub fn resize_width(app: &tauri::AppHandle, width: f64) {
-    crate::overlay::resize_width(app, width.clamp(480.0, 720.0));
+    crate::ui::overlay::resize_width(app, width.clamp(480.0, 720.0));
 }
 
 /// 前端唯一读接口: 取一份快照。一次性字段(msg/err/finished)取后清。

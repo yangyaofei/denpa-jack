@@ -82,9 +82,9 @@ check(
   /axPasteOnlyText = \(this\.cfg\.ax_paste_only_apps \?\? \[\]\)\.join/.test(src) &&
     /cfg\.ax_paste_only_apps = Array\.from/.test(src),
 );
-const pipe = readFileSync("src-tauri/src/pipeline.rs", "utf8");
+const pipe = readFileSync("src-tauri/src/pipeline/mod.rs", "utf8");
 check("交付时命中名单跳过 AX 直写", /ax_paste_only\(&cfg_h\.ax_paste_only_apps/.test(pipe) && /粘贴优先名单命中, 跳过 AX 直写/.test(pipe));
-const deliverSrc = readFileSync("src-tauri/src/delivery/ax.rs", "utf8");
+const deliverSrc = readFileSync("src-tauri/src/pipeline/delivery/ax.rs", "utf8");
 check(
   "AX 校验改为多信号(AXValue 为主)",
   /KAX_VALUE/.test(deliverSrc) && /after_val\.contains\(text\) && after_val != before_val/.test(deliverSrc),
@@ -129,7 +129,7 @@ check(
 // 用户定则: 不显示段号/"已交付"字样、队列按需展开、失败可重试、清空两步确认、不丢段
 const hudTs = readFileSync("src/hud.ts", "utf8");
 const hudHtml = readFileSync("hud.html", "utf8");
-const segQ = readFileSync("src-tauri/src/segment_queue.rs", "utf8");
+const segQ = readFileSync("src-tauri/src/pipeline/segment_queue.rs", "utf8");
 const queueCmds = ["queue_retry", "queue_clear", "queue_dismiss"];
 check(
   `队列三命令已注册 invoke_handler(${queueCmds.join("/")})`,
@@ -162,7 +162,7 @@ check(
   "浮窗只改宽度(480↔664), 不按内容改高",
   /invoke\("hud_resize", \{ width: w \}\)/.test(stripComments(hudTs)) &&
     !/getBoundingClientRect/.test(stripComments(hudTs)) &&
-    !/resize_window/.test(readFileSync("src-tauri/src/overlay.rs", "utf8")),
+    !/resize_window/.test(readFileSync("src-tauri/src/ui/overlay.rs", "utf8")),
 );
 check("segment_queue.rs 在 lib.rs 启动 worker", /segment_queue::start\(/.test(lib));
 check(
@@ -192,8 +192,8 @@ check(`版本号六处一致(${allV.join("/")})`, allV.every((v) => v && v === a
 // 6) issue #6: 空转写(没听清)不能当失败常驻
 check(
   "空转写走 NoSpeech(不进失败队列)",
-  /NoSpeech/.test(readFileSync("src-tauri/src/engine/doubao.rs", "utf8")) &&
-    /AsrEvent::NoSpeech/.test(readFileSync("src-tauri/src/engine/mod.rs", "utf8")) &&
+  /NoSpeech/.test(readFileSync("src-tauri/src/model/speech/doubao.rs", "utf8")) &&
+    /AsrEvent::NoSpeech/.test(readFileSync("src-tauri/src/model/speech/mod.rs", "utf8")) &&
     /record_no_speech/.test(segQ),
 );
 check(
@@ -209,11 +209,11 @@ check(
 //    录音中的一次性提示不参与收窗
 check(
   "空转写走 no_speech 并结束阶段",
-  /apply_no_speech/.test(readFileSync("src-tauri/src/hud.rs", "utf8")) &&
-    /apply_no_speech\(g, &r\)/.test(readFileSync("src-tauri/src/hud.rs", "utf8")) &&
-    /crate::hud::no_speech\(&app, &payload\)/.test(readFileSync("src-tauri/src/engine/mod.rs", "utf8")),
+  /apply_no_speech/.test(readFileSync("src-tauri/src/ui/hud.rs", "utf8")) &&
+    /apply_no_speech\(g, &r\)/.test(readFileSync("src-tauri/src/ui/hud.rs", "utf8")) &&
+    /crate::ui::hud::no_speech\(&app, &payload\)/.test(readFileSync("src-tauri/src/model/speech/mod.rs", "utf8")),
 );
-check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/recording.rs", "utf8")));
+check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/capture/recording.rs", "utf8")));
 check("录音中的提示不触发收窗(静音提醒走 msg 但不排程收窗)", /if \(!recording\) hideAfter = 2500/.test(hudTs));
 
 process.exit(fail ? 1 : 0);

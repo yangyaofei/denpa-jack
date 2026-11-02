@@ -71,7 +71,7 @@ pub fn request_mic() {
 
 /// 屏幕录制权限状态（开关式功能：只有「截图作为纠错上下文」开启时才需要）
 pub fn screen_recording_state() -> PermState {
-    let granted = crate::screen_context::preflight();
+    let granted = crate::capture::screen::preflight();
     PermState {
         key: "screen_recording",
         label: "屏幕录制",

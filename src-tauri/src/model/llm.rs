@@ -221,7 +221,7 @@ pub async fn refine(
     let mut out = Refined { dict_text: raw.to_string(), text: raw.to_string(), ..Default::default() };
     let Some(cfg) = cfg else { return out };
     // 1) 词典纠错(本地毫秒级)
-    let (dict_text, _) = crate::dict::TextCorrector {
+    let (dict_text, _) = crate::model::dict::TextCorrector {
         entries: cfg.dict.clone(),
         normalizations: cfg.normalizations.iter().map(|r| (r.pattern.clone(), r.replacement.clone())).collect(),
     }
@@ -346,7 +346,7 @@ pub async fn polish(
     // 既不让日志背 1.7MB 的 base64，又能证明发出去的内容确实等于磁盘上那张截图。
     let mut shot_note: Option<String> = None;
     let image_url = match screenshot {
-        Some(p) => match crate::screen_context::inline_image(p) {
+        Some(p) => match crate::capture::screen::inline_image(p) {
             Ok(img) => {
                 let mb = img.bytes as f64 / 1024.0 / 1024.0;
                 shot_note = Some(format!(
@@ -354,7 +354,7 @@ pub async fn polish(
                     p.display(),
                     img.bytes,
                     img.data_url.chars().count(),
-                    crate::screen_context::data_url_prefix(&img.data_url),
+                    crate::capture::screen::data_url_prefix(&img.data_url),
                     img.sha256_short
                 ));
                 crate::log::elog(&format!(

@@ -258,8 +258,8 @@ pub fn get_config(app: &tauri::AppHandle) -> Result<crate::config::Config, Strin
 }
 
 /// 最近历史(门面: 转发 history)
-pub fn get_history(app: &tauri::AppHandle, limit: usize) -> Vec<crate::history::HistoryRecord> {
-    crate::history::recent(app, limit)
+pub fn get_history(app: &tauri::AppHandle, limit: usize) -> Vec<crate::pipeline::history::HistoryRecord> {
+    crate::pipeline::history::recent(app, limit)
 }
 
 #[cfg(test)]

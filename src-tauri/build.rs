@@ -34,7 +34,7 @@ fn main() {
         let main_only = ["NSStatusItem", "NSPasteboard", "setFrameOrigin", "NSSound"];
         let uses_main_only = main_only.iter().any(|a| content.contains(a));
         if uses_main_only
-            && name != "audio_feedback.rs" // NSSound 特例: play_on_main 内部已调度
+            && name != "feedback.rs" // NSSound 特例: play_on_main 内部已调度(原名 audio_feedback.rs)
             && !content.contains("run_on_main_thread")
             && !content.contains("MainThreadMarker")
         {
