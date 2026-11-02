@@ -132,7 +132,9 @@ pub fn start(app: tauri::AppHandle) {
 /// 入队一段 ASR 成功的结果(引擎 Result 事件调用)
 ///
 /// 注意: 这里不再需要 app —— 队列只做入队与唤醒, 后处理由 worker 执行(见 start)。
-pub fn enqueue(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
+/// 段入流程(Live 主链路): 转写文本+会话交接 → 排队等结算。
+/// 门面名 submit_live 表达意图"提交一段转写"(原 enqueue, 批3 门面化)。
+pub fn submit_live(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
     let mut c = crate::core::lock();
     let id = c.queue.next_id;
     c.queue.next_id += 1;
@@ -156,7 +158,7 @@ pub fn enqueue(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline:
 /// (重放喂入), 不经 worker 调度(worker 只取 Queued, 天然跳过); 结算由
 /// rerun 事件桥完成(词典→LLM→回写条目)后出队。入队=登记"这个重转在途",
 /// 让 core 投影(HUD/主窗)能看到它。
-pub fn enqueue_rerun(ts: &str, ho: crate::pipeline::SessionHandoff) -> u64 {
+pub fn submit_rerun(ts: &str, ho: crate::pipeline::SessionHandoff) -> u64 {
     let mut c = crate::core::lock();
     let id = c.queue.next_id;
     c.queue.next_id += 1;
@@ -187,7 +189,11 @@ pub fn finish_rerun(id: u64) {
 ///
 /// 先落盘音频 + 写历史(不丢段), 再以 Failed 状态留在队列里等重试;
 /// worker 不会重跑它的后处理(asr_failed=true), 只会把它标成失败。
-pub fn enqueue_asr_failed(app: &tauri::AppHandle, reason: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
+/// 提交一段 ASR 失败的段(引擎 Error 事件调用, 原名 enqueue_asr_failed)
+///
+/// 先落盘音频 + 写历史(不丢段), 再以 Failed 状态留在队列里等重试;
+/// worker 不会重跑它的后处理(asr_failed=true), 只会把它标成失败。
+pub fn submit_failed(app: &tauri::AppHandle, reason: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
     let ho = ho.unwrap_or_default();
     // 落盘音频 + 写历史(delivered="failed") —— 保证"能重试"不是空话
     let audio = record_failed(app, "", "", false, &ho, &reason);

@@ -346,7 +346,7 @@ pub async fn polish(
     // 既不让日志背 1.7MB 的 base64，又能证明发出去的内容确实等于磁盘上那张截图。
     let mut shot_note: Option<String> = None;
     let image_url = match screenshot {
-        Some(p) => match crate::capture::screen::inline_image(p) {
+        Some(p) => match crate::capture::inline_image(p) {
             Ok(img) => {
                 let mb = img.bytes as f64 / 1024.0 / 1024.0;
                 shot_note = Some(format!(
@@ -354,7 +354,7 @@ pub async fn polish(
                     p.display(),
                     img.bytes,
                     img.data_url.chars().count(),
-                    crate::capture::screen::data_url_prefix(&img.data_url),
+                    crate::capture::data_url_prefix(&img.data_url),
                     img.sha256_short
                 ));
                 crate::log::elog(&format!(

@@ -28,8 +28,17 @@ pub mod permissions;
 pub mod recording;
 pub mod screen;
 
-// 批2 路径约定: 外部经 crate::capture::<子模块>::<符号> 层级路径调用(如
-// capture::recording::ctrl_start)。批3 门面收口时改为 crate::capture::ctrl_start
-// 直达意图符号, 机制符号收回域内。
+// 批3 门面收口: 外部经 crate::capture::<门面符号>} 调用(如 capture::ctrl_start)。
+// 白名单由 build.rs 门面闸强制(见 build.rs FACADE 表)。
 
+// ───────── 门面(点名导出; 外部只许经这些符号)─────────
+// crate::send_ctrl(留 lib.rs 根) — 热键/托盘/试音的唯一信号入口
+// capture::ctrl_start / ctrl_stop / ctrl_abort — 会话状态机(效果分派调)
+// capture::esc_listen_begin / esc_maybe_end — Esc 取消窗(豁免: pipeline 段完成时调, 批4 改 capture 自查 core)
+pub use key::esc_listen_begin;
+pub use recording::{ctrl_abort, ctrl_start, ctrl_stop, esc_maybe_end, RecordingSession};
+pub use audio::{list_mics, resolve_mic};
+// 感知(批1 归位): 焦点快照/权限
 pub use focus::{ax_trusted, focused_element_info, frontmost_bundle, FocusInfo, FocusLock};
+// 截图→LLM 内联格式(model 消费; 采集在 screen, 格式化能力出门面)
+pub use screen::{data_url_prefix, inline_image, InlineImage};

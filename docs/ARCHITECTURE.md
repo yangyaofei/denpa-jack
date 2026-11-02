@@ -58,8 +58,16 @@ ui      → 只读 core 投影                  浮窗内容=状态(core)，浮�
 | pipeline | `init(app)` 装配专用 · `submit_live(session)` · `submit_rerun(ts,wav)` · `cancel_latest()` · `deliver(text,focus,mode)` · `history: recent/save/update_by_ts/read_all` · 类型 `SegView` |
 | ui | `hud: show_partial/show_final/show_delivered/polishing/error/dismiss/notify` · `overlay: show/hide/reposition+DisplayTarget` · `tray: init/status` · `update: check/install` |
 
-明确收回内部的（曾在外、已判内部）：`budget_hotwords`（热词预算是 model 编排细节）、
-`send_current`（通道工具）、`enqueue_*`（队列是内部结构，对外是 submit）。
+明确收回内部的（曾在外、已判内部）：`send_current`（通道工具，外部用 `cancel_current`）、
+`enqueue_*`（队列是内部结构，对外是 submit_live/submit_failed/submit_rerun）。
+`send_ctrl` 留 lib.rs 根（信号路由是装配层概念，热键/托盘/试音统一从壳进）。
+`budget_hotwords` 保留门面（会话构造时显式传参，数据流可见）。
+
+### 门面闸与豁免登记
+
+build.rs 强制跨域引用白名单（FACADE 表）；存量违规走 EXEMPT 登记表，
+每条注明批 4 去向（浮窗内容走 core / rerun 编排归位 / esc 自查 / DisplayTarget 归位），
+批 4/5 逐条清空。豁免表内容见 `src-tauri/build.rs` 门面闸一节。
 
 ## 2. 保障机制（不靠自觉）
 

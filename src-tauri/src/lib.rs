@@ -211,8 +211,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping, commands::list_mics, commands::get_active_mic, commands::list_llm_models, commands::llm_selftest, commands::get_default_prompt, commands::ui_log, commands::get_history,
             commands::clear_history, commands::copy_text, commands::get_hotwords,
-            crate::capture::recording::recording_start, crate::capture::recording::recording_stop,
-            crate::capture::recording::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::app_version,
+            commands::recording_start, commands::recording_stop,
+            commands::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::app_version,
 
             commands::queue_retry, commands::queue_clear, commands::queue_dismiss,
             crate::ui::update::update_check, crate::ui::update::update_install,

@@ -47,6 +47,25 @@ pub fn get_hotwords(app: tauri::AppHandle) -> Vec<String> {
     config::get_config(app).map(|c| budget_hotwords(&c.dict)).unwrap_or_default()
 }
 
+// 试音三命令(前端"按住说话"按钮): 经信号入口发_ctrl, 与热键同一通道
+#[tauri::command]
+pub fn recording_start() -> Result<(), String> {
+    crate::send_ctrl(true);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recording_stop() -> Result<(), String> {
+    crate::send_ctrl(false);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recording_abort() -> Result<(), String> {
+    crate::send_cancel();
+    Ok(())
+}
+
 /// 麦克风解析: 优先级第一个在线 → 指定设备 → 系统默认
 
 #[tauri::command]
@@ -78,7 +97,7 @@ pub fn app_version() -> String {
 
 /// R1: 历史条目重转——后台重算回写条目, 不入队/不交付/不弹 HUD。
 /// 音频按 180ms/6400B 节奏重放给引擎(与主链路同构), 结算在
-/// speech::spawn_rerun_session 的事件桥里(词典→可选 LLM→update_by_ts)。
+/// speech::retranscribe 的事件桥里(词典→可选 LLM→update_by_ts)。
 #[tauri::command]
 pub fn rerun_history(app: tauri::AppHandle, ts: String, audio_path: String) -> Result<(), String> {
     if audio_path.is_empty() {
@@ -100,11 +119,11 @@ fn rerun_blocking(app: tauri::AppHandle, ts: String, audio_path: String) -> Resu
 }
 
 /// 重放公共骨架: 读 wav → 剥头 → 引擎会话 → 180ms/6400B 节奏 Feed → Finish。
-/// locate_ts=Some ⇒ R1 重转(spawn_rerun_session, 队列可见, 回写不交付);
-/// locate_ts=None ⇒ 失败段重试(spawn_session, 走主链路入队交付)。
+/// locate_ts=Some ⇒ R1 重转(retranscribe, 队列可见, 回写不交付);
+/// locate_ts=None ⇒ 失败段重试(transcribe, 走主链路入队交付)。
 fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: String) -> Result<(), String> {
     let cfg: Config = config::get_config(app.clone())?;
-    let (profile, key) = crate::model::speech::resolve_asr(&cfg)?;
+    let (profile, key) = crate::model::speech::resolve_engine(&cfg)?;
     let raw = std::fs::read(&audio_path).map_err(|e| format!("读音频失败: {e}"))?;
     // 剥 WAV 头取 PCM: 复用 wav_data_chunk(跳过 FLLR 填充块)——旧 raw[44..]
     // 假设会把 fmt 头当 PCM 喂引擎(C40 教训的重演, 审核a-9)
@@ -121,8 +140,8 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
         screenshot: None,
     })));
     match locate_ts {
-        Some(ts) => speech::spawn_rerun_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), ts, handoff, rx),
-        None => speech::spawn_session(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
+        Some(ts) => speech::retranscribe(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), ts, handoff, rx),
+        None => speech::transcribe(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
     }
     // 重放节奏与真实录音相当(200ms 分片×~0.9), 过快会塞爆通道或触发流式限速
     tauri::async_runtime::spawn(async move {

@@ -65,7 +65,7 @@ pub fn maybe_spawn(app: &AppHandle) {
 fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        match crate::model::speech::resolve_asr(cfg) {
+        match crate::model::speech::resolve_engine(cfg) {
             Ok(x) => return Ok(x),
             Err(e) => {
                 let msg = e.to_string();
@@ -118,7 +118,7 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
         };
         let (tx, rx) = tokio::sync::mpsc::channel::<speech::Cmd>(64);
         let handoff: crate::model::speech::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
-        crate::model::speech::spawn_session(
+        crate::model::speech::transcribe(
             app.clone(),
             profile.provider.clone(),
             key,
@@ -187,13 +187,13 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             // 自建会话: resolve→spawn→mirror, 与 ctrl_start 完全隔离(无双输入)
             use tauri::Manager;
             let cfg = crate::config::get_config(app.clone()).unwrap_or_default();
-            let (profile, key) = match crate::model::speech::resolve_asr(&cfg) {
+            let (profile, key) = match crate::model::speech::resolve_engine(&cfg) {
                 Ok(x) => x,
                 Err(e) => { log::log(&app, &format!("AUTOTEST-FILE: resolve 失败: {e}")); app.exit(1); return; }
             };
             let (tx, rx) = tokio::sync::mpsc::channel::<speech::Cmd>(64);
             let handoff: crate::model::speech::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
-            crate::model::speech::spawn_session(
+            crate::model::speech::transcribe(
                 app.clone(), profile.provider.clone(), key, profile.base_url.clone(),
                 crate::model::dict::budget_hotwords(&cfg.dict), handoff.clone(), rx,
             );

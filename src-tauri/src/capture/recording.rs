@@ -11,7 +11,7 @@ pub(crate) static LAST_GEN: std::sync::Mutex<Option<u64>> = std::sync::Mutex::ne
 
 use crate::capture::audio;
 use crate::capture;
-use crate::model::speech;
+use crate::model;
 use crate::pipeline;
 use crate::config::{self, Config};
 use crate::capture::key::{esc_listen_begin, esc_listen_end};
@@ -20,7 +20,7 @@ use crate::{log, AppState};
 /// 一次录音会话的完整状态——生命周期与按住-松开严格一致
 pub struct RecordingSession {
     pub rec: audio::Recording,
-    cmd_tx: ttx::Sender<speech::Cmd>,
+    cmd_tx: ttx::Sender<model::Cmd>,
     started_at: std::time::Instant,
     focus: capture::FocusLock,
     gen: u64,
@@ -38,7 +38,7 @@ impl RecordingSession {
         engine: &str,
     ) -> (
         pipeline::SessionHandoff,
-        ttx::Sender<speech::Cmd>,
+        ttx::Sender<model::Cmd>,
         Arc<Mutex<Option<pipeline::SessionHandoff>>>,
     ) {
         let duration_ms = self.started_at.elapsed().as_millis() as u64;
@@ -137,28 +137,12 @@ fn show_recording_ui(app: &tauri::AppHandle, display: &crate::ui::overlay::Displ
     crate::ui::hud::recording_started(app, display);
 }
 
-#[tauri::command]
-pub fn recording_start() -> Result<(), String> {
-    crate::send_ctrl(true);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn recording_stop() -> Result<(), String> {
-    crate::send_ctrl(false);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn recording_abort() -> Result<(), String> {
-    crate::send_cancel();
-    Ok(())
-}
+// 试音三命令已归位 commands.rs(装配壳): command 是 Tauri 装配层概念, 域内只留状态机。
 
 pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> Result<(), String> {
     // C54: 录制期间绑定已真注销(suspend), 触发不可达——此守卫防御性保留
     let mut cfg: Config = config::get_config(app.clone())?;
-    let (profile, key) = speech::resolve_asr(&cfg)?;
+    let (profile, key) = model::resolve_engine(&cfg)?;
     {
         let st = state.lock().unwrap();
         if st.session.is_some() {
@@ -182,7 +166,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     }
     let mic = audio::resolve_mic(&app, &mut cfg);
     let mic_name = mic.clone();
-    let (tx, rx) = ttx::channel::<speech::Cmd>(64);
+    let (tx, rx) = ttx::channel::<model::Cmd>(64);
     let (atx, arx) = mpsc::channel::<Vec<u8>>();
     // 音频自愈(Handy recorder.rs): open 失败重解析设备重试一次
     let rec = match audio::start_input(mic.clone(), atx.clone()) {
@@ -211,12 +195,12 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     // 交接箱: 会话作用域——stop 写, 引擎 Result 读(唯一交接点, 无全局)
     let handoff = Arc::new(Mutex::new(None));
     let focus = capture::FocusLock::snapshot();
-    speech::spawn_session(
+    model::transcribe(
         app.clone(),
         profile.provider.clone(),
         key,
         profile.base_url.clone(),
-        crate::model::dict::budget_hotwords(&cfg.dict),
+        crate::model::budget_hotwords(&cfg.dict),
         handoff.clone(),
         rx,
     );
@@ -229,7 +213,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             }
             // 审计#2(对齐 Handy transcription.rs:169 无界阻塞保序): 会话通道满=引擎背压,
             // 阻塞等而不是丢帧(丢帧=文本截尾无告警); 会话已死时 send 立即返回 Err
-            if cmd_tx.blocking_send(speech::Cmd::Feed(chunk)).is_err() {
+            if cmd_tx.blocking_send(model::Cmd::Feed(chunk)).is_err() {
                 log::elog("[bridge] 引擎通道已关闭, 停止喂入(余量音频丢弃)");
                 break;
             }
@@ -315,7 +299,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     let min_bytes = (min_secs * 32000.0) as usize;
     if ho.pcm.len() < min_bytes {
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
-        let _ = cmd_tx.try_send(speech::Cmd::Abort);
+        let _ = cmd_tx.try_send(model::Cmd::Abort);
         session_cleanup(&app, None);
         crate::ui::hud::hide(&app);
         log::log(&app, &format!("录音太短已丢弃 {}ms", ho.duration_ms));
@@ -329,7 +313,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
-    if cmd_tx.blocking_send(speech::Cmd::Finish).is_err() {
+    if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
         crate::ui::hud::error(&app, "引擎会话异常中断");
     }
@@ -397,9 +381,9 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
     }
     // 会话 drop=cancel 置位; 无论有无会话, 清理路径一致
     if let Some(s) = sess {
-        s.cmd_tx.try_send(speech::Cmd::Abort).ok();
+        s.cmd_tx.try_send(model::Cmd::Abort).ok();
     } else {
-        crate::model::speech::send_current(app, speech::Cmd::Abort);
+        crate::model::cancel_current(app);
     }
     session_cleanup(app, None);
     crate::ui::hud::notify(app, "已取消");

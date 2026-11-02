@@ -148,7 +148,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
     // 1+2) 纠错管线(词典→可选 LLM→降级词典版): llm::refine 是唯一实现,
     // 重转/自测与这里共用同一根管线。HUD 的"润色中"广播是编排职责, 留在这里。
     crate::ui::hud::polishing(&app);
-    let refined = tauri::async_runtime::block_on(crate::model::llm::refine(
+    let refined = tauri::async_runtime::block_on(crate::model::refine(
         &raw,
         Some(&cfg),
         None,

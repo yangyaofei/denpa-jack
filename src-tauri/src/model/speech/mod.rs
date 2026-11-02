@@ -30,7 +30,13 @@ pub trait AsrEngine<E: Fn(AsrEvent) + Send + 'static> {
     async fn run(self, ctx: EngineCtx, rx: tokio::sync::mpsc::Receiver<Cmd>, emit: E);
 }
 
-/// 对当前引擎发命令: 经 AppState 的会话镜像(转写中 abort / 测试通道用)
+/// 对当前引擎发取消: 经 AppState 的会话镜像(Esc 中止转写中的会话)。
+/// 机制通道(send_current)不对外——外部只表达意图"取消当前"。
+pub fn cancel_current(app: &tauri::AppHandle) {
+    send_current(app, Cmd::Abort)
+}
+
+/// 对当前引擎发命令(域内+测试通道用; 外部用意图包装如 cancel_current)
 pub fn send_current(app: &tauri::AppHandle, cmd: Cmd) {
     use tauri::Manager;
     if let Some(tx) = app
@@ -64,7 +70,7 @@ pub fn settle(emit: &impl Fn(AsrEvent), text: &str) {
 
 /// ASR 档案解析: 从配置选出本会话引擎与 key——从 recording.rs 归位(阶段A 第2步),
 /// "哪个引擎可用什么参数跑"是引擎域的事(engine→config/gateway 单向依赖)。
-pub fn resolve_asr(cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
+pub fn resolve_engine(cfg: &crate::config::Config) -> Result<(crate::config::AsrProfile, String), String> {
     // 内置本地引擎: type/name 定死的特化 provider(2026-10-08 用户定则)——
     // 不占档案列表、零配置, 地址来自 gateway 登记的随机端口(联动)
     if cfg.active_asr_id == crate::model::speech::gateway::BUILTIN_ID {
@@ -102,7 +108,7 @@ pub fn resolve_asr(cfg: &crate::config::Config) -> Result<(crate::config::AsrPro
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_asr;
+    use super::resolve_engine;
 
     #[test]
     fn resolve_asr_rejects_unknown_provider() {
@@ -111,7 +117,7 @@ mod tests {
         cfg.asr_profiles = vec![crate::config::AsrProfile {
             id: "x".into(), name: "x".into(), provider: "bogus".into(), api_key: "k".into(), base_url: String::new(),
         }];
-        assert!(resolve_asr(&cfg).is_err());
+        assert!(resolve_engine(&cfg).is_err());
     }
     #[test]
     fn resolve_asr_falls_back_to_first_profile() {
@@ -120,7 +126,7 @@ mod tests {
         cfg.asr_profiles = vec![crate::config::AsrProfile {
             id: "p1".into(), name: "豆包".into(), provider: "volcengine".into(), api_key: "k1".into(), base_url: String::new(),
         }];
-        let (p, k) = resolve_asr(&cfg).unwrap();
+        let (p, k) = resolve_engine(&cfg).unwrap();
         assert_eq!(p.id, "p1");
         assert_eq!(k, "k1");
     }
@@ -131,7 +137,7 @@ mod tests {
         cfg.asr_profiles = vec![crate::config::AsrProfile {
             id: "p1".into(), name: "n".into(), provider: "zhipu".into(), api_key: "".into(), base_url: String::new(),
         }];
-        let (_, k) = resolve_asr(&cfg).unwrap();
+        let (_, k) = resolve_engine(&cfg).unwrap();
         assert_eq!(k, "pool-key");
     }
 }
@@ -139,7 +145,7 @@ mod tests {
 /// R1: 历史重转专用会话——与主链路同构(专用 rt + 引擎 run), 但事件桥不同:
 /// Result/NoSpeech/Error **直接回写该历史条目**(词典→可选 LLM→update_by_ts),
 /// 不入队、不交付、不碰 HUD(用户定则: 重转是后台重算, 不是语音输入重放)。
-pub fn spawn_rerun_session(
+pub fn retranscribe(
     app: tauri::AppHandle,
     provider: String,
     api_key: String,
@@ -154,7 +160,7 @@ pub fn spawn_rerun_session(
     // 状态推进全收在本会话: 入队→结算→出队, 投影端(HUD/主窗)从 core 看全程。
     // ts 走显式参数(rerun_ts 字段), audio_path 回归纯语义(wav 路径)——
     // 不再用 R1 时期的 audio_path 双关
-    let seg_id = crate::pipeline::segment_queue::enqueue_rerun(
+    let seg_id = crate::pipeline::segment_queue::submit_rerun(
         &ts,
         handoff.lock().unwrap().clone().unwrap_or_default(),
     );
@@ -284,7 +290,7 @@ fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::pipeline::histo
     Err(format!("未找到 ts={ts}"))
 }
 
-pub fn spawn_session(
+pub fn transcribe(
     app: tauri::AppHandle,
     provider: String,
     api_key: String,
@@ -311,7 +317,7 @@ pub fn spawn_session(
                     // worker 串行执行 —— 交付顺序恒等于录音顺序; 同时避免并行段互相结算
                     // 全局单槽的粘贴事务(paste_tx::PENDING)导致前一段只进剪贴板。
                     let ho = handoff.lock().unwrap().take();
-                    let id = crate::pipeline::segment_queue::enqueue(&app, t.clone(), ho);
+                    let id = crate::pipeline::segment_queue::submit_live(&app, t.clone(), ho);
                     crate::log::elog(&format!("[queue] asr-result 入队 id={id} queue_busy={}", crate::core::busy()));
                     ("asr-result", t)
                 }
@@ -334,7 +340,7 @@ pub fn spawn_session(
                     let ho = handoff.lock().unwrap().take();
                     let app2 = app.clone();
                     let msg = t.clone();
-                    let id = crate::pipeline::segment_queue::enqueue_asr_failed(&app2, msg, ho);
+                    let id = crate::pipeline::segment_queue::submit_failed(&app2, msg, ho);
                     crate::log::elog(&format!("[queue] asr-error 失败段入队 id={id}"));
                     ("asr-error", t)
                 }
