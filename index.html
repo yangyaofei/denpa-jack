@@ -23,12 +23,15 @@
         <span class="perm-dot bad"></span>
         <span x-text="'缺少权限：' + missingPerms().map(p => p.label).join('、') + ' —— 缺权限时应用无法正常工作，点此查看'"></span>
       </div>
-      <div data-page="asr"></div>
-      <div data-page="history"></div>
-      <div data-page="general"></div>
-      <div data-page="dict"></div>
-      <div data-page="llm"></div>
-      <div data-page="about"></div>
+      <!-- 容器层 x-show: 显隐必须在容器而非仅内层 section——history 容器带 flex:1 高度链
+           (234 行), 仅隐藏 section 时容器壳仍拉伸占满剩余空间, 把短内容页(llm/about)推下去
+           约 300px 空白(2026-11-02 真机 LLM-PROBE 铁证 llmTop=312)。容器隐藏则 flex 失效。 -->
+      <div data-page="asr" x-show="section === 'asr'"></div>
+      <div data-page="history" x-show="section === 'history'"></div>
+      <div data-page="general" x-show="section === 'general'"></div>
+      <div data-page="dict" x-show="section === 'dict'"></div>
+      <div data-page="llm" x-show="section === 'llm'"></div>
+      <div data-page="about" x-show="section === 'about'"></div>
     </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

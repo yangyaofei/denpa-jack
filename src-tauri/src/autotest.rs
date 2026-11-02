@@ -431,7 +431,44 @@ fn run_ui_chain(app: tauri::AppHandle) {
                 wait(0);
               })();
             "#);
+             // LLM-PROBE: 真机量"大模型页标题上方大片空白"到底是谁占的——
+             // 浏览器 mock 复现不了(y=68 即内容), 只能真机 WebView 量。
+             // 只测量不塞数据; 1.2s 后执行(此时 SCROLL-PROBE 已完成), 切 llm 量完切回。
+             let _ = win.eval(r#"
+               (function () {
+                 const send = (m) => { try { window.__TAURI_INTERNALS__.invoke('ui_log', { msg: m }); } catch (e) { console.log(m); } };
+                 location.hash = '#llm';
+                 setTimeout(() => {
+                   const ci = document.querySelector('.content-in');
+                   const kids = ci ? Array.from(ci.children).map(el => {
+                     const cs = getComputedStyle(el);
+                     const name = el.getAttribute('data-page') || (el.className.split(' ')[0] || el.tagName);
+                     return name + ' display=' + cs.display + ' top=' + el.offsetTop + ' h=' + el.offsetHeight;
+                   }) : [];
+                   const llm = document.querySelector('[data-page="llm"]');
+                   const h1 = llm ? llm.querySelector('h1') : null;
+                   const r = {
+                     kids,
+                     llmTop: llm ? llm.offsetTop : -1,
+                     h1Top: h1 ? Math.round(h1.getBoundingClientRect().top) : -1,
+                     ciScrollTop: ci ? ci.scrollTop : -1,
+                     ciPadding: ci ? getComputedStyle(ci).paddingTop : '?',
+                     ciScrollH: ci ? ci.scrollHeight : -1,
+                     ciClientH: ci ? ci.clientHeight : -1,
+                     innerH: window.innerHeight,
+                   };
+                   send('LLM-PROBE ' + JSON.stringify(r));
+                   location.hash = '#history';
+                 }, 1200);
+               })();
+             "#);
             std::thread::sleep(std::time::Duration::from_millis(9500));
+            let log2 = std::fs::read_to_string(dir.join("app.log")).unwrap_or_default();
+            let line2 = log2.lines().rev().find(|l| l.contains("LLM-PROBE")).unwrap_or("");
+            crate::log::elog(&format!("[ui-chain] 大模型页布局: {}", line2.trim()));
+            assert!(line2.contains("LLM-PROBE {"), "llm 布局探针未回传");
+            assert!(line2.contains("\"llmTop\":20"), "llm 页被上方隐藏容器挤下(幽灵 flex 高度回归)");
+            assert!(line2.contains("\"h1Top\":20"), "llm 标题不在页首(空白回归)");
             let log = std::fs::read_to_string(dir.join("app.log")).unwrap_or_default();
             let line = log.lines().rev().find(|l| l.contains("SCROLL-PROBE")).unwrap_or("");
             crate::log::elog(&format!("[ui-chain] 滚动链: {}", line.trim()));
