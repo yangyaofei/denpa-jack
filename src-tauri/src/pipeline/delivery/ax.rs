@@ -11,6 +11,7 @@ extern "C" {
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     fn AXUIElementCopyAttributeValue(el: AXUIElementRef, attr: CFStringRef, out: *mut CFTypeRef) -> i32;
     fn AXUIElementSetAttributeValue(el: AXUIElementRef, attr: CFStringRef, val: CFTypeRef) -> i32;
+    fn AXUIElementGetPid(el: AXUIElementRef, pid: *mut i32) -> i32;
 }
 
 const KAX_SELECTED_TEXT: &str = "AXSelectedText";
@@ -36,6 +37,116 @@ impl Drop for AxGuard {
         if !self.0.is_null() {
             unsafe { CFRelease(self.0 as *mut std::ffi::c_void) };
         }
+    }
+}
+
+// ───────── 后台直写探针(2026-11-03 需求验证: 切走焦点后仍写"按热键时"的目标框)─────────
+
+/// 快照目标的持有句柄(pub(crate): autotest 探针跨函数持有; 不出 pipeline 域)
+pub struct BgTarget(AxGuard);
+
+/// 快照当前焦点元素(持有引用; 供 8 秒后后台写入)。None=取焦点失败。
+pub fn bg_snapshot_focused() -> Option<BgTarget> {
+    unsafe {
+        let sys = AxGuard(AXUIElementCreateSystemWide());
+        if sys.0.is_null() {
+            return None;
+        }
+        let name = CFString::new(KAX_FOCUSED_ELEMENT);
+        let mut out: CFTypeRef = std::ptr::null_mut();
+        let r = AXUIElementCopyAttributeValue(sys.0, name.as_concrete_TypeRef(), &mut out);
+        if r != 0 || out.is_null() {
+            return None;
+        }
+        Some(BgTarget(AxGuard(out)))
+    }
+}
+
+/// 对快照元素后台写入并回读校验(不激活目标 App, 不碰当前焦点)。
+pub fn bg_write_verify(target: &BgTarget, text: &str) -> bool {
+    let r = bg_write_report(target, text);
+    r.sel_ok || r.value_ok
+}
+
+/// 后台写探针详情(区分三条路径各自的返回): AXSelectedText 写 / AXValue 读改写 /
+/// 回读信号。诊断"后台直写未生效"到底是哪种失败。
+pub struct BgWriteReport {
+    pub pid: i32,
+    pub sel_set_r: i32,
+    pub value_before: Option<String>,
+    pub value_set_r: i32,
+    pub sel_ok: bool,
+    pub value_ok: bool,
+}
+
+pub fn bg_write_report(target: &BgTarget, text: &str) -> BgWriteReport {
+    unsafe {
+        let mut pid: i32 = 0;
+        AXUIElementGetPid(target.0 .0, &mut pid);
+        let value_before = ax_copy(target.0 .0, KAX_VALUE);
+        // 路径1: AXSelectedText 直写
+        let sel_name = CFString::new(KAX_SELECTED_TEXT);
+        let val = CFString::new(text);
+        let sel_set_r = AXUIElementSetAttributeValue(
+            target.0 .0,
+            sel_name.as_concrete_TypeRef(),
+            val.as_concrete_TypeRef() as CFTypeRef,
+        );
+        // 路径2: AXValue 追加写(读旧值+尾部拼接——非焦点元素拿不到光标位, 追加是最接近的语义)
+        let mut value_set_r = -1;
+        if let Some(old) = &value_before {
+            let merged = format!("{old}{text}");
+            let v = CFString::new(&merged);
+            let vname = CFString::new(KAX_VALUE);
+            value_set_r = AXUIElementSetAttributeValue(
+                target.0 .0,
+                vname.as_concrete_TypeRef(),
+                v.as_concrete_TypeRef() as CFTypeRef,
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let sel_ok = ax_copy(target.0 .0, KAX_SELECTED_TEXT).map(|s| s.contains(text)).unwrap_or(false);
+        let value_ok = ax_copy(target.0 .0, KAX_VALUE).map(|s| s.contains(text)).unwrap_or(false);
+        BgWriteReport { pid, sel_set_r, value_before, value_set_r, sel_ok, value_ok }
+    }
+}
+
+/// 后台追加写入(正式路径, 2026-11-03 需求: 焦点切走后仍写入按热键时快照的输入框)。
+/// 形态: 读 AXValue → 尾部拼接 → 写回 → 回读验证。非焦点元素没有选区/光标语义,
+/// AXSelectedText 路径多数 App 静默忽略(探针实测 TextEdit 即如此), value 追加是
+/// 唯一可靠形态——语音输入"往框里加一段话"通常正是尾部追加语义。
+/// 返回 Err(原因) 供交付链回退。
+pub fn bg_append_write(el: &crate::capture::FocusElement, text: &str) -> Result<(), String> {
+    unsafe {
+        let before = ax_copy(el.0, KAX_VALUE).ok_or("后台写: 读目标 AXValue 失败(元素已失效?)")?;
+        let merged = merge_tail(&before, text);
+        let v = CFString::new(&merged);
+        let vname = CFString::new(KAX_VALUE);
+        let r = AXUIElementSetAttributeValue(el.0, vname.as_concrete_TypeRef(), v.as_concrete_TypeRef() as CFTypeRef);
+        if r != 0 {
+            return Err(format!("后台写: AXValue 写入失败(kError={r})"));
+        }
+        // 回读验证(异步生效给两拍)
+        for delay in [60u64, 200u64] {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            if ax_copy(el.0, KAX_VALUE).map(|s| s.contains(text)).unwrap_or(false) {
+                return Ok(());
+            }
+        }
+        Err("后台写: 写入返回成功但回读无变化(目标 App 静默忽略)".into())
+    }
+}
+
+/// 尾部拼接(纯函数): 原文非空且不以换行结尾时补一个换行, 多段语音各占一行;
+/// 空框直接写。可测。
+fn merge_tail(before: &str, text: &str) -> String {
+    if before.is_empty() {
+        return text.to_string();
+    }
+    if before.ends_with('\n') {
+        format!("{before}{text}")
+    } else {
+        format!("{before}\n{text}")
     }
 }
 
@@ -108,4 +219,17 @@ pub fn ax_insert(text: &str) -> Result<(), String> {
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFRelease(cf: *mut std::ffi::c_void);
+}
+
+#[cfg(test)]
+mod bg_tests {
+    use super::merge_tail;
+
+    /// 尾部拼接语义: 空框直写 / 非换行结尾补换行(多段各占一行) / 已换行直接接
+    #[test]
+    fn merge_tail_rules() {
+        assert_eq!(merge_tail("", "第一段"), "第一段");
+        assert_eq!(merge_tail("已有内容", "第二段"), "已有内容\n第二段");
+        assert_eq!(merge_tail("已有内容\n", "第二段"), "已有内容\n第二段");
+    }
 }

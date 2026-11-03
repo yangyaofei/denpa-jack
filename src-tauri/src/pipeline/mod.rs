@@ -312,8 +312,20 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         // 只复制模式: 上一步已经真写过剪贴板(审计#1 对齐 Handy clipboard.rs:74)
         return Ok("copied".into());
     }
-    // 4) 焦点已变 → 不粘贴, 防止把文本贴到其它应用(B10); 文本已在剪贴板, 用户可手动粘贴
+    // 4) 焦点已变 → 后台写入按热键时快照的输入框(2026-11-03 需求); 不可写/元素失效
+    //    → 回退原行为(只复制, B10: 焦点已变绝不把文本贴到"现在"的前台)
     if !focus.still_valid() {
+        if !clipboard_only {
+            if let Some(el) = focus.element.as_ref() {
+                match crate::pipeline::delivery::ax::bg_append_write(el, text) {
+                    Ok(()) => return Ok("pasted-ax-bg".into()),
+                    Err(e) => {
+                        crate::log::elog(&format!("[deliver] 后台写入失败, 回退剪贴板: {e}"));
+                        return Ok("focus-changed-copied-only".into());
+                    }
+                }
+            }
+        }
         return Ok("focus-changed-copied-only".into());
     }
     // 5) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫

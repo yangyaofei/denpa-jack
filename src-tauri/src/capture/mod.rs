@@ -39,6 +39,6 @@ pub use key::esc_listen_begin;
 pub use recording::{ctrl_abort, ctrl_start, ctrl_stop, RecordingSession};
 pub use audio::{list_mics, resolve_mic};
 // 感知(批1 归位): 焦点快照/权限
-pub use focus::{ax_trusted, focused_element_info, frontmost_bundle, FocusInfo, FocusLock};
+pub use focus::{ax_trusted, focused_element_info, frontmost_bundle, FocusElement, FocusInfo, FocusLock};
 // 截图→LLM 内联格式(model 消费; 采集在 screen, 格式化能力出门面)
 pub use screen::{data_url_prefix, inline_image, InlineImage};

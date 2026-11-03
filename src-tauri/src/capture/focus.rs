@@ -98,20 +98,34 @@ pub fn focused_element_info() -> Option<FocusInfo> {
 }
 
 fn focused_element_info_once() -> Option<FocusInfo> {
+    let el = focused_element_info_once_raw()?;
     unsafe {
-        let _sys = AxGuard(AXUIElementCreateSystemWide());
-        if _sys.0.is_null() {
-            return None;
-        }
-        let focused = ax_attr_owned(_sys.0, KAX_FOCUSED_ELEMENT)?;
         let mut pid: i32 = 0;
-        if AXUIElementGetPid(focused.as_concrete_TypeRef(), &mut pid) != 0 || pid <= 0 {
+        if AXUIElementGetPid(el.0, &mut pid) != 0 || pid <= 0 {
             return None;
         }
         Some(FocusInfo {
             pid,
-            frame: window_frame_of(focused.as_concrete_TypeRef()),
+            frame: window_frame_of(el.0),
         })
+    }
+}
+
+/// 取当前焦点元素并持有引用(给 FocusLock 快照; 探针实测 TextEdit 后台 value 写入生效)
+fn focused_element_info_once_raw() -> Option<FocusElement> {
+    unsafe {
+        let sys = AxGuard(AXUIElementCreateSystemWide());
+        if sys.0.is_null() {
+            return None;
+        }
+        let focused = ax_attr_owned(sys.0, KAX_FOCUSED_ELEMENT)?;
+        // CFType(Arc 语义) drop 会 release 一次; FocusElement 要自持, 先 retain
+        let raw = focused.as_concrete_TypeRef();
+        if raw.is_null() {
+            return None;
+        }
+        cf_retain(raw);
+        Some(FocusElement(raw))
     }
 }
 
@@ -170,15 +184,62 @@ pub fn frontmost_bundle() -> Option<String> {
     s.split('=').next_back().map(|v| v.trim_matches('"').to_string())
 }
 
-/// FocusLock: 录音开始快照, 粘贴前校验(B10)
+/// 按住热键时的焦点元素引用(AX 快照)——后台写入的目标。
+/// CF 对象跨线程持有是官方允许的(retain/release 配对); AXUIElementRef 是裸指针,
+/// 需要手动声明 Send(交付线程与录音线程不同)。
+pub struct FocusElement(pub(crate) core_foundation::base::CFTypeRef);
+
+unsafe impl Send for FocusElement {}
+unsafe impl Sync for FocusElement {}
+
+impl Clone for FocusElement {
+    fn clone(&self) -> Self {
+        unsafe {
+            if !self.0.is_null() {
+                cf_retain(self.0);
+            }
+            FocusElement(self.0)
+        }
+    }
+}
+
+impl Drop for FocusElement {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.0.is_null() {
+                cf_release(self.0);
+            }
+        }
+    }
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRetain(cf: *const std::ffi::c_void) -> *const std::ffi::c_void;
+}
+
+/// 兼容文件头部已有的 CFRelease 声明(重复声明链接器会合并, 这里只补 Retain)
+unsafe fn cf_retain(p: core_foundation::base::CFTypeRef) {
+    CFRetain(p);
+}
+unsafe fn cf_release(p: core_foundation::base::CFTypeRef) {
+    CFRelease(p as *mut std::ffi::c_void);
+}
+
+/// FocusLock: 录音开始快照, 粘贴前校验(B10); element=焦点元素引用(后台写入用, 2026-11-03)
 #[derive(Clone, Default)]
 pub struct FocusLock {
     pub bundle: Option<String>,
+    /// 按住热键时的焦点输入框元素; None=快照时取不到(不影响原有交付路径)
+    pub element: Option<FocusElement>,
 }
 
 impl FocusLock {
     pub fn snapshot() -> Self {
-        Self { bundle: frontmost_bundle() }
+        Self {
+            bundle: frontmost_bundle(),
+            element: focused_element_info_once_raw(),
+        }
     }
     pub fn still_valid(&self) -> bool {
         match (&self.bundle, frontmost_bundle()) {

@@ -11,6 +11,13 @@ use crate::pipeline::history::wav_data_chunk;
 use crate::AppState;
 
 pub fn maybe_spawn(app: &AppHandle) {
+    if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("axbg") {
+        // 后台 AX 直写探针(2026-11-03 用户需求验证): App 有辅助功能权限, 探针宿主
+        // 非它不可(独立二进制会被 TCC 拒: -25204)。流程见 run_axbg 注释。
+        let app2 = app.clone();
+        std::thread::spawn(move || run_axbg(app2));
+        return;
+    }
     if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("quit") {
         let app2 = app.clone();
         std::thread::spawn(move || {
@@ -84,6 +91,42 @@ fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::config::Config)
 /// 段间隔只有 400ms —— 故意让后一段在前一段还在转写时进来, 用来端到端验证分段队列:
 /// 队列状态(排队/转写中)、FIFO 交付顺序、不丢段、失败不阻塞、浮窗多段显示。
 ///
+/// 后台 AX 直写可行性探针(用户真机 GUI 会话跑; 独立 example 二进制会被 TCC 拒
+/// (-25204), 只有正式 App 有辅助功能权限——探针宿主非 App 莫属)。
+/// 操作节奏: 启动后 5 秒内点进目标输入框(任意 App) → 日志"快照完成"后 8 秒内
+/// 切到别的地方 → 自动后台写入 → 日志结论。锚点 [axbg]。
+fn run_axbg(app: AppHandle) {
+    use crate::pipeline::delivery::ax::{bg_snapshot_focused, bg_write_report};
+    std::thread::sleep(std::time::Duration::from_millis(5000));
+    let Some(target) = bg_snapshot_focused() else {
+        log::log(&app, "AXBG-FAIL: 取焦点元素失败");
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        app.exit(1);
+        return;
+    };
+    log::log(&app, "AXBG: 快照完成 —— 8 秒内切到别的地方");
+    std::thread::sleep(std::time::Duration::from_millis(8000));
+    let r = bg_write_report(&target, "BGWRITE1");
+    let proc = std::process::Command::new("ps")
+        .args(["-p", &r.pid.to_string(), "-o", "comm="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    log::log(
+        &app,
+        &format!(
+            "AXBG-DETAIL: pid={}({}) selSetR={} valueSetR={} valueBefore={:?} selOk={} valueOk={}",
+            r.pid, proc, r.sel_set_r, r.value_set_r,
+            r.value_before.as_deref().map(|s| &s[..s.len().min(24)]),
+            r.sel_ok, r.value_ok
+        ),
+    );
+    let ok = r.sel_ok || r.value_ok;
+    log::log(&app, &format!("AXBG-RESULT: {}", if ok { "后台直写可行 ✓" } else { "后台直写未生效 ✗" }));
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    app.exit(if ok { 0 } else { 1 });
+}
+
 /// 用法: VOICEMAC_AUTOTEST=file VOICEMAC_AUTOTEST_FILES=a.wav,b.wav,c.wav
 fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
     std::thread::sleep(std::time::Duration::from_millis(1200));

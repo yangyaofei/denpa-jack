@@ -50,7 +50,7 @@ fn main() {
         let is_domain_file = matches!(src_domain, "capture" | "ui" | "pipeline" | "model");
         if is_domain_file {
             let facade: &[(&str, &[&str])] = &[
-                ("capture", &["ctrl_start", "ctrl_stop", "ctrl_abort", "esc_listen_begin", "esc_maybe_end", "RecordingSession", "list_mics", "resolve_mic", "ax_trusted", "focused_element_info", "frontmost_bundle", "FocusInfo", "FocusLock", "inline_image", "data_url_prefix", "InlineImage"]),
+                ("capture", &["ctrl_start", "ctrl_stop", "ctrl_abort", "esc_listen_begin", "esc_maybe_end", "RecordingSession", "list_mics", "resolve_mic", "ax_trusted", "focused_element_info", "frontmost_bundle", "FocusInfo", "FocusLock", "FocusElement", "inline_image", "data_url_prefix", "InlineImage"]),
                 ("model", &["transcribe", "retranscribe", "resolve_engine", "cancel_current", "refine", "selftest", "list_models", "budget_hotwords", "Cmd", "AsrEvent"]),
                 ("pipeline", &["SessionHandoff", "mark_cancelled", "cancel_latest", "submit_live", "submit_failed", "record_no_speech", "is_cancelled", "clear_cancelled_for_test"]),
                 ("ui", &["recording_started", "recording_ended", "dismiss", "refresh_status", "display_scale", "DisplayTarget", "cursor_point", "display_target_at", "main_display_target"]),
