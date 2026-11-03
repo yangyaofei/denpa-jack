@@ -216,6 +216,7 @@ pub fn run() {
             commands::clear_history, commands::copy_text, commands::get_hotwords,
             commands::recording_start, commands::recording_stop,
             commands::recording_abort, commands::hud_hide, commands::hud_poll, commands::poll_versions, commands::hud_resize, commands::app_version,
+            commands::reveal_audio,
 
             commands::queue_retry, commands::queue_clear, commands::queue_dismiss,
             crate::ui::update::update_check, crate::ui::update::update_install,

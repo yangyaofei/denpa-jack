@@ -4,6 +4,13 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
+/// 历史文件互斥锁: append(Live 交付线程) / update_by_ts(重转结算线程) /
+/// enforce_limit(清理) 三个写者 + 多读者并发——无锁时 read-modify-write
+/// 交错会 rename 覆盖丢行、读到半行丢解析(真机: "强类型未命中但 Value
+/// 兜底命中"每次重转都出现, 即 read_all_from 读到了 append 写一半的行)。
+/// 全部读写经此锁串行化(历史文件几 MB, 临界区耗时可忽略)。
+static HISTORY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryRecord {
     pub ts: String,
@@ -25,6 +32,7 @@ pub struct HistoryRecord {
 /// 重转回写专用——append 之外唯一的写路径。ts 是毫秒时间戳, 同毫秒两条
 /// 概率极低且重转场景只会有一个在途。
 pub fn update_by_ts(app: &tauri::AppHandle, ts: &str, new_rec: &HistoryRecord) -> Result<(), String> {
+    let _g = HISTORY_LOCK.lock().unwrap();
     let path = history_path(app);
     if !path.exists() {
         return Err("历史文件不存在".into());
@@ -70,6 +78,7 @@ pub fn recordings_dir(app: &tauri::AppHandle) -> PathBuf {
 
 /// 条数上限裁剪(读全量保留尾部 limit 条, Handy history_limit)
 pub fn enforce_limit(app: &tauri::AppHandle, limit: u64) {
+    let _g = HISTORY_LOCK.lock().unwrap();
     if limit == 0 {
         return; // 0 = 不限
     }
@@ -95,6 +104,7 @@ pub fn append(app: &tauri::AppHandle, rec: &HistoryRecord) {
 
 /// 追加一条记录到指定目录的 history.jsonl(可测核心)
 pub fn append_record_to(dir: &std::path::Path, rec: &HistoryRecord) {
+    let _g = HISTORY_LOCK.lock().unwrap();
     let _ = fs::create_dir_all(dir);
     // B45: ts 是前端 x-for 的 :key——同秒两条会 key 冲突导致列表渲染塌缩。
     // 撞秒时回读最后一行, 同 ts 则 +1s 偏移。
@@ -124,8 +134,10 @@ pub fn append_record_to(dir: &std::path::Path, rec: &HistoryRecord) {
     }
 }
 
-/// 读取指定目录全部记录(时间倒序)
+/// 读取指定目录全部记录(时间倒序)。经 HISTORY_LOCK——与写者互斥,
+/// 避免读到 append/update 写一半的行(filter_map 会静默丢行)。
 pub fn read_all_from(dir: &std::path::Path) -> Vec<HistoryRecord> {
+    let _g = HISTORY_LOCK.lock().unwrap();
     let Ok(raw) = fs::read_to_string(dir.join("history.jsonl")) else { return vec![] };
     let mut out: Vec<HistoryRecord> = raw
         .lines()

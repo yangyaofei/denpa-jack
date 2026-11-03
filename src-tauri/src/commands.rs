@@ -66,6 +66,24 @@ pub fn recording_abort() -> Result<(), String> {
     Ok(())
 }
 
+/// 历史条目音频: 播放(系统默认播放器) 或 在 Finder 中显示。
+/// 走后端 `open` 命令——前端 opener 插件的 scope 是静态 capability,
+/// 历史目录可被 data_dir 配置改到任意位置, 后端执行不受 scope 限制
+/// (真机: 前端 openPath/revealItemInDir 因空 scope 全被拒, 按钮看起来是死的)。
+#[tauri::command]
+pub fn reveal_audio(path: String, reveal: bool) -> Result<(), String> {
+    if !path.starts_with('/') {
+        return Err("只接受绝对路径".into());
+    }
+    let mut cmd = std::process::Command::new("open");
+    if reveal {
+        cmd.arg("-R"); // Finder 里定位(reveal) 而不是打开
+    }
+    cmd.arg(&path);
+    cmd.spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// 麦克风解析: 优先级第一个在线 → 指定设备 → 系统默认
 
 #[tauri::command]

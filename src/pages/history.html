@@ -36,6 +36,7 @@
                   <div class="hi-meta"><span x-text="h.ts"></span><span x-text="h.engine"></span></div>
                   <div class="hi-text" x-text="h.final_text || h.raw"></div>
                   <div class="hi-tags">
+                    <span class="chip" x-show="rerunning.has(h.ts)" style="color:#59c1ff">↻ 重算中</span>
                     <span class="chip" x-show="h.llm_used">✦LLM</span>
                     <span class="chip" x-show="h.warning" style="color:#ff6961" x-text="'⚠ ' + (h.warning||'').slice(0,24)"></span>
                     <span class="chip" x-text="h.delivered"></span>

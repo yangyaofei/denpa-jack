@@ -36,16 +36,14 @@ export function historyPage(this: AppThis) {
     async openAudio(this: AppThis, h: HistoryRecord) {
       if (!h.audio_path) return;
       try {
-        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-        await revealItemInDir(h.audio_path);
-      } catch (e) { console.error(e); }
+        await invoke("reveal_audio", { path: h.audio_path, reveal: true });
+      } catch (e: any) { this.error = String(e); }
     },
     async playHist(this: AppThis, h: HistoryRecord) {
       if (!h.audio_path) return;
       try {
-        const { openPath } = await import("@tauri-apps/plugin-opener");
-        await openPath(h.audio_path);
-      } catch (e) { console.error(e); }
+        await invoke("reveal_audio", { path: h.audio_path, reveal: false });
+      } catch (e: any) { this.error = String(e); }
     },
     async rerunHist(this: AppThis, h: HistoryRecord) {
       if (!h.audio_path) { this.error = "该记录无音频, 无法重转"; return; }
