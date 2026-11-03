@@ -16,6 +16,7 @@ extern "C" {
 
 const KAX_SELECTED_TEXT: &str = "AXSelectedText";
 const KAX_VALUE: &str = "AXValue";
+const KAX_PLACEHOLDER: &str = "AXPlaceholderValue";
 const KAX_FOCUSED_ELEMENT: &str = "AXFocusedUIElement";
 
 fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
@@ -115,11 +116,19 @@ pub fn bg_write_report(target: &BgTarget, text: &str) -> BgWriteReport {
 /// 形态: 读 AXValue → 尾部拼接 → 写回 → 回读验证。非焦点元素没有选区/光标语义,
 /// AXSelectedText 路径多数 App 静默忽略(探针实测 TextEdit 即如此), value 追加是
 /// 唯一可靠形态——语音输入"往框里加一段话"通常正是尾部追加语义。
+/// Web 输入框陷阱(2026-11-03 真机: OpenCode 输入框): 空框时 AXValue 读到的是
+/// placeholder 文本(如"规划、构建或提问…"), 直接拼接会把占位符固化进正文——
+/// 读 AXPlaceholderValue 比对, 相等即视为空框直写。
 /// 返回 Err(原因) 供交付链回退。
 pub fn bg_append_write(el: &crate::capture::FocusElement, text: &str) -> Result<(), String> {
     unsafe {
         let before = ax_copy(el.0, KAX_VALUE).ok_or("后台写: 读目标 AXValue 失败(元素已失效?)")?;
-        let merged = merge_tail(&before, text);
+        let placeholder = ax_copy(el.0, KAX_PLACEHOLDER);
+        let effective_before = match &placeholder {
+            Some(ph) if !ph.is_empty() && *ph == before => "", // 读到的"内容"其实是占位符 → 空框
+            _ => before.as_str(),
+        };
+        let merged = merge_tail(effective_before, text);
         let v = CFString::new(&merged);
         let vname = CFString::new(KAX_VALUE);
         let r = AXUIElementSetAttributeValue(el.0, vname.as_concrete_TypeRef(), v.as_concrete_TypeRef() as CFTypeRef);
@@ -231,5 +240,15 @@ mod bg_tests {
         assert_eq!(merge_tail("", "第一段"), "第一段");
         assert_eq!(merge_tail("已有内容", "第二段"), "已有内容\n第二段");
         assert_eq!(merge_tail("已有内容\n", "第二段"), "已有内容\n第二段");
+    }
+
+    /// placeholder 陷阱(2026-11-03 真机): 空框的 AXValue 读到的是占位符文本,
+    /// 拼接前必须把"内容==placeholder"归零为空框
+    #[test]
+    fn placeholder_read_as_content_means_empty() {
+        let placeholder = "规划、构建或提问。@ 提及，$ 技能，/ 命令";
+        let read_value = placeholder; // Web 输入框空框时 AXValue 返回的就是占位符
+        let effective = if read_value == placeholder { "" } else { read_value };
+        assert_eq!(merge_tail(effective, "语音文本"), "语音文本", "占位符不得固化进正文");
     }
 }
