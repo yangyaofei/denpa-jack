@@ -66,6 +66,17 @@ pub fn mark_cancelled(gen: u64) {
     }
 }
 
+/// 查询: 该会话代是否已被取消(消费即删——post_process 两道闸; 测试断言用)
+pub fn is_cancelled(gen: u64) -> bool {
+    CANCELLED_GENS.lock().unwrap().contains(&gen)
+}
+
+/// 测试辅助: 清空取消标记
+#[cfg(test)]
+pub fn clear_cancelled_for_test() {
+    CANCELLED_GENS.lock().unwrap().clear();
+}
+
 /// 该代是否被取消——**消费即删**: 两道闸谁先到谁消费, 第二道闸不再命中,
 /// 集合不会随时间膨胀。
 fn take_cancelled(gen: u64) -> bool {

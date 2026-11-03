@@ -66,8 +66,6 @@ async fn run(
     let context = context_from_hotwords(&hotwords);
     let mut first_feed = true;
     let mut finish_sent = false;
-    // 本会话最后一次流式 partial(全量语义)——twopass 空结果回退用(见 completed 分支)
-    let mut last_partial: Option<String> = None;
     // 本会话累计喂入的音频字节数: 收尾超时按时长缩放的依据(16k×16bit mono=32000B/s)
     let mut fed_bytes: usize = 0;
 
@@ -142,28 +140,13 @@ async fn run(
                     "x-input-transcript.partial" => {
                         if let Some(text) = v["text"].as_str() {
                             if !finish_sent {
-                                last_partial = Some(text.to_string());
                                 emit(AsrEvent::Partial(text.to_string()));
                             }
                         }
                     }
                     "conversation.item.input_audio_transcription.completed" => {
-                        // 网关 twopass 间歇性返回空(2026-11-03 真机: partial 有字/音频
-                        // rms 正常, 二遍重解 126ms 返回空串)——空的最终结果回退用
-                        // 流式累积文本(partial 本就是"当前最优全量"语义), 不让能转的
-                        // 段变"没听清"。两空才是真的没听清。
                         let t = v["transcript"].as_str().unwrap_or("");
-                        let final_text = match (t.trim().is_empty(), &last_partial) {
-                            (true, Some(p)) if !p.trim().is_empty() => {
-                                crate::log::elog(&format!(
-                                    "[local-asr] twopass 空, 回退流式文本({} 字)",
-                                    p.chars().count()
-                                ));
-                                p.clone()
-                            }
-                            _ => t.to_string(),
-                        };
-                        super::settle(&emit, &final_text);
+                        super::settle(&emit, t);
                         let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
                         return;
                     }

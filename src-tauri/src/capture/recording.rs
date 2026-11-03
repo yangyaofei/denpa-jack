@@ -312,13 +312,14 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     }
     *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
-    // 在途引擎会话 +1: Esc 收窗判据的第三块(松手→Result 之间 busy/recording 均为 false)
-    crate::core::engine_pending_add();
+    // 在途引擎会话登记: Esc 收窗判据的第三块(松手→Result 之间 busy/recording 均为 false),
+    // 也是 Esc 取消目标(段此时尚未入队, ctrl_cancel_queued 从这里找)
+    crate::core::engine_pending_add(ho.gen);
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
         crate::core::hud_emit(crate::core::HudEvent::Error("引擎会话异常中断".into()));
-        crate::core::engine_pending_sub(); // 不会有 Result 来注销, 就地收
+        crate::core::engine_pending_remove(ho.gen); // 不会有 Result 来注销, 就地收
     }
     session_cleanup(&app, Some(crate::capture::feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
@@ -329,11 +330,20 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     Ok(())
 }
 
-/// R2: 取消最近一个在途段(排队/转写中)。多段在途时只取消最新一段——
-/// 浮窗当前显示的就是它; 连按 Esc 逐段往回取消。无在途段时 no-op。
-/// 标记进 CANCELLED_GENS, 消费由 post_process 两道闸完成(短路或拦交付)。
+/// R2: 取消最近一个在途段(效果分派入口)。核心判定在 cancel_latest_gen(可单测)。
 pub fn ctrl_cancel_queued(_app: &tauri::AppHandle) -> Result<(), String> {
-    let gen = {
+    if cancel_latest_gen().is_none() {
+        log::elog("[queue] Esc: 无在途段, 忽略");
+    }
+    Ok(())
+}
+
+/// 取消目标优先级: ①引擎在途但未入队的段(松手→Result 之间, 只在 core.engine_gens)
+/// ②队列里的 Queued/Transcribing 段(rev 找最新)——①永远比②新。
+/// 标记进 CANCELLED_GENS, 消费由 post_process 两道闸完成(短路或拦交付):
+/// ①的段在 Result 到达 submit_live 入队后同样被开头闸按 gen 短路。
+fn cancel_latest_gen() -> Option<u64> {
+    let gen = crate::core::engine_pending_latest().or_else(|| {
         let c = crate::core::lock();
         c.queue
             .items
@@ -344,15 +354,13 @@ pub fn ctrl_cancel_queued(_app: &tauri::AppHandle) -> Result<(), String> {
                     && s.ho.gen != 0
             })
             .map(|s| s.ho.gen)
-    };
-    let Some(gen) = gen else {
-        log::elog("[queue] Esc: 无在途段, 忽略");
-        return Ok(());
-    };
-    crate::pipeline::mark_cancelled(gen);
-    log::elog(&format!("[queue] Esc: 已标记取消段 gen={gen}"));
-    crate::core::hud_emit(crate::core::HudEvent::Notify("已取消".into()));
-    Ok(())
+    });
+    if let Some(g) = gen {
+        crate::pipeline::mark_cancelled(g);
+        log::elog(&format!("[queue] Esc: 已标记取消段 gen={g}"));
+        crate::core::hud_emit(crate::core::HudEvent::Notify("已取消".into()));
+    }
+    gen
 }
 
 /// R2: Esc 监听收尾的统一判据——"既没在录音, 队列也没活"才真正停监听。
@@ -399,11 +407,13 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
 #[cfg(test)]
 mod tests {
     // 已搬函数的用例随迁(阶段A 第2步): budget_hotwords→dict.rs, resolve_asr→engine/mod.rs, wav_data_chunk→history.rs
+    // Esc 取消链的用例在 gap_tests(需 core 会话锁互斥)
 }
 
 #[cfg(test)]
 mod gap_tests {
     use crate::config::Config;
+    use crate::core::TEST_SESSION_LOCK;
 
     #[test]
     fn min_bytes_floor_never_zero() {
@@ -413,5 +423,41 @@ mod gap_tests {
         assert_eq!(crate::config::default_config().min_recording_seconds, 0.3);
         assert_eq!((0.3f64 * 32000.0) as usize, 9600);
         assert_eq!((0.0f64.max(0.05) * 32000.0) as usize, 1600, "floor 0.05s");
+    }
+
+    /// Esc 取消链三用例: 引擎在途未入队(本修复的核心场景)/多引擎在途取最新/
+    /// 无在途段 no-op。核心判定已抽为 cancel_latest_gen(无 AppHandle 依赖, 可单测)。
+    #[test]
+    fn esc_cancel_targets_engine_pending_before_queue() {
+        let _g = TEST_SESSION_LOCK.lock().unwrap();
+        crate::core::test_reset();
+        crate::pipeline::clear_cancelled_for_test();
+        // 场景: 队列里有一个 Queued 段(gen=7), 引擎在途一个更新的会话(gen=9, 未入队)。
+        // Esc 应取消 gen=9(最新), 而不是队列里的 7
+        crate::core::test_enqueue(crate::core::SegState::Queued, 7);
+        crate::core::engine_pending_add(9);
+        let hit = crate::capture::recording::cancel_latest_gen();
+        assert_eq!(hit, Some(9), "取消最新引擎会话");
+        assert!(crate::pipeline::is_cancelled(9), "取消最新引擎会话");
+        assert!(!crate::pipeline::is_cancelled(7), "旧段不动");
+    }
+
+    #[test]
+    fn esc_cancel_falls_back_to_queue_when_no_engine_pending() {
+        let _g = TEST_SESSION_LOCK.lock().unwrap();
+        crate::core::test_reset();
+        crate::pipeline::clear_cancelled_for_test();
+        crate::core::test_enqueue(crate::core::SegState::Queued, 3);
+        let hit = crate::capture::recording::cancel_latest_gen();
+        assert_eq!(hit, Some(3), "引擎收尾后回退到队列段");
+        assert!(crate::pipeline::is_cancelled(3));
+    }
+
+    #[test]
+    fn esc_cancel_noop_when_idle() {
+        let _g = TEST_SESSION_LOCK.lock().unwrap();
+        crate::core::test_reset();
+        crate::pipeline::clear_cancelled_for_test();
+        assert_eq!(crate::capture::recording::cancel_latest_gen(), None, "空转无副作用");
     }
 }

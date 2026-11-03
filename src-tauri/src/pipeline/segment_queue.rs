@@ -131,7 +131,9 @@ pub fn start(app: tauri::AppHandle) {
 /// 门面名 submit_live 表达意图"提交一段转写"(原 enqueue, 批3 门面化)。
 pub fn submit_live(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
     // 段已入队, 在途窗口结束(busy 从此接管 Esc 判据)
-    crate::core::engine_pending_sub();
+    if let Some(h) = ho.as_ref() {
+        crate::core::engine_pending_remove(h.gen);
+    }
     let mut c = crate::core::lock();
     let id = c.queue.next_id;
     c.queue.next_id += 1;
@@ -191,8 +193,8 @@ pub fn finish_rerun(id: u64) {
 /// 先落盘音频 + 写历史(不丢段), 再以 Failed 状态留在队列里等重试;
 /// worker 不会重跑它的后处理(asr_failed=true), 只会把它标成失败。
 pub fn submit_failed(app: &tauri::AppHandle, reason: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
-    crate::core::engine_pending_sub(); // 段终态(失败)入队, 在途窗口结束
     let ho = ho.unwrap_or_default();
+    crate::core::engine_pending_remove(ho.gen); // 段终态(失败)入队, 在途窗口结束
     // 落盘音频 + 写历史(delivered="failed") —— 保证"能重试"不是空话
     let audio = record_failed(app, "", "", false, &ho, &reason);
     let mut seg_ho = ho.clone();
@@ -263,9 +265,9 @@ pub fn record_no_speech(
     ho: Option<crate::pipeline::SessionHandoff>,
     msg: &str,
 ) -> Option<String> {
-    crate::core::engine_pending_sub(); // 段终态(NoSpeech)不入队, 在途窗口同样结束
     use tauri::Manager;
     let ho = ho.unwrap_or_default();
+    crate::core::engine_pending_remove(ho.gen); // 段终态(NoSpeech)不入队, 在途窗口同样结束
     let mut audio = ho.audio_path.clone();
     if !ho.pcm.is_empty() {
         if let Some(p) = crate::pipeline::history::save_wav(app, &ho.pcm) {

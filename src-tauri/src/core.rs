@@ -125,9 +125,11 @@ pub fn first_failed_id() -> Option<u64> {
 }
 
 /// 段队列域状态
+#[derive(Default)]
 pub struct QueueState {
     /// 段按处理顺序; 交付成功即离场, 失败段保留待重试
-    pub items: VecDeque<SegmentEntry>,    pub next_id: u64,
+    pub items: VecDeque<SegmentEntry>,
+    pub next_id: u64,
 }
 
 /// 会话域状态(第 2a 步搬入): "现在是否在录、录的内容"——全 App 最核心的事实,
@@ -141,29 +143,66 @@ pub struct SessionState {
     pub level: u32,
     /// 实时回显(流式引擎的 partial 文本)
     pub partial: String,
-    /// 在途引擎会话计数(松手→引擎出 Result 之间的窗口)。
-    /// Esc 收窗判据=busy||recording||本计数——段要等 Result 才入队,
+    /// 在途引擎会话代集合(松手→引擎出 Result 之间的窗口)。
+    /// Esc 收窗判据=busy||recording||本集合非空——段要等 Result 才入队,
     /// 只看 busy/recording 会在松手后误关 Esc 窗(批4 真机回归, R2 二犯)。
-    /// 计数而非 bool: 重叠录音时多个会话同时在途, 各自 +1/-1。
-    pub pending_engines: u32,
+    /// 存 gen 而非计数: Esc 的取消目标之一就是"引擎在途但还没入队"的段
+    /// (ctrl_cancel_queued 先查这里再查队列, 取消最新)。
+    pub engine_gens: Vec<u64>,
 }
 
 /// 登记一个在途引擎会话(ctrl_stop 交接箱写入后)
-pub fn engine_pending_add() {
+pub fn engine_pending_add(gen: u64) {
+    if gen == 0 {
+        return; // 0=不参与取消的会话(rerun 构造)
+    }
     let mut c = lock();
-    c.session.pending_engines += 1;
+    c.session.engine_gens.push(gen);
 }
 
 /// 注销一个在途引擎会话(段终态入队/NoSpeech/失败/引擎死——任一收尾路径)
-pub fn engine_pending_sub() {
+pub fn engine_pending_remove(gen: u64) {
     let mut c = lock();
-    c.session.pending_engines = c.session.pending_engines.saturating_sub(1);
+    c.session.engine_gens.retain(|g| *g != gen);
 }
 
 /// 是否还有在途引擎会话(Esc 收窗三判据之一)
 pub fn engine_pending() -> bool {
     let c = lock();
-    c.session.pending_engines > 0
+    !c.session.engine_gens.is_empty()
+}
+
+/// 最新一个在途引擎会话代(Esc 取消目标优先级最高的段: 比"已入队"的都新)
+pub fn engine_pending_latest() -> Option<u64> {
+    let c = lock();
+    c.session.engine_gens.last().copied()
+}
+
+// ───────── 测试辅助(仅单测可见; 与 TEST_SESSION_LOCK 配套防会话态用例互踩)─────────
+#[cfg(test)]
+pub fn test_reset() {
+    let mut c = lock();
+    c.session = SessionState { recording: false, level: 0, partial: String::new(), engine_gens: Vec::new() };
+    c.queue = QueueState::default();
+}
+
+/// 造一个最小在途段入队(取消链用例用; gen 写进 ho)
+#[cfg(test)]
+pub fn test_enqueue(state: SegState, gen: u64) {
+    let mut c = lock();
+    let id = c.queue.next_id;
+    c.queue.next_id += 1;
+    c.queue.items.push_back(SegmentEntry {
+        id,
+        source: SegSource::Live,
+        rerun_ts: None,
+        raw: String::new(),
+        ho: crate::pipeline::SessionHandoff { gen, ..Default::default() },
+        state,
+        reason: None,
+        asr_failed: false,
+    });
+    c.version += 1;
 }
 
 /// 控制域: 轮询版本计数(第 3 步收口)——"数据变了"的信号统一住 core,
@@ -220,7 +259,7 @@ pub fn hud_drain() -> Vec<HudEvent> {
 static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     version: 0,
     queue: QueueState { items: VecDeque::new(), next_id: 1 },
-    session: SessionState { recording: false, level: 0, partial: String::new(), pending_engines: 0 },
+    session: SessionState { recording: false, level: 0, partial: String::new(), engine_gens: Vec::new() },
     ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
     hud_events: VecDeque::new(),
 });
@@ -339,7 +378,7 @@ mod tests {
         // 复位到"未在录"的已知初态(锁内独占 session 域)
         {
             let mut c = lock();
-            c.session = SessionState { recording: false, level: 0, partial: String::new(), pending_engines: 0 };
+            c.session = SessionState { recording: false, level: 0, partial: String::new(), engine_gens: Vec::new() };
         }
         assert!(!session_recording());
         session_started();

@@ -422,7 +422,7 @@ mod tests {
                 recording: true,
                 level: 321,
                 partial: "投影回归".into(),
-                pending_engines: 0,
+                engine_gens: Vec::new(),
             };
             c.version += 1;
             c.version
@@ -436,7 +436,7 @@ mod tests {
         // 复位(不留脏状态给其他测试)
         {
             let mut c = crate::core::lock();
-            c.session = crate::core::SessionState { recording: false, level: 0, partial: String::new(), pending_engines: 0 };
+            c.session = crate::core::SessionState { recording: false, level: 0, partial: String::new(), engine_gens: Vec::new() };
             c.version += 1;
         }
         let _ = v0;
