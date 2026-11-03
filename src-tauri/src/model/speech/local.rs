@@ -64,6 +64,13 @@ async fn run(
     let (mut sink, stream) = ws.split();
     // 首帧携带的 context（词典热词）；只发一次
     let context = context_from_hotwords(&hotwords);
+    // 幻觉观测用: context 词条清单(判定 partial 是否复读 context, 见 partial 分支)
+    let context_terms: Vec<String> = context
+        .trim_start_matches("相关术语：")
+        .split('、')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut first_feed = true;
     let mut finish_sent = false;
     // 本会话累计喂入的音频字节数: 收尾超时按时长缩放的依据(16k×16bit mono=32000B/s)
@@ -140,6 +147,18 @@ async fn run(
                     "x-input-transcript.partial" => {
                         if let Some(text) = v["text"].as_str() {
                             if !finish_sent {
+                                // 幻觉观测(2026-11-03 用户报: 录音中浮窗冒出热词串,
+                                // 模型复读 context; 离线不可复现 → 先抓现场):
+                                // partial 对 context 词条命中率≥50% 打警告日志
+                                let hit = context_terms.iter().filter(|t| text.contains(t.as_str())).count();
+                                if !context_terms.is_empty() && hit * 2 >= context_terms.len() {
+                                    crate::log::elog(&format!(
+                                        "[ctx-leak] 流式疑似复读 context({}/{}) text={}",
+                                        hit,
+                                        context_terms.len(),
+                                        &text[..text.len().min(80)]
+                                    ));
+                                }
                                 emit(AsrEvent::Partial(text.to_string()));
                             }
                         }
