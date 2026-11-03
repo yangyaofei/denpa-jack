@@ -28,11 +28,8 @@ pub fn get_history(app: tauri::AppHandle, limit: usize) -> Vec<history::HistoryR
 
 #[tauri::command]
 pub fn clear_history(app: tauri::AppHandle) -> Result<(), String> {
-    let p = history::history_path(&app);
-    if p.exists() {
-        std::fs::remove_file(&p).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    // 经唯一写入口清空(而非删文件)——保持"文件存在"的语义稳定, 且与写者互斥
+    history::modify(&app, |recs| recs.clear()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

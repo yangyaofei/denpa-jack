@@ -216,5 +216,17 @@ check(
 );
 check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/capture/recording.rs", "utf8")));
 check("录音中的提示不触发收窗(静音提醒走 msg 但不排程收窗)", /if \(!recording\) hideAfter = 2500/.test(hudTs));
+check(
+  "历史文件单读写接口(history.jsonl 的文件操作只准出现在 pipeline/history.rs)",
+  (() => {
+    const files = ["src-tauri/src/commands.rs", "src-tauri/src/autotest.rs", "src-tauri/src/lib.rs",
+      ...readdirSync("src-tauri/src/pipeline").filter(f => f.endsWith(".rs") && f !== "history.rs").map(f => `src-tauri/src/pipeline/${f}`),
+      ...readdirSync("src-tauri/src/model").filter(f => f.endsWith(".rs")).map(f => `src-tauri/src/model/${f}`),
+      ...readdirSync("src-tauri/src/capture").filter(f => f.endsWith(".rs")).map(f => `src-tauri/src/capture/${f}`)];
+    // 测试断言(autotest 直读磁盘真值)豁免; 运行时代码不得绕过 modify_at/read_all_from
+    const offenders = files.filter(f => f !== "src-tauri/src/autotest.rs" && /history\.jsonl/.test(readFileSync(f, "utf8")));
+    return offenders.length === 0 || `越界: ${offenders.join(",")}`;
+  })(),
+);
 
 process.exit(fail ? 1 : 0);

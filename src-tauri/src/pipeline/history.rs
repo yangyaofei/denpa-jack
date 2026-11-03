@@ -1,7 +1,6 @@
 // 历史(JSONL, 参照 Swift OutputAndHistory)
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::PathBuf;
 
 /// 历史文件互斥锁: append(Live 交付线程) / update_by_ts(重转结算线程) /
@@ -28,39 +27,56 @@ pub struct HistoryRecord {
     pub warning: Option<String>,
 }
 
-/// R1: 按 ts 定位原位更新一条历史记录(JSONL 逐行匹配替换, 原子写回)。
-/// 重转回写专用——append 之外唯一的写路径。ts 是毫秒时间戳, 同毫秒两条
-/// 概率极低且重转场景只会有一个在途。
+/// R1: 按 ts 定位原位更新一条历史记录。
+/// 重转回写专用——append 之外的唯一修改语义(经 modify 唯一写入口)。
 pub fn update_by_ts(app: &tauri::AppHandle, ts: &str, new_rec: &HistoryRecord) -> Result<(), String> {
-    let _g = HISTORY_LOCK.lock().unwrap();
-    let path = history_path(app);
-    if !path.exists() {
-        return Err("历史文件不存在".into());
-    }
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut replaced = false;
-    let mut out = String::with_capacity(content.len() + 256);
-    for line in content.lines() {
-        if !replaced && line.contains("\"ts\":\"") {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if v["ts"].as_str() == Some(ts) {
-                    out.push_str(&serde_json::to_string(new_rec).map_err(|e| e.to_string())?);
-                    out.push('\n');
-                    replaced = true;
-                    continue;
-                }
+    modify(app, |recs| {
+        let hit = recs.iter_mut().find(|r| r.ts == ts);
+        match hit {
+            Some(slot) => {
+                *slot = new_rec.clone();
             }
+            None => return Err(format!("未找到 ts={ts} 的历史条目")),
         }
-        out.push_str(line);
+        Ok(())
+    })?
+}
+
+// ───────── 唯一读写接口(用户定则: 所有人只能经这一对接口碰 history.jsonl)─────────
+// 读 = read_all_from; 写 = modify_at(描述"怎么改", 落盘/锁/撞秒偏移全在内部)。
+// 曾有三个写者各自 read-modify-write 无锁并发, rename 交错丢行(真机
+// "重转不更新/偶发怪记录", 3b52c51 加锁修复, 本版收口成单一入口——
+// 下一个新写函数不可能再忘锁, 因为文件操作只存在于这两个函数体内)。
+
+/// 唯一写内核: 全量读 → mutator 修改内存 → 原子写回(tmp+rename)。
+/// 返回 mutator 的返回值。历史文件几 MB, 锁内全量重写在 SSD 上无感。
+pub fn modify_at<R>(
+    dir: &std::path::Path,
+    f: impl FnOnce(&mut Vec<HistoryRecord>) -> R,
+) -> Result<R, String> {
+    let _g = HISTORY_LOCK.lock().unwrap();
+    let path = dir.join("history.jsonl");
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let raw = fs::read_to_string(&path).unwrap_or_default();
+    let mut recs: Vec<HistoryRecord> = raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let r = f(&mut recs);
+    let mut out = String::with_capacity(raw.len() + 256);
+    for rec in &recs {
+        out.push_str(&serde_json::to_string(rec).map_err(|e| e.to_string())?);
         out.push('\n');
     }
-    if !replaced {
-        return Err(format!("未找到 ts={ts} 的历史条目"));
-    }
     let tmp = path.with_extension("jsonl.tmp");
-    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    Ok(())
+    fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(r)
+}
+
+/// 唯一写入口(app 版)
+pub fn modify<R>(
+    app: &tauri::AppHandle,
+    f: impl FnOnce(&mut Vec<HistoryRecord>) -> R,
+) -> Result<R, String> {
+    modify_at(&history_dir(app), f)
 }
 
 pub fn history_path(app: &tauri::AppHandle) -> PathBuf {
@@ -76,20 +92,12 @@ pub fn recordings_dir(app: &tauri::AppHandle) -> PathBuf {
     r
 }
 
-/// 条数上限裁剪(读全量保留尾部 limit 条, Handy history_limit)
+/// 条数上限裁剪(保留尾部 limit 条, Handy history_limit)
 pub fn enforce_limit(app: &tauri::AppHandle, limit: u64) {
-    let _g = HISTORY_LOCK.lock().unwrap();
     if limit == 0 {
         return; // 0 = 不限
     }
-    let path = history_path(app);
-    let Ok(raw) = std::fs::read_to_string(&path) else { return };
-    let lines: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
-    if lines.len() as u64 <= limit {
-        return;
-    }
-    let keep: Vec<&str> = lines[lines.len() - limit as usize..].to_vec();
-    let _ = std::fs::write(&path, keep.join("\n") + "\n");
+    let _ = modify(app, |recs| recs.truncate(limit as usize));
 }
 
 /// 主窗历史刷新信号(转发 core: 计数已收口, 写路径走 core::bump_history)
@@ -97,41 +105,25 @@ pub fn history_version() -> u64 {
     crate::core::history_version()
 }
 
+/// 追加一条(Live 交付/失败留痕/NoSpeech 共用)。撞秒偏移在 modify 内核统一处理
+/// (B45: ts 是前端 x-for 的 :key, 同秒两条 key 冲突导致列表渲染塌缩)。
 pub fn append(app: &tauri::AppHandle, rec: &HistoryRecord) {
     crate::core::bump_history();
-    append_record_to(&history_dir(app), rec);
+    let _ = modify(app, |recs| {
+        let mut r2 = rec.clone();
+        if recs.last().map(|l| l.ts == rec.ts).unwrap_or(false) {
+            r2.ts = bump_second(&rec.ts);
+        }
+        recs.push(r2);
+    });
 }
 
-/// 追加一条记录到指定目录的 history.jsonl(可测核心)
-pub fn append_record_to(dir: &std::path::Path, rec: &HistoryRecord) {
-    let _g = HISTORY_LOCK.lock().unwrap();
-    let _ = fs::create_dir_all(dir);
-    // B45: ts 是前端 x-for 的 :key——同秒两条会 key 冲突导致列表渲染塌缩。
-    // 撞秒时回读最后一行, 同 ts 则 +1s 偏移。
-    let file = dir.join("history.jsonl");
-    if let Ok(raw) = fs::read_to_string(&file) {
-        if let Some(last) = raw.lines().rev().find(|l| !l.trim().is_empty()) {
-            if let Ok(prev) = serde_json::from_str::<HistoryRecord>(last) {
-                if prev.ts == rec.ts {
-                    let mut r2 = rec.clone();
-                    r2.ts = bump_second(&rec.ts);
-                    if let Ok(mut line) = serde_json::to_string(&r2) {
-                        line.push('\n');
-                        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&file) {
-                            let _ = f.write_all(line.as_bytes());
-                        }
-                    }
-                    return;
-                }
-            }
-        }
-    }
-    if let Ok(mut line) = serde_json::to_string(rec) {
-        line.push('\n');
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("history.jsonl")) {
-            let _ = f.write_all(line.as_bytes());
-        }
-    }
+/// 按 ts 定位一条记录(重转回写的读侧; 与 read_all_from 同锁同解析)
+pub fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<HistoryRecord, String> {
+    read_all_from(&history_dir(app))
+        .into_iter()
+        .find(|r| r.ts == ts)
+        .ok_or_else(|| format!("未找到 ts={ts} 的历史条目"))
 }
 
 /// 读取指定目录全部记录(时间倒序)。经 HISTORY_LOCK——与写者互斥,
@@ -352,10 +344,36 @@ mod fs_tests {
             raw: "原文".into(), final_text: "终稿".into(), llm_used: true,
             delivered: "pasted-cmdv".into(), audio_path: String::new(), duration_ms: 1000, warning: None, llm_thinking: None,
         };
-        append_record_to(&dir, &rec);
-        append_record_to(&dir, &rec);
+        // 唯一写入口: 两次 append 同 ts → 撞秒偏移(B45), ts 不同但条数对
+        modify_at(&dir, |recs| recs.push(rec.clone())).unwrap();
+        modify_at(&dir, |recs| recs.push(rec.clone())).unwrap();
         let all = read_all_from(&dir);
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn modify_concurrent_writers_never_lose_records() {
+        // 单一写入口的并发回归: 两批各 50 条交错写入, 最终必须 100 条
+        // (旧三写者无锁时代 rename 交错会丢行——本测试锁死该回归路径)
+        let (dir, _g) = tmpdir();
+        let mut handles = Vec::new();
+        for batch in 0..2 {
+            let d = dir.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..50 {
+                    let rec = HistoryRecord {
+                        ts: format!("2026-01-0{} 00:00:{:02}", batch + 1, i % 60), engine: "t".into(),
+                        raw: format!("b{batch}i{i}").into(), final_text: String::new(), llm_used: false,
+                        delivered: "none".into(), audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
+                    };
+                    modify_at(&d, |recs| recs.push(rec)).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(read_all_from(&dir).len(), 100, "并发写不得丢行");
     }
 
     #[test]

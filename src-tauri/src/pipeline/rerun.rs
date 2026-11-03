@@ -77,7 +77,7 @@ pub fn retranscribe(
 /// R1: 重转成功结算——词典纠错 → 可选 LLM(失败降级词典版, 与主链路 D1 一致) → 回写条目。
 /// 完成后 bump history 版本(前端轮询刷新)。
 fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
-    let Ok(mut rec) = find_by_ts(app, &ts) else {
+    let Ok(mut rec) = crate::pipeline::history::find_by_ts(app, &ts) else {
         crate::log::elog(&format!("[rerun] 回写失败: 未找到 ts={ts} 的条目"));
         return;
     };
@@ -100,7 +100,7 @@ fn rerun_settle_ok(app: &tauri::AppHandle, raw: &str, ts: &str) {
 
 /// R1: 重转失败/未识别结算——原条目加 warning(原文保留, 用户可再试)
 fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
-    if let Ok(mut rec) = find_by_ts(app, ts) {
+    if let Ok(mut rec) = crate::pipeline::history::find_by_ts(app, ts) {
         rec.warning = Some(msg.to_string());
         if let Err(e) = crate::pipeline::history::update_by_ts(app, ts, &rec) {
             crate::log::elog(&format!("[rerun] 回写失败: {e}"));
@@ -111,32 +111,3 @@ fn rerun_settle_fail(app: &tauri::AppHandle, ts: &str, msg: &str) {
     crate::log::elog(&format!("[rerun] {msg} ts={ts}"));
 }
 
-fn find_by_ts(app: &tauri::AppHandle, ts: &str) -> Result<crate::pipeline::history::HistoryRecord, String> {
-    let path = crate::config::data_dir(app).join("history.jsonl");
-    let recs = crate::pipeline::history::read_all_from(&path);
-    if let Some(r) = recs.iter().find(|r| r.ts == ts) {
-        return Ok(r.clone());
-    }
-    // 防御性兜底(真机 2026-10-25 出现过"文件里有这行但强类型解析后找不到"):
-    // 用 Value 逐行匹配 ts, 绕过 HistoryRecord 字段级解析差异; 命中再转强类型
-    if let Ok(raw) = std::fs::read_to_string(&path) {
-        for line in raw.lines() {
-            if !line.contains(ts) { continue; }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if v["ts"].as_str() == Some(ts) {
-                    if let Ok(r) = serde_json::from_str::<crate::pipeline::history::HistoryRecord>(line) {
-                        crate::log::elog("[rerun] 强类型未命中但 Value 兜底命中(版本迁移期字段差异?)");
-                        return Ok(r);
-                    }
-                }
-            }
-        }
-    }
-    let first = recs.first().map(|r| r.ts.clone()).unwrap_or_default();
-    let last = recs.last().map(|r| r.ts.clone()).unwrap_or_default();
-    crate::log::elog(&format!(
-        "[rerun] find_by_ts 未命中: path={} 共{}条 首={} 尾={}",
-        path.display(), recs.len(), first, last
-    ));
-    Err(format!("未找到 ts={ts}"))
-}
