@@ -312,10 +312,13 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     }
     *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
+    // 在途引擎会话 +1: Esc 收窗判据的第三块(松手→Result 之间 busy/recording 均为 false)
+    crate::core::engine_pending_add();
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
         crate::core::hud_emit(crate::core::HudEvent::Error("引擎会话异常中断".into()));
+        crate::core::engine_pending_sub(); // 不会有 Result 来注销, 就地收
     }
     session_cleanup(&app, Some(crate::capture::feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));

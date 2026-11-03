@@ -60,7 +60,11 @@ pub fn esc_listen_begin() {
             }
             tick += 1;
             if tick % 20 == 0 {
-                let active = crate::core::busy() || crate::core::session_recording();
+                // 三判据: 录音中 / 队列有活 / 引擎会话在途(松手→Result 之间——
+                // 段要等 Result 才入队, 只看前两者会在松手后误关窗, 批4 真机回归)
+                let active = crate::core::busy()
+                    || crate::core::session_recording()
+                    || crate::core::engine_pending();
                 if active {
                     saw_active = true;
                 } else if saw_active {
