@@ -232,16 +232,39 @@ pub struct FocusLock {
     pub bundle: Option<String>,
     /// 按住热键时的焦点输入框元素; None=快照时取不到(不影响原有交付路径)
     pub element: Option<FocusElement>,
+    /// 快照元素的进程号——焦点比对的可靠信号(2026-11-03 真机: 目标 App 的
+    /// bundle 解析为 "!!none", bundle 比对恒等, "焦点已变"永不触发, 后台写
+    /// 分支一次都没进过。pid 从 AX 元素直接拿, 不依赖 lsappinfo)
+    pub pid: Option<i32>,
 }
 
 impl FocusLock {
     pub fn snapshot() -> Self {
+        let element = focused_element_info_once_raw();
+        let pid = element.as_ref().and_then(|el| {
+            unsafe {
+                let mut pid: i32 = 0;
+                if AXUIElementGetPid(el.0, &mut pid) == 0 && pid > 0 {
+                    Some(pid)
+                } else {
+                    None
+                }
+            }
+        });
         Self {
             bundle: frontmost_bundle(),
-            element: focused_element_info_once_raw(),
+            element,
+            pid,
         }
     }
+    /// 焦点是否还指向快照时的目标。
+    /// 判定优先级(2026-11-03 真机教训: 目标 App bundle 解析为 "!!none", bundle 比对
+    /// 恒等导致"焦点已变"永不触发): ①pid 级——快照元素 pid 与当前焦点元素 pid 比对
+    /// (全走 AX, 不依赖 lsappinfo); ②bundle 级回退(快照没取到元素时)。
     pub fn still_valid(&self) -> bool {
+        if let Some(snap_pid) = self.pid {
+            return current_focus_pid() == Some(snap_pid);
+        }
         match (&self.bundle, frontmost_bundle()) {
             (Some(a), Some(b)) => a.as_str() == b.as_str(),
             (None, None) => true,
@@ -249,5 +272,21 @@ impl FocusLock {
             (None, Some(_)) => true,
             (Some(_), None) => true,
         }
+    }
+}
+
+/// 当前键盘焦点元素的进程号(单次尝试, 交付路径上不能像探测那样重试 3 次等 90ms)
+fn current_focus_pid() -> Option<i32> {
+    unsafe {
+        let sys = AxGuard(AXUIElementCreateSystemWide());
+        if sys.0.is_null() {
+            return None;
+        }
+        let focused = ax_attr_owned(sys.0, KAX_FOCUSED_ELEMENT)?;
+        let mut pid: i32 = 0;
+        if AXUIElementGetPid(focused.as_concrete_TypeRef(), &mut pid) != 0 || pid <= 0 {
+            return None;
+        }
+        Some(pid)
     }
 }
