@@ -179,7 +179,15 @@ pub fn transcribe(
         // 统一事件桥: Result 触发后处理(纠错→LLM→交付→历史), 交接数据从会话箱 take
         let emit = move |ev: AsrEvent| {
             let (tag, payload) = match ev {
-                AsrEvent::Partial(t) => ("asr-partial", t),
+                    AsrEvent::Partial(t) => {
+                        // 按 gen 归属写入该段的流式文字(串台修复: 旧单槽会把上一段
+                        // 松手后的流式字写进下一段录音的回显槽)。gen 从交接箱读不取走。
+                        let gen = handoff.lock().unwrap().as_ref().map(|h| h.gen).unwrap_or(0);
+                        if gen != 0 {
+                            crate::core::engine_partial(gen, &t);
+                        }
+                        ("asr-partial", t)
+                    }
                 AsrEvent::Result(t) => {
                     // 分段队列(用户定则): 结果不在这里直接跑后处理, 而是入队, 由队列的单
                     // worker 串行执行 —— 交付顺序恒等于录音顺序; 同时避免并行段互相结算
@@ -216,9 +224,9 @@ pub fn transcribe(
             // HUD 唯一入口: 这里只报事实(回显/提示/错误), 显示成什么样由 hud.rs 决定。
             // 旧写法是各层直接改同一份共享快照, 已全部收敛到 hud 模块的接口。
             match tag {
-                "asr-partial" => crate::core::session_partial(&payload),
                 "asr-nospeech" => crate::core::hud_emit(crate::core::HudEvent::NoSpeech(payload.clone())),
                 "asr-error" => crate::core::hud_emit(crate::core::HudEvent::Error(payload.clone())),
+                // asr-partial: 已在事件分派处按 gen 直写 core::engine_partial
                 // asr-result: 队列/阶段由 hud 的 poll 现算, 不需要在这里写状态
                 _ => {}
             }
