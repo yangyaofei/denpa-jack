@@ -84,19 +84,33 @@ pub fn views() -> (Option<SegView>, Vec<SegView>) {
     views_of(&c)
 }
 
-/// HUD 原子快照(2026-11-05 修复: hud_snapshot 曾两次独立读 core——views() 一次、
-/// recording/partial 又一次, 两读之间段迁移(交付离队+新录音开始)会让快照撕裂:
-/// 已交付段残影进队列/录音态滞后——用户看到"历史和正在转的内容串了")。
-pub fn hud_projection() -> (bool, u32, String, Option<SegView>, Vec<SegView>) {
+/// HUD 原子投影(2026-11-05 两步演进: ①修撕裂——曾两次独立读 core; ②按用户指正
+/// **删除 ui 侧快照镜像层**, poll 直读 core)。一次锁内取齐持久投影+版本。
+/// 事件队列不走这里(唯一消费者是 ui 的事件泵: drain 后应用展示规则写一次性槽,
+/// poll 合并槽——两条通道各司其职, 互不相偷)。
+pub fn hud_all() -> HudAll {
     let c = lock();
     let (cur, queue) = views_of(&c);
-    (
-        c.session.recording,
-        c.session.level,
-        c.session.partial.clone(),
+    HudAll {
+        version: c.version,
+        recording: c.session.recording,
+        level: c.session.level,
+        partial: c.session.partial.clone(),
         cur,
         queue,
-    )
+        failed: c.queue.items.iter().any(|s| s.state == SegState::Failed),
+    }
+}
+
+/// hud_all 的载荷(poll 直读 core 的持久投影)
+pub struct HudAll {
+    pub version: u64,
+    pub recording: bool,
+    pub level: u32,
+    pub partial: String,
+    pub cur: Option<SegView>,
+    pub queue: Vec<SegView>,
+    pub failed: bool,
 }
 
 /// views 的无锁内核(调用方持锁; views/hud_projection 共用)
