@@ -223,13 +223,21 @@ async function pollOnce() {
       showFail(!recording);
       if (!recording) hideAfter = 2500;
     }
-    // 存活规则(用户定稿):
-    //   busy 只算"真的有活在跑"(录音中/转写中/排队中) —— 失败段不算"活",
-    //   只剩失败时按规则 3 计 2.5s 后收起(issue #3: 原来把 failed 也算进 busy, 于是永不收起)
+    // 存活规则(用户定则 2026-11-05 重申):
+    //   浮窗消失的唯一前提 = 正在转写的所有内容都已**成功交付**(交付完成起等 N 秒收起)。
+    //   - 活段(录音/转写/排队中)不算完 → 不收
+    //   - 失败段(未成功交付)也不算完 → 不收, 留着显示失败条等用户重试/清空
+    //     (issue #3 时代的"失败 2.5s 收"作废——用户明确定则: 没成功交付就不该消失)
+    //   - 重转段(rerun)不算: 历史页的后台重算与语音链路交付无关(poll 已滤 source=rerun)
     const queueBusy = q.some((r) => r.state === "queued" || r.state === "transcribing");
-    const busy = s.status === "recording" || s.status === "transcribing" || (cur && cur.state === "transcribing") || queueBusy;
+    const busy =
+      s.status === "recording" ||
+      s.status === "transcribing" ||
+      (cur && cur.state === "transcribing") ||
+      queueBusy ||
+      (!recording && failed);
     if (busy) {
-      cancelHide(); // 规则 1/4: 还有段在排队或转写 → 不自动收
+      cancelHide(); // 还有活/有失败未处理 → 不自动收
     } else if (s.finished) {
       // 规则 2: 全部交付完成 → 正常完成 350ms 收起;
       //         带 warning(含"未识别到语音内容")要留 2.5s, 否则一闪而过看不见(issue #4)
@@ -241,8 +249,8 @@ async function pollOnce() {
         hideAfter = d.warning ? 2500 : 350;
       }
     } else if (s.version !== 0) {
-      // 规则 3: 只剩失败段 → 2.5s 提示后收起(与"录音太短已丢弃"同长)
-      hideAfter = failed ? 2500 : 350;
+      // 兜底: 无活段/无失败/无交付载荷的静默态(如启动初期), 350ms 收
+      hideAfter = 350;
     }
     // 统一排程一次(见本轮开头 hideAfter 的说明)
     if (!busy && hideAfter !== null) scheduleHide(hideAfter);

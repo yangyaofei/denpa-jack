@@ -89,37 +89,41 @@ pub fn views() -> (Option<SegView>, Vec<SegView>) {
 /// 事件队列不走这里(唯一消费者是 ui 的事件泵: drain 后应用展示规则写一次性槽,
 /// poll 合并槽——两条通道各司其职, 互不相偷)。
 pub fn hud_all() -> HudAll {
-    let c = lock();
+    let mut c = lock();
     let (mut cur, mut queue) = views_of(&c);
     // 引擎在途但尚未入队的段(Result 未到): 以虚拟"转写中"视图补进投影——
     // 最新一个兜底 cur 位(松手→Result 之间左栏不断档), 其余进队列列表。
     // 已入队的段(views_of 已含)跳过, 按 gen 去重。
     let queued: Vec<u64> = c.queue.items.iter().map(|s| s.ho.gen).collect();
-    let inflight: Vec<&u64> = c.session.engine_gens.iter().filter(|g| !queued.contains(g)).collect();
-    let partial_of = |g: u64| {
+    let inflight: Vec<u64> = c.session.engine_gens.iter().filter(|g| !queued.contains(g)).copied().collect();
+    let partial_of = |c: &CoreState, g: u64| {
         c.session.engine_partials.iter().find(|(pg, _)| *pg == g).map(|(_, t)| t.clone()).unwrap_or_default()
     };
     if cur.is_none() {
         if let Some(latest) = inflight.last() {
-            let g = **latest;
-            cur = Some(SegView { state: "transcribing".into(), source: "live".into(), text: partial_of(g) });
+            let g = *latest;
+            cur = Some(SegView { state: "transcribing".into(), source: "live".into(), text: partial_of(&c, g) });
         }
     }
     for g in inflight.iter().rev().skip(1) {
-        queue.push(SegView { state: "transcribing".into(), source: "live".into(), text: partial_of(**g) });
+        queue.push(SegView { state: "transcribing".into(), source: "live".into(), text: partial_of(&c, *g) });
     }
+    // 一次性通知槽: 取走即清(前端拿到即消费; 写入侧 hud_oneshot_put 已 bump version,
+    // 去重丢弃的安全窗口由"写入必 bump"保证)
+    let oneshot = std::mem::take(&mut c.hud_oneshot);
     HudAll {
         version: c.version,
         recording: c.session.recording,
         level: c.session.level,
-        partial: c.session.engine_gens.last().map(|g| partial_of(*g)).unwrap_or_default(),
+        partial: c.session.engine_gens.last().map(|g| partial_of(&c, *g)).unwrap_or_default(),
         cur,
         queue,
         failed: c.queue.items.iter().any(|s| s.state == SegState::Failed),
+        oneshot,
     }
 }
 
-/// hud_all 的载荷(poll 直读 core 的持久投影)
+/// hud_all 的载荷(poll 直读 core 的持久投影+一次性通知)
 pub struct HudAll {
     pub version: u64,
     pub recording: bool,
@@ -128,6 +132,7 @@ pub struct HudAll {
     pub cur: Option<SegView>,
     pub queue: Vec<SegView>,
     pub failed: bool,
+    pub oneshot: HudOneshot,
 }
 
 /// views 的无锁内核(调用方持锁; views/hud_projection 共用)
@@ -295,6 +300,29 @@ pub struct CoreState {
     /// 浮窗事件槽(批4): capture/model/pipeline 不再直调 ui——提示类事件进这里,
     /// hud 自己的泵线程 drain 后分派(延迟≤100ms, 提示类无感)。cap 32 防御性截断。
     pub hud_events: VecDeque<HudEvent>,
+    /// 一次性通知槽(泵写入 → 前端 poll 取走): msg/err/finished 是"待消费的事件
+    /// 结果", 不是状态镜像——持久数据(partial/level/段列表)一律投影直读。
+    /// 住 core(2026-11-05 从 ui static 迁入): 写入必 bump version——前端以
+    /// version 去重快照, 槽写入若不 bump, 提示会被去重丢弃(真机: 没听清后
+    /// 浮窗停在"转写中"永不收窗)。
+    pub hud_oneshot: HudOneshot,
+}
+
+/// 一次性通知槽的载荷(见 CoreState.hud_oneshot 注释)
+#[derive(Default)]
+pub struct HudOneshot {
+    pub msg: String,
+    pub finished: Option<serde_json::Value>,
+    pub err: Option<String>,
+    pub polishing: bool,
+}
+
+/// 通知槽写入(唯一入口, 泵调用; 展示保护规则在泵的 apply_event 里判 recording)。
+/// 每次(批)写入 bump version——"槽内容变了"就是投影变了。
+pub fn hud_oneshot_put(f: impl FnOnce(&mut HudOneshot)) {
+    let mut c = lock();
+    f(&mut c.hud_oneshot);
+    c.version += 1;
 }
 
 /// 浮窗提示事件(批4 反向通知走 core 的第一批)。
@@ -331,6 +359,12 @@ static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     session: SessionState { recording: false, level: 0, engine_gens: Vec::new(), engine_partials: Vec::new() },
     ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
     hud_events: VecDeque::new(),
+    hud_oneshot: HudOneshot {
+        msg: String::new(),
+        finished: None,
+        err: None,
+        polishing: false,
+    },
 });
 
 /// 取 core 锁(中毒时取出数据继续——见模块头"锁中毒策略")

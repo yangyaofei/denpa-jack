@@ -16,7 +16,7 @@
 //!   - 尺寸变化触发重新贴屏(瞬间消失再出现、位置也跳) → 尺寸只在中轴线上伸缩, 位置只在"按下"时定一次。
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+// Mutex 不再需要: 快照镜像层与 ui 侧通知槽都已迁 core(2026-11-05)
 
 /// 对外可感知的阶段。**显示文案不在这里拼**——那是视图(hud.ts)的事, 这里只表达语义。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -107,27 +107,15 @@ pub fn recording_ended(app: &tauri::AppHandle) {
 
 
 
-/// 一次性通知槽(pump → poll 的交接箱): msg/err/finished 是"待前端取走的事件",
-/// **不是状态镜像**——持久数据(partial/level/段列表)一律 poll 直读 core。
-/// 展示保护规则(录音中不被上一段收尾打扰)在 pump 写槽时判 recording(时点准确)。
-#[derive(Default)]
-struct Oneshot {
-    msg: String,
-    finished: Option<serde_json::Value>,
-    err: Option<String>,
-    polishing: bool,
-}
-
-static ONESHOT: Mutex<Oneshot> = Mutex::new(Oneshot {
-    msg: String::new(),
-    finished: None,
-    err: None,
-    polishing: false,
-});
+/// 一次性通知槽(pump → poll 的交接箱)——已迁 core(2026-11-05):
+/// 写入=core::hud_oneshot_put(必 bump version), 取走=hud_all 内 mem::take。
+/// 曾住 ui static 且写入不 bump version——前端按 version 去重把槽内容丢弃,
+/// 没听清后浮窗停在"转写中"永不收窗(真机回归, 本批修复)。
 
 /// 事件→一次性槽的纯映射(展示保护规则的载体, 便于单测):
 /// recording=true 时收尾类事件不覆盖阶段(issue #2); 返回值=是否需要弹窗。
-fn apply_event(o: &mut Oneshot, recording: bool, ev: &crate::core::HudEvent) -> bool {
+/// 槽本体住 core(hud_oneshot)——写入经 core::hud_oneshot_put(必 bump version)。
+fn apply_event(o: &mut crate::core::HudOneshot, recording: bool, ev: &crate::core::HudEvent) -> bool {
     match ev {
         crate::core::HudEvent::Notify(m) => {
             o.msg = m.clone();
@@ -178,15 +166,24 @@ fn derive_status(recording: bool, polishing: bool, cur_transcribing: bool, has_n
 }
 
 /// 事件泵(批4 起, 2026-11-05 职责纯化): 事件队列的唯一消费者。
-/// drain → apply_event 纯函数(含展示保护) → 写一次性槽(poll 合并取走) + 需弹窗的事件 show。
+/// drain → apply_event 纯函数(展示保护规则: 录音中不被上一段收尾打扰)
+/// → core::hud_oneshot_put 写槽(取走即清; 写入必 bump version——
+/// 前端以 version 去重, 槽写入不 bump 提示会被丢弃)+需弹窗事件 show。
 /// 装配期由 lib.rs 启动。
 pub fn start_event_pump(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
-        for ev in crate::core::hud_drain() {
+        let events = crate::core::hud_drain();
+        if !events.is_empty() {
             let recording = crate::core::session_recording();
-            let mut o = ONESHOT.lock().unwrap();
-            if apply_event(&mut o, recording, &ev) {
-                drop(o);
+            let mut show = false;
+            crate::core::hud_oneshot_put(|o| {
+                for ev in &events {
+                    if apply_event(o, recording, ev) {
+                        show = true;
+                    }
+                }
+            });
+            if show {
                 crate::ui::overlay::show_window(&app);
             }
         }
@@ -225,8 +222,8 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
 /// 展示保护规则(录音中不被上一段的收尾事件打扰)在此判 recording。
 pub fn poll() -> Snapshot {
     let a = crate::core::hud_all();
-    // 一次性通知(pump 写入的交接箱, 取走即清; 展示保护规则已在 pump 判过)
-    let o = std::mem::take(&mut *ONESHOT.lock().unwrap());
+    // 一次性通知(core 槽, 取走即清; 展示保护规则已在泵的 apply_event 判过)
+    let o = a.oneshot;
     // HUD 不显示重转段(用户定则: 重转是后台任务, 录音浮窗只管语音链路的段;
     // 重转状态看主窗历史页)。views() 保持全量, 各投影端自决过滤
     let queue: Vec<_> = a.queue.into_iter().filter(|s| s.source != "rerun").collect();
@@ -267,8 +264,8 @@ pub fn poll() -> Snapshot {
 mod tests {
     use super::*;
 
-    fn slot() -> Oneshot {
-        Oneshot::default()
+    fn slot() -> crate::core::HudOneshot {
+        crate::core::HudOneshot::default()
     }
 
     // 录音中收到上一条的交付/润色回调: 载荷照给, 但不许置"润色中"阶段(issue #2)

@@ -152,11 +152,10 @@ check("hud.html 当前文字可多行且有滚动上限(110px, 与队列化之�
 // 存活规则(issue #3/#4): 正常完成 350ms 收起; 带警告或只剩失败 2500ms;
 // failed 不得进入 busy 判定(否则永不收起)
 check(
-  "hud.ts 存活规则: 完成 350ms / 警告与只剩失败 2500ms(统一排程一次)",
+  "hud.ts 存活规则: 全部交付完成才收(成功 350ms/警告 2500ms), 失败未交付不收(2026-11-05 用户定则)",
   /hideAfter = d\.warning \? 2500 : 350/.test(hudTs) &&
-    /hideAfter = failed \? 2500 : 350/.test(hudTs) &&
-    /if \(!busy && hideAfter !== null\) scheduleHide\(hideAfter\)/.test(hudTs) &&
-    !/\|\| failed/.test(hudTs),
+    /!recording && failed/.test(hudTs) &&
+    /if \(!busy && hideAfter !== null\) scheduleHide\(hideAfter\)/.test(hudTs),
 );
 check(
   "浮窗只改宽度(480↔664), 不按内容改高",
