@@ -515,6 +515,27 @@ mod tests {
     /// 串台回归(2026-11-05 用户报"队列里第二三条的实时内容不对"):
     /// A 段在途(松手后引擎继续出字)时 B 段开始录音——
     /// B 的回显槽不显示 A 的字; A 的字只出现在 A 自己的段视图里。
+    /// 录音中回显: spawn 即在途登记+流式文字写入 → snapshot 立即可读
+    /// (真机回归: 在途登记曾挂在松手时, 录音中 snapshot 读不到流式文字)
+    #[test]
+    fn engine_partial_readable_while_recording() {
+        let _g = TEST_SESSION_LOCK.lock().unwrap();
+        test_reset();
+        session_started();
+        engine_pending_add(5);
+        engine_partial(5, "边说边转的字");
+        assert!(session_recording());
+        assert_eq!(snapshot().partial, "边说边转的字", "录音中就能读到本段流式文字");
+        // 松手(不注销)仍可读; 终态注销后不再有
+        session_ended();
+        assert_eq!(snapshot().partial, "边说边转的字");
+        engine_pending_remove(5);
+        assert_eq!(snapshot().partial, "");
+    }
+
+    /// 串台回归(2026-11-05 用户报"队列里第二三条的实时内容不对"):
+    /// A 段在途(松手后引擎继续出字)时 B 段开始录音——
+    /// B 的回显槽不显示 A 的字; A 的字只出现在 A 自己的段视图里。
     #[test]
     fn engine_partials_are_isolated_per_gen() {
         let _g = TEST_SESSION_LOCK.lock().unwrap();

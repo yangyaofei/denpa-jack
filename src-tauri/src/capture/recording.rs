@@ -197,6 +197,10 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     let focus = capture::FocusLock::snapshot();
     // 会话代在引擎 spawn 前分配(事件桥要从第一帧起就把流式文字归属到本段)
     let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    // 在途登记在 spawn 时(不是松手时): 引擎会话从 spawn 到 Result 全程在途——
+    // 录音中 snapshot 从 engine_gens 找本段的流式文字, 松手才登记的话
+    // 录音中回显读不到(真机: 录音中不显示, 松手才出字)
+    crate::core::engine_pending_add(gen);
     model::transcribe(
         app.clone(),
         profile.provider.clone(),
@@ -314,9 +318,9 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     }
     *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
-    // 在途引擎会话登记: Esc 收窗判据的第三块(松手→Result 之间 busy/recording 均为 false),
-    // 也是 Esc 取消目标(段此时尚未入队, ctrl_cancel_queued 从这里找)
-    crate::core::engine_pending_add(ho.gen);
+    // 在途引擎会话登记: 已在 spawn 时完成(ctrl_start), 此处不再重复 add。
+    // 终态注销(引擎 Result/NoSpeech/失败)在 submit_live/record_no_speech/
+    // submit_failed 各自完成; Finish 发送失败就地收(见下)。
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
