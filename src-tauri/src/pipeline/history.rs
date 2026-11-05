@@ -92,12 +92,19 @@ pub fn recordings_dir(app: &tauri::AppHandle) -> PathBuf {
     r
 }
 
-/// 条数上限裁剪(保留尾部 limit 条, Handy history_limit)
+/// 条数上限裁剪(保留**尾部**=最新 limit 条, Handy history_limit)。
+/// 2026-11-05 事故坦白: ba4bf94 收口时误写成 recs.truncate(limit)——truncate 保留
+/// 头部(最旧)砍尾部(最新), 方向与旧实现相反; 文件满 5000 后每条新记录 append 完
+//  即被裁走, 用户 11-04/11-05 两天的记录持续丢失(11-03 17:58 之后的全部被吞)。
 pub fn enforce_limit(app: &tauri::AppHandle, limit: u64) {
     if limit == 0 {
         return; // 0 = 不限
     }
-    let _ = modify(app, |recs| recs.truncate(limit as usize));
+    let _ = modify(app, |recs| {
+        if recs.len() > limit as usize {
+            recs.drain(..recs.len() - limit as usize); // 砍头部(最旧), 保尾部(最新)
+        }
+    });
 }
 
 /// 主窗历史刷新信号(转发 core: 计数已收口, 写路径走 core::bump_history)
@@ -349,6 +356,37 @@ mod fs_tests {
         modify_at(&dir, |recs| recs.push(rec.clone())).unwrap();
         let all = read_all_from(&dir);
         assert_eq!(all.len(), 2);
+    }
+
+    /// 上限裁剪方向(2026-11-05 事故回归): 超 5000 时必须保**最新**砍最旧——
+    /// ba4bf94 曾用 truncate(保留头部)导致新记录写一条丢一条
+    #[test]
+    fn enforce_limit_keeps_newest() {
+        let (dir, _g) = tmpdir();
+        let mk = |i: usize| HistoryRecord {
+            ts: format!("2026-01-01 00:{:02}:00", i), engine: "t".into(),
+            raw: format!("r{i}"), final_text: String::new(), llm_used: false,
+            delivered: "none".into(), audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
+        };
+        modify_at(&dir, |recs| {
+            for i in 0..10 {
+                recs.push(mk(i));
+            }
+        })
+        .unwrap();
+        // 裁剪核心在文件序(旧→新)上工作, 与 enforce_limit 的 modify 闭包同款
+        modify_at(&dir, |recs| {
+            let limit = 5usize;
+            if recs.len() > limit {
+                recs.drain(..recs.len() - limit);
+            }
+        })
+        .unwrap();
+        let mut recs = read_all_from(&dir); // 时间倒序(最新在前)
+        recs.reverse(); // 转回文件序断言
+        assert_eq!(recs.len(), 5, "裁到 5 条");
+        assert_eq!(recs.first().unwrap().raw, "r5", "最旧的 r0-r4 被裁");
+        assert_eq!(recs.last().unwrap().raw, "r9", "最新的 r9 保留");
     }
 
     #[test]
