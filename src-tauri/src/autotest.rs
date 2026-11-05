@@ -417,6 +417,7 @@ fn run_ui_chain(app: tauri::AppHandle) {
         ts: "PROBE".into(), engine: "uitest".into(), raw: "实时性探针".into(),
         final_text: "实时性探针".into(), llm_used: false, delivered: "test".into(),
         audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
+        screenshot: None,
     };
     crate::pipeline::history::append(&app, &probe);
     let v1 = crate::pipeline::history::history_version();

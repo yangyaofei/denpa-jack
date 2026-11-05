@@ -251,6 +251,7 @@ fn record_failed(
         warning: Some(reason.to_string()),
         duration_ms: ho.duration_ms,
         llm_thinking: None,
+        screenshot: None,
     };
     crate::pipeline::history::append(app, &rec);
     audio
@@ -288,6 +289,7 @@ pub fn record_no_speech(
         warning: Some(msg.to_string()),
         duration_ms: ho.duration_ms,
         llm_thinking: None,
+        screenshot: None,
     };
     crate::pipeline::history::append(app, &rec);
     log_debug("空转写已入历史(不进队列)");
@@ -364,6 +366,7 @@ pub fn clear(app: &tauri::AppHandle) -> usize {
             warning: Some("队列已清空".into()),
             duration_ms: s.ho.duration_ms,
             llm_thinking: None,
+            screenshot: None,
         };
         crate::pipeline::history::append(app, &rec);
     }

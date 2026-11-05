@@ -1,6 +1,7 @@
 // 历史(JSONL, 参照 Swift OutputAndHistory)
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 /// 历史文件互斥锁: append(Live 交付线程) / update_by_ts(重转结算线程) /
@@ -25,6 +26,10 @@ pub struct HistoryRecord {
     pub duration_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// 本条交付时的屏幕上下文截图路径(2026-11-05 用户需求: 截图与文本一体归档)。
+    /// None=该条无截图(屏幕上下文关/采集失败)。
+    #[serde(default)]
+    pub screenshot: Option<String>,
 }
 
 /// R1: 按 ts 定位原位更新一条历史记录。
@@ -92,7 +97,9 @@ pub fn recordings_dir(app: &tauri::AppHandle) -> PathBuf {
     r
 }
 
-/// 条数上限裁剪(保留**尾部**=最新 limit 条, Handy history_limit)。
+/// 条数上限裁剪 + **归档**(2026-11-05 用户需求: 超限不丢弃, 分段保存到 archive/)。
+/// 被裁记录(最旧)按月份分段写入 archive/history-YYYY-MM.jsonl, 对应的音频/截图
+/// 文件一并 move 进 archive/ 的子目录, 记录内路径同步改写——归档后仍可重放/播放。
 /// 2026-11-05 事故坦白: ba4bf94 收口时误写成 recs.truncate(limit)——truncate 保留
 /// 头部(最旧)砍尾部(最新), 方向与旧实现相反; 文件满 5000 后每条新记录 append 完
 //  即被裁走, 用户 11-04/11-05 两天的记录持续丢失(11-03 17:58 之后的全部被吞)。
@@ -100,11 +107,84 @@ pub fn enforce_limit(app: &tauri::AppHandle, limit: u64) {
     if limit == 0 {
         return; // 0 = 不限
     }
-    let _ = modify(app, |recs| {
+    let evicted: Vec<HistoryRecord> = match modify(app, |recs| {
         if recs.len() > limit as usize {
-            recs.drain(..recs.len() - limit as usize); // 砍头部(最旧), 保尾部(最新)
+            recs.drain(..recs.len() - limit as usize).collect() // 砍头部(最旧), 保尾部(最新)
+        } else {
+            Vec::new()
         }
-    });
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::log::elog(&format!("[history] 裁剪失败(归档未执行): {e}"));
+            return;
+        }
+    };
+    if !evicted.is_empty() {
+        if let Err(e) = archive_records(app, &evicted) {
+            crate::log::elog(&format!("[history] 归档失败({} 条): {e}", evicted.len()));
+        }
+    }
+}
+
+/// 归档目录(数据目录下 archive/)
+fn archive_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    crate::config::data_dir(app).join("archive")
+}
+
+/// 把被裁记录归档: 按记录 ts 的月份分段追加到 archive/history-YYYY-MM.jsonl;
+/// 每条的音频 move → archive/recordings/、截图 move → archive/screen_context/,
+/// 记录内路径改写为归档路径(重放/播放继续可用; 文件已不存在则保留原路径=死链可容忍)。
+fn archive_records(app: &tauri::AppHandle, evicted: &[HistoryRecord]) -> Result<(), String> {
+    use std::collections::BTreeMap;
+    let base = archive_dir(app);
+    fs::create_dir_all(base.join("recordings")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(base.join("screen_context")).map_err(|e| e.to_string())?;
+
+    let move_file = |src: &str, sub: &str| -> Option<String> {
+        let p = std::path::Path::new(src);
+        if p.is_absolute() && p.exists() {
+            let name = p.file_name()?.to_string_lossy().to_string();
+            let dst = base.join(sub).join(name);
+            if fs::rename(p, &dst).is_ok() {
+                return Some(dst.to_string_lossy().to_string());
+            }
+        }
+        None
+    };
+
+    // 按月份分段(同月的记录进同一个归档段文件)
+    let mut by_month: BTreeMap<String, Vec<HistoryRecord>> = BTreeMap::new();
+    for mut rec in evicted.iter().cloned() {
+        if !rec.audio_path.is_empty() {
+            if let Some(newp) = move_file(&rec.audio_path, "recordings") {
+                rec.audio_path = newp;
+            }
+        }
+        if let Some(shot) = rec.screenshot.clone() {
+            if !shot.is_empty() {
+                if let Some(newp) = move_file(&shot, "screen_context") {
+                    rec.screenshot = Some(newp);
+                }
+            }
+        }
+        // ts 形如 "2026-11-05 10:52:00" → 月份 "2026-11"
+        let month = rec.ts.get(0..7).unwrap_or("unknown").to_string();
+        by_month.entry(month).or_default().push(rec);
+    }
+    for (month, recs) in by_month {
+        let seg = base.join(format!("history-{month}.jsonl"));
+        let mut out = String::new();
+        for r in &recs {
+            out.push_str(&serde_json::to_string(r).map_err(|e| e.to_string())?);
+            out.push('\n');
+        }
+        use std::io::Write;
+        let mut f = OpenOptions::new().create(true).append(true).open(&seg).map_err(|e| e.to_string())?;
+        f.write_all(out.as_bytes()).map_err(|e| e.to_string())?;
+        crate::log::elog(&format!("[history] 归档 {} 条 → {}", recs.len(), seg.display()));
+    }
+    Ok(())
 }
 
 /// 主窗历史刷新信号(转发 core: 计数已收口, 写路径走 core::bump_history)
@@ -292,6 +372,7 @@ mod tests {
             llm_thinking: None,
             duration_ms: 1200,
             warning: None,
+            screenshot: None,
         };
         let line = serde_json::to_string(&r).unwrap();
         let back: HistoryRecord = serde_json::from_str(&line).unwrap();
@@ -349,7 +430,7 @@ mod fs_tests {
         let rec = HistoryRecord {
             ts: "2026-01-01 00:00:00".into(), engine: "volcengine".into(),
             raw: "原文".into(), final_text: "终稿".into(), llm_used: true,
-            delivered: "pasted-cmdv".into(), audio_path: String::new(), duration_ms: 1000, warning: None, llm_thinking: None,
+            delivered: "pasted-cmdv".into(), audio_path: String::new(), duration_ms: 1000, warning: None, llm_thinking: None, screenshot: None,
         };
         // 唯一写入口: 两次 append 同 ts → 撞秒偏移(B45), ts 不同但条数对
         modify_at(&dir, |recs| recs.push(rec.clone())).unwrap();
@@ -366,7 +447,7 @@ mod fs_tests {
         let mk = |i: usize| HistoryRecord {
             ts: format!("2026-01-01 00:{:02}:00", i), engine: "t".into(),
             raw: format!("r{i}"), final_text: String::new(), llm_used: false,
-            delivered: "none".into(), audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
+            delivered: "none".into(), audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None, screenshot: None,
         };
         modify_at(&dir, |recs| {
             for i in 0..10 {
@@ -402,7 +483,7 @@ mod fs_tests {
                     let rec = HistoryRecord {
                         ts: format!("2026-01-0{} 00:00:{:02}", batch + 1, i % 60), engine: "t".into(),
                         raw: format!("b{batch}i{i}").into(), final_text: String::new(), llm_used: false,
-                        delivered: "none".into(), audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None,
+                        delivered: "none".into(), audio_path: String::new(), duration_ms: 0, warning: None, llm_thinking: None, screenshot: None,
                     };
                     modify_at(&d, |recs| recs.push(rec)).unwrap();
                 }

@@ -81,6 +81,26 @@ pub struct SegView {
 /// 自带会话不占交付位, 显示进队列列表(带 rerun 标记, 展示端自决)。
 pub fn views() -> (Option<SegView>, Vec<SegView>) {
     let c = lock();
+    views_of(&c)
+}
+
+/// HUD 原子快照(2026-11-05 修复: hud_snapshot 曾两次独立读 core——views() 一次、
+/// recording/partial 又一次, 两读之间段迁移(交付离队+新录音开始)会让快照撕裂:
+/// 已交付段残影进队列/录音态滞后——用户看到"历史和正在转的内容串了")。
+pub fn hud_projection() -> (bool, u32, String, Option<SegView>, Vec<SegView>) {
+    let c = lock();
+    let (cur, queue) = views_of(&c);
+    (
+        c.session.recording,
+        c.session.level,
+        c.session.partial.clone(),
+        cur,
+        queue,
+    )
+}
+
+/// views 的无锁内核(调用方持锁; views/hud_projection 共用)
+fn views_of(c: &CoreState) -> (Option<SegView>, Vec<SegView>) {
     let src = |s: &SegmentEntry| if s.source == SegSource::Rerun { "rerun".to_string() } else { "live".to_string() };
     let cur = c
         .queue

@@ -133,6 +133,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             audio_path: ho.audio_path.clone().unwrap_or_default(),
             warning: None,
             duration_ms: ho.duration_ms,
+            screenshot: None,
         });
         return Outcome::Delivered;
     }
@@ -213,6 +214,8 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
             audio_path: ho.audio_path.clone().unwrap_or_default(),
             warning: warning.clone(),
             duration_ms: ho.duration_ms,
+            // 截图随记录归档(2026-11-05): 交付时的屏幕上下文路径
+            screenshot: ho.screenshot.as_ref().map(|p| p.to_string_lossy().to_string()),
         };
         // 停止路径不阻塞(Handy spawn_blocking 等价): 落盘+历史+清理都在子线程,
         // 前端历史刷新本就靠 poll_versions 版本轮询(≤800ms), 用户无感。
