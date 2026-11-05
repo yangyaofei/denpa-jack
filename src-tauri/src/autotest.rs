@@ -169,6 +169,7 @@ fn run_files(app: tauri::AppHandle, paths: Vec<String>) {
             crate::model::dict::budget_hotwords(&cfg.dict),
             handoff.clone(),
             rx,
+            0,
         );
         app.state::<std::sync::Mutex<AppState>>().lock().unwrap().engine_mirror = Some(tx.clone());
         for (i, chunk) in pcm.chunks(6400).enumerate() {
@@ -238,7 +239,7 @@ fn run_file(app: tauri::AppHandle, wavpath: String) {
             let handoff: crate::model::speech::HandoffBox = std::sync::Arc::new(std::sync::Mutex::new(None));
             crate::model::speech::transcribe(
                 app.clone(), profile.provider.clone(), key, profile.base_url.clone(),
-                crate::model::dict::budget_hotwords(&cfg.dict), handoff.clone(), rx,
+                crate::model::dict::budget_hotwords(&cfg.dict), handoff.clone(), rx, 0,
             );
             {
                 let st = app.state::<std::sync::Mutex<AppState>>();

@@ -131,7 +131,7 @@ pub fn run() {
                     );
                     use tauri::Emitter;
                     let _ = Emitter::emit_to(&h, "main", "permissions", &crate::capture::permissions::all());
-                    crate::core::hud_emit(crate::core::HudEvent::Notify(format!("缺少权限: {}", missing.join("、"))));
+                    crate::core::emit(crate::core::AppEvent::Notify(format!("缺少权限: {}", missing.join("、"))));
                     if let Some(w) = h.get_webview_window("main") {
                         let _ = w.show();
                         let _ = w.set_focus();

@@ -66,7 +66,7 @@ pub struct Snapshot {
 
 // 快照镜像层已删除(2026-11-05 用户指正): static HUD: Mutex<Snapshot> 是第二份
 // 事实源("拷贝进快照+事件泵改快照"的转换层)——撕裂/漏刷(LAST_CORE_VER 补丁)皆源于
-// 此。现在 poll() 直读 core(core::hud_all 一次锁取齐), 本模块无跨调用数据状态。
+// 此。现在 poll() 直读 core(core::snapshot 一次锁取齐), 本模块无跨调用数据状态。
 
 /// 最短显示时长(毫秒): 显示后这段时间内的隐藏请求一律忽略
 pub const MIN_SHOW_MS: u64 = 400;
@@ -108,39 +108,39 @@ pub fn recording_ended(app: &tauri::AppHandle) {
 
 
 /// 一次性通知槽(pump → poll 的交接箱)——已迁 core(2026-11-05):
-/// 写入=core::hud_oneshot_put(必 bump version), 取走=hud_all 内 mem::take。
+/// 写入=core::notice_put(必 bump version), 取走=snapshot 内 mem::take。
 /// 曾住 ui static 且写入不 bump version——前端按 version 去重把槽内容丢弃,
 /// 没听清后浮窗停在"转写中"永不收窗(真机回归, 本批修复)。
 
 /// 事件→一次性槽的纯映射(展示保护规则的载体, 便于单测):
 /// recording=true 时收尾类事件不覆盖阶段(issue #2); 返回值=是否需要弹窗。
-/// 槽本体住 core(hud_oneshot)——写入经 core::hud_oneshot_put(必 bump version)。
-fn apply_event(o: &mut crate::core::HudOneshot, recording: bool, ev: &crate::core::HudEvent) -> bool {
+/// 槽本体住 core(pending_notice)——写入经 core::notice_put(必 bump version)。
+fn apply_event(o: &mut crate::core::PendingNotice, recording: bool, ev: &crate::core::AppEvent) -> bool {
     match ev {
-        crate::core::HudEvent::Notify(m) => {
+        crate::core::AppEvent::Notify(m) => {
             o.msg = m.clone();
             true
         }
-        crate::core::HudEvent::NoSpeech(r) => {
+        crate::core::AppEvent::NoSpeech(r) => {
             // 没听清 = 这一段不会再有交付: 提示 + 阶段收掉(否则前端按"转写中"判忙永不收窗, issue #9)
             o.msg = r.clone();
             o.polishing = false;
             true
         }
-        crate::core::HudEvent::Delivered(p) => {
+        crate::core::AppEvent::Delivered(p) => {
             if !recording {
                 o.polishing = false;
             }
             o.finished = Some(p.clone());
             false
         }
-        crate::core::HudEvent::Polishing => {
+        crate::core::AppEvent::Polishing => {
             if !recording {
                 o.polishing = true;
             }
             false
         }
-        crate::core::HudEvent::Error(r) => {
+        crate::core::AppEvent::Error(r) => {
             crate::log::elog(&format!("[hud] error: {r}"));
             if !recording {
                 // 错误意味着这一段已结束, 阶段一起收掉(issue #9 同类)
@@ -167,16 +167,16 @@ fn derive_status(recording: bool, polishing: bool, cur_transcribing: bool, has_n
 
 /// 事件泵(批4 起, 2026-11-05 职责纯化): 事件队列的唯一消费者。
 /// drain → apply_event 纯函数(展示保护规则: 录音中不被上一段收尾打扰)
-/// → core::hud_oneshot_put 写槽(取走即清; 写入必 bump version——
+/// → core::notice_put 写槽(取走即清; 写入必 bump version——
 /// 前端以 version 去重, 槽写入不 bump 提示会被丢弃)+需弹窗事件 show。
 /// 装配期由 lib.rs 启动。
 pub fn start_event_pump(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
-        let events = crate::core::hud_drain();
+        let events = crate::core::drain_events();
         if !events.is_empty() {
             let recording = crate::core::session_recording();
             let mut show = false;
-            crate::core::hud_oneshot_put(|o| {
+            crate::core::notice_put(|o| {
                 for ev in &events {
                     if apply_event(o, recording, ev) {
                         show = true;
@@ -221,7 +221,7 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
 ///   右栏 = 队列里其余段(录音时, 正在转写的那段退到右栏)
 /// 展示保护规则(录音中不被上一段的收尾事件打扰)在此判 recording。
 pub fn poll() -> Snapshot {
-    let a = crate::core::hud_all();
+    let a = crate::core::snapshot();
     // 一次性通知(core 槽, 取走即清; 展示保护规则已在泵的 apply_event 判过)
     let o = a.oneshot;
     // HUD 不显示重转段(用户定则: 重转是后台任务, 录音浮窗只管语音链路的段;
@@ -264,16 +264,16 @@ pub fn poll() -> Snapshot {
 mod tests {
     use super::*;
 
-    fn slot() -> crate::core::HudOneshot {
-        crate::core::HudOneshot::default()
+    fn slot() -> crate::core::PendingNotice {
+        crate::core::PendingNotice::default()
     }
 
     // 录音中收到上一条的交付/润色回调: 载荷照给, 但不许置"润色中"阶段(issue #2)
     #[test]
     fn delivered_and_polishing_do_not_disturb_recording() {
         let mut o = slot();
-        assert!(!apply_event(&mut o, true, &crate::core::HudEvent::Polishing));
-        apply_event(&mut o, true, &crate::core::HudEvent::Delivered(serde_json::json!({"final": "上一条"})));
+        assert!(!apply_event(&mut o, true, &crate::core::AppEvent::Polishing));
+        apply_event(&mut o, true, &crate::core::AppEvent::Delivered(serde_json::json!({"final": "上一条"})));
         assert!(!o.polishing, "录音中润色标记被压制");
         assert!(o.finished.is_some(), "交付载荷照给");
     }
@@ -282,9 +282,9 @@ mod tests {
     #[test]
     fn delivered_and_polishing_apply_when_not_recording() {
         let mut o = slot();
-        apply_event(&mut o, false, &crate::core::HudEvent::Polishing);
+        apply_event(&mut o, false, &crate::core::AppEvent::Polishing);
         assert!(o.polishing);
-        apply_event(&mut o, false, &crate::core::HudEvent::Delivered(serde_json::json!({"final": "x"})));
+        apply_event(&mut o, false, &crate::core::AppEvent::Delivered(serde_json::json!({"final": "x"})));
         assert!(!o.polishing, "交付收掉润色阶段");
     }
 
@@ -292,9 +292,9 @@ mod tests {
     #[test]
     fn error_is_dropped_while_recording() {
         let mut o = slot();
-        apply_event(&mut o, true, &crate::core::HudEvent::Error("连接失败".into()));
+        apply_event(&mut o, true, &crate::core::AppEvent::Error("连接失败".into()));
         assert!(o.err.is_none());
-        apply_event(&mut o, false, &crate::core::HudEvent::Error("连接失败".into()));
+        apply_event(&mut o, false, &crate::core::AppEvent::Error("连接失败".into()));
         assert_eq!(o.err.as_deref(), Some("连接失败"));
     }
 
@@ -302,8 +302,8 @@ mod tests {
     #[test]
     fn no_speech_ends_phase_and_shows() {
         let mut o = slot();
-        apply_event(&mut o, false, &crate::core::HudEvent::Polishing);
-        assert!(apply_event(&mut o, false, &crate::core::HudEvent::NoSpeech("没听清".into())), "NoSpeech 需弹窗");
+        apply_event(&mut o, false, &crate::core::AppEvent::Polishing);
+        assert!(apply_event(&mut o, false, &crate::core::AppEvent::NoSpeech("没听清".into())), "NoSpeech 需弹窗");
         assert!(!o.polishing);
         assert_eq!(o.msg, "没听清");
     }

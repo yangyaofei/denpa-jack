@@ -166,6 +166,7 @@ pub fn transcribe(
     hotwords: Vec<String>,
     handoff: HandoffBox,
     rx: tokio::sync::mpsc::Receiver<Cmd>,
+    gen: u64,
 ) {
     crate::log::elog(&format!("[session] spawn provider={provider} key_len={} hotwords={}", api_key.len(), hotwords.len()));
     // C35: 会话跑在专用 tokio runtime 的独立线程——实测挂在 tauri::async_runtime 的任务
@@ -180,9 +181,8 @@ pub fn transcribe(
         let emit = move |ev: AsrEvent| {
             let (tag, payload) = match ev {
                     AsrEvent::Partial(t) => {
-                        // 按 gen 归属写入该段的流式文字(串台修复: 旧单槽会把上一段
-                        // 松手后的流式字写进下一段录音的回显槽)。gen 从交接箱读不取走。
-                        let gen = handoff.lock().unwrap().as_ref().map(|h| h.gen).unwrap_or(0);
+                        // 流式文字按 gen 归属写入该段(串台修复)。gen 由会话 spawn 时
+                        // 传入(录音中交接箱还是空的——不能从 handoff 读)。
                         if gen != 0 {
                             crate::core::engine_partial(gen, &t);
                         }
@@ -224,8 +224,8 @@ pub fn transcribe(
             // HUD 唯一入口: 这里只报事实(回显/提示/错误), 显示成什么样由 hud.rs 决定。
             // 旧写法是各层直接改同一份共享快照, 已全部收敛到 hud 模块的接口。
             match tag {
-                "asr-nospeech" => crate::core::hud_emit(crate::core::HudEvent::NoSpeech(payload.clone())),
-                "asr-error" => crate::core::hud_emit(crate::core::HudEvent::Error(payload.clone())),
+                "asr-nospeech" => crate::core::emit(crate::core::AppEvent::NoSpeech(payload.clone())),
+                "asr-error" => crate::core::emit(crate::core::AppEvent::Error(payload.clone())),
                 // asr-partial: 已在事件分派处按 gen 直写 core::engine_partial
                 // asr-result: 队列/阶段由 hud 的 poll 现算, 不需要在这里写状态
                 _ => {}

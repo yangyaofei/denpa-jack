@@ -156,7 +156,7 @@ fn replay_impl(app: tauri::AppHandle, locate_ts: Option<String>, audio_path: Str
     })));
     match locate_ts {
         Some(ts) => crate::pipeline::rerun::retranscribe(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), ts, handoff, rx),
-        None => speech::transcribe(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx),
+        None => speech::transcribe(app, profile.provider, key, profile.base_url.clone(), budget_hotwords(&cfg.dict), handoff, rx, 0),
     }
     // 重放节奏与真实录音相当(200ms 分片×~0.9), 过快会塞爆通道或触发流式限速
     tauri::async_runtime::spawn(async move {

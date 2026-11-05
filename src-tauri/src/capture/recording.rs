@@ -88,7 +88,7 @@ fn spawn_level_loop(app: tauri::AppHandle, cancel: Arc<std::sync::atomic::Atomic
                 if silent_frames == 21 && !warned {
                     warned = true;
                     crate::log::log(&app, "录音中静音提醒: 已连续 2.5s 无输入电平");
-                    crate::core::hud_emit(crate::core::HudEvent::Notify("⚠️ 还没听到声音".into()));
+                    crate::core::emit(crate::core::AppEvent::Notify("⚠️ 还没听到声音".into()));
                 }
             } else {
                 silent_frames = 0;
@@ -110,7 +110,7 @@ fn spawn_max_timer(app: tauri::AppHandle, secs: u32, cancel: Arc<std::sync::atom
         }
         log::log(&app, "B5: 录音超长, 发自动截断信号(走协调器)");
         crate::send_autostop();
-        crate::core::hud_emit(crate::core::HudEvent::Notify("⚠️ 录音已达上限, 自动截断".into()));
+        crate::core::emit(crate::core::AppEvent::Notify("⚠️ 录音已达上限, 自动截断".into()));
     });
 }
 
@@ -161,7 +161,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
             "[perm] 录音被拒绝: 麦克风未授权({})",
             crate::capture::permissions::mic_status_text()
         ));
-        crate::core::hud_emit(crate::core::HudEvent::Notify(msg.into()));
+        crate::core::emit(crate::core::AppEvent::Notify(msg.into()));
         return Err(msg.into());
     }
     let mic = audio::resolve_mic(&app, &mut cfg);
@@ -195,6 +195,8 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     // 交接箱: 会话作用域——stop 写, 引擎 Result 读(唯一交接点, 无全局)
     let handoff = Arc::new(Mutex::new(None));
     let focus = capture::FocusLock::snapshot();
+    // 会话代在引擎 spawn 前分配(事件桥要从第一帧起就把流式文字归属到本段)
+    let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     model::transcribe(
         app.clone(),
         profile.provider.clone(),
@@ -203,6 +205,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
         crate::model::budget_hotwords(&cfg.dict),
         handoff.clone(),
         rx,
+        gen,
     );
     let cmd_tx = tx.clone();
     let bridge_cancel = rec.cancel.clone();
@@ -221,7 +224,6 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     });
     let cancel = rec.cancel.clone();
     let level = rec.level_handle();
-    let gen = pipeline::SESSION_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     // 屏幕上下文: 按下时探测一次活动目标（焦点窗口 → 指针窗口 → 指针所在屏），
     // 截图与浮窗共用；采集编排在 screen_context(阶段A 第2步下沉), 这里只拿结果槽
     let target = crate::capture::active_target::detect_active_target();
@@ -318,7 +320,7 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
-        crate::core::hud_emit(crate::core::HudEvent::Error("引擎会话异常中断".into()));
+        crate::core::emit(crate::core::AppEvent::Error("引擎会话异常中断".into()));
         crate::core::engine_pending_remove(ho.gen); // 不会有 Result 来注销, 就地收
     }
     session_cleanup(&app, Some(crate::capture::feedback::Cue::End));
@@ -358,7 +360,7 @@ fn cancel_latest_gen() -> Option<u64> {
     if let Some(g) = gen {
         crate::pipeline::mark_cancelled(g);
         log::elog(&format!("[queue] Esc: 已标记取消段 gen={g}"));
-        crate::core::hud_emit(crate::core::HudEvent::Notify("已取消".into()));
+        crate::core::emit(crate::core::AppEvent::Notify("已取消".into()));
     }
     gen
 }
@@ -397,7 +399,7 @@ pub fn ctrl_abort(app: &tauri::AppHandle, state: &std::sync::Mutex<AppState>) ->
         crate::model::cancel_current(app);
     }
     session_cleanup(app, None);
-    crate::core::hud_emit(crate::core::HudEvent::Notify("已取消".into()));
+    crate::core::emit(crate::core::AppEvent::Notify("已取消".into()));
     crate::ui::dismiss(app);
     crate::ui::refresh_status(app);
     log::log(app, "录音取消(esc)");

@@ -208,9 +208,9 @@ check(
 //    录音中的一次性提示不参与收窗
 check(
   "空转写走 no_speech 并结束阶段",
-  /HudEvent::NoSpeech\(r\)/.test(readFileSync("src-tauri/src/ui/hud.rs", "utf8")) &&
+  /AppEvent::NoSpeech\(r\)/.test(readFileSync("src-tauri/src/ui/hud.rs", "utf8")) &&
     /o\.polishing = false/.test(readFileSync("src-tauri/src/ui/hud.rs", "utf8")) &&
-    /HudEvent::NoSpeech\(payload.clone\(\)\)/.test(readFileSync("src-tauri/src/model/speech/mod.rs", "utf8")),
+    /AppEvent::NoSpeech\(payload.clone\(\)\)/.test(readFileSync("src-tauri/src/model/speech/mod.rs", "utf8")),
 );
 check("静音阈值贴 0(避免正常说话误报)", /if lv < 2 \{/.test(readFileSync("src-tauri/src/capture/recording.rs", "utf8")));
 check("录音中的提示不触发收窗(静音提醒走 msg 但不排程收窗)", /if \(!recording\) hideAfter = 2500/.test(hudTs));

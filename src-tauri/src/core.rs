@@ -1,16 +1,24 @@
 //! core —— 应用核心状态(唯一事实源)。设计定稿: docs/CORE-DESIGN.md。
 //!
 //! # 定位与红线
+//! - **所有状态都在这里**(用户定则 2026-11-05: "所有的状态, 所有的")——
+//!   会话/段队列/事件/通知/版本计数, 全 App 的活状态只此一份;
+//!   展示层(ui/hud)不持有事实, 是 core 的读取者: 各自按快照内容摆放到
+//!   对应位置。core 里因此**没有以某个展示端命名的东西**——事件叫
+//!   AppEvent 不叫 HudEvent, 通知叫 PendingNotice, 快照叫 snapshot。
 //! - 所有活状态的家 + 静态数据的门面。执行模块只连 core;
 //!   core 只连纯数据模块(settings/history), 不 import 任何执行模块——依赖一条直线。
 //! - core 里只有数据与投影, 没有业务: 不录音/不发请求/不弹窗/不睡眠等待。
+//! - **写入必推进 version**(硬约束): 任何被轮询方按 version 去重消费的
+//!   通道(投影/事件/通知槽), 写入路径必须 version += 1——否则内容变化
+//!   会被去重逻辑静默丢弃(真机回归: 没听清后浮窗永不收窗)。
 //! - 无线程: 一把锁短临界区(字段赋值/快照拷贝, 微秒级)。
 //!   panic/信号处理路径禁止进入 core 锁。
 //!
 //! # 搬迁进度(每步系统完整可用, 见 CORE-DESIGN.md 第八节)
 //! - [x] 第 1 步: 段队列域(本文件现状)
-//! - [ ] 第 2 步: 会话域(SessionState + Resources)
-//! - [ ] 第 3 步: toast/设备/网关/权限/更新/控制域 + 配置/历史门面
+//! - [x] 第 2 步: 会话域(录音态/电平/在途引擎会话与流式文字)
+//! - [ ] 第 3 步: 会话发号/取消集合/激活模式(仍在域 static, 同类问题清单已呈报)
 //!
 //! # 锁中毒策略
 //! `lock()` 在中毒时取出数据继续用: core 是纯数据, 不变量不会被破坏,
@@ -88,7 +96,7 @@ pub fn views() -> (Option<SegView>, Vec<SegView>) {
 /// **删除 ui 侧快照镜像层**, poll 直读 core)。一次锁内取齐持久投影+版本。
 /// 事件队列不走这里(唯一消费者是 ui 的事件泵: drain 后应用展示规则写一次性槽,
 /// poll 合并槽——两条通道各司其职, 互不相偷)。
-pub fn hud_all() -> HudAll {
+pub fn snapshot() -> CoreSnapshot {
     let mut c = lock();
     let (mut cur, mut queue) = views_of(&c);
     // 引擎在途但尚未入队的段(Result 未到): 以虚拟"转写中"视图补进投影——
@@ -108,10 +116,10 @@ pub fn hud_all() -> HudAll {
     for g in inflight.iter().rev().skip(1) {
         queue.push(SegView { state: "transcribing".into(), source: "live".into(), text: partial_of(&c, *g) });
     }
-    // 一次性通知槽: 取走即清(前端拿到即消费; 写入侧 hud_oneshot_put 已 bump version,
+    // 一次性通知槽: 取走即清(前端拿到即消费; 写入侧 notice_put 已 bump version,
     // 去重丢弃的安全窗口由"写入必 bump"保证)
-    let oneshot = std::mem::take(&mut c.hud_oneshot);
-    HudAll {
+    let oneshot = std::mem::take(&mut c.pending_notice);
+    CoreSnapshot {
         version: c.version,
         recording: c.session.recording,
         level: c.session.level,
@@ -123,8 +131,8 @@ pub fn hud_all() -> HudAll {
     }
 }
 
-/// hud_all 的载荷(poll 直读 core 的持久投影+一次性通知)
-pub struct HudAll {
+/// snapshot 的载荷(poll 直读 core 的持久投影+一次性通知)
+pub struct CoreSnapshot {
     pub version: u64,
     pub recording: bool,
     pub level: u32,
@@ -132,7 +140,7 @@ pub struct HudAll {
     pub cur: Option<SegView>,
     pub queue: Vec<SegView>,
     pub failed: bool,
-    pub oneshot: HudOneshot,
+    pub oneshot: PendingNotice,
 }
 
 /// views 的无锁内核(调用方持锁; views/hud_projection 共用)
@@ -299,18 +307,18 @@ pub struct CoreState {
     pub ctrl: CtrlState,
     /// 浮窗事件槽(批4): capture/model/pipeline 不再直调 ui——提示类事件进这里,
     /// hud 自己的泵线程 drain 后分派(延迟≤100ms, 提示类无感)。cap 32 防御性截断。
-    pub hud_events: VecDeque<HudEvent>,
+    pub hud_events: VecDeque<AppEvent>,
     /// 一次性通知槽(泵写入 → 前端 poll 取走): msg/err/finished 是"待消费的事件
     /// 结果", 不是状态镜像——持久数据(partial/level/段列表)一律投影直读。
     /// 住 core(2026-11-05 从 ui static 迁入): 写入必 bump version——前端以
     /// version 去重快照, 槽写入若不 bump, 提示会被去重丢弃(真机: 没听清后
     /// 浮窗停在"转写中"永不收窗)。
-    pub hud_oneshot: HudOneshot,
+    pub pending_notice: PendingNotice,
 }
 
-/// 一次性通知槽的载荷(见 CoreState.hud_oneshot 注释)
+/// 一次性通知槽的载荷(见 CoreState.pending_notice 注释)
 #[derive(Default)]
-pub struct HudOneshot {
+pub struct PendingNotice {
     pub msg: String,
     pub finished: Option<serde_json::Value>,
     pub err: Option<String>,
@@ -319,16 +327,16 @@ pub struct HudOneshot {
 
 /// 通知槽写入(唯一入口, 泵调用; 展示保护规则在泵的 apply_event 里判 recording)。
 /// 每次(批)写入 bump version——"槽内容变了"就是投影变了。
-pub fn hud_oneshot_put(f: impl FnOnce(&mut HudOneshot)) {
+pub fn notice_put(f: impl FnOnce(&mut PendingNotice)) {
     let mut c = lock();
-    f(&mut c.hud_oneshot);
+    f(&mut c.pending_notice);
     c.version += 1;
 }
 
 /// 浮窗提示事件(批4 反向通知走 core 的第一批)。
 /// 显隐类(recording_started/ended/hide)仍是同步效果经 ui 门面直调——
 /// 浮窗出现/收起不能滞后, 提示内容变化 100ms 无感, 两类分治。
-pub enum HudEvent {
+pub enum AppEvent {
     Notify(String),
     Error(String),
     NoSpeech(String),
@@ -338,7 +346,7 @@ pub enum HudEvent {
 }
 
 /// 发一条浮窗提示事件(capture/model/pipeline 调——方向合法: 一律写 core)
-pub fn hud_emit(e: HudEvent) {
+pub fn emit(e: AppEvent) {
     let mut c = lock();
     if c.hud_events.len() >= 32 {
         c.hud_events.pop_front();
@@ -348,7 +356,7 @@ pub fn hud_emit(e: HudEvent) {
 }
 
 /// hud 泵线程专用: 取走全部积压事件
-pub fn hud_drain() -> Vec<HudEvent> {
+pub fn drain_events() -> Vec<AppEvent> {
     let mut c = lock();
     c.hud_events.drain(..).collect()
 }
@@ -359,7 +367,7 @@ static CORE: Mutex<CoreState> = Mutex::new(CoreState {
     session: SessionState { recording: false, level: 0, engine_gens: Vec::new(), engine_partials: Vec::new() },
     ctrl: CtrlState { config_version: 0, history_version: 0, mic_list_version: 0 },
     hud_events: VecDeque::new(),
-    hud_oneshot: HudOneshot {
+    pending_notice: PendingNotice {
         msg: String::new(),
         finished: None,
         err: None,
@@ -455,7 +463,7 @@ pub fn get_history(app: &tauri::AppHandle, limit: usize) -> Vec<crate::pipeline:
 mod tests {
     use super::*;
 
-    /// 读取某 gen 的流式文字(测试辅助, 同 hud_all 内部闭包)
+    /// 读取某 gen 的流式文字(测试辅助, 同 snapshot 内部闭包)
     fn partial_of(c: &CoreState, g: u64) -> String {
         c.session.engine_partials.iter().find(|(pg, _)| *pg == g).map(|(_, t)| t.clone()).unwrap_or_default()
     }
@@ -516,7 +524,7 @@ mod tests {
         session_started(); // B 按下
         engine_pending_add(2); // B 引擎会话
         engine_partial(2, "B 段的字");
-        let a = hud_all();
+        let a = snapshot();
         // HUD 左栏(recording 态)显示的是最新段(B)的字, 不是 A 的
         assert_eq!(a.partial, "B 段的字");
         // A 以"转写中"视图出现在投影里(cur 或 queue), 文字是 A 自己的
@@ -529,6 +537,6 @@ mod tests {
         assert!(all.contains(&"B 段的字".to_string()));
         // B 终态后, 左栏不再显示 B(最新在途=A)
         engine_pending_remove(2);
-        assert_eq!(hud_all().partial, "A 段的识别文字");
+        assert_eq!(snapshot().partial, "A 段的识别文字");
     }
 }

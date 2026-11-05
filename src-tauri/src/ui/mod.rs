@@ -22,7 +22,7 @@ pub mod update;
 
 // ───────── 门面(点名导出, 批4 起 capture/pipeline 经这些符号调显隐)─────────
 // 提示类(notify/error/no_speech/delivered/polishing)不走这里——外部写
-// core::hud_emit, hud 自己的事件泵消费(见 hud::start_event_pump)。
+// core::emit, hud 自己的事件泵消费(见 hud::start_event_pump)。
 pub use hud::{recording_started, recording_ended};
 pub use hud::hide as dismiss;
 pub use tray_events::refresh_status;
