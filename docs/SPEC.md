@@ -77,10 +77,13 @@
 
 ### 3.0 数据流总纲
 
-热键/托盘/试音 → `send_ctrl`（单一真源）→ **协调器**（三规则状态机）→ 效果线程执行 `capture::recording::ctrl_*` → 采集（capture/audio，cpal 16k mono i16le 200ms 分片）+ 引擎会话（model/speech，专用 current_thread runtime）→ AsrEvent → **分段队列**（pipeline/segment_queue，单 worker 串行）→ `pipeline::post_process`（词典 → 可选 LLM → 交付 → 历史）→ pipeline/delivery（AX 直写 | 回执式粘贴）→ core 版本计数 bump → 前端轮询刷新。浮窗提示走 `core::hud_emit`（HUD 事件泵 100ms 消费）；浮窗显隐走 ui 门面（同步）。
+热键/托盘/试音 → `send_ctrl`（单一真源）→ **协调器**（三规则状态机）→ 效果线程执行 `capture::recording::ctrl_*` → 采集（capture/audio，cpal 16k mono i16le 200ms 分片）+ 引擎会话（model/speech，专用 current_thread runtime，gen 随会话传递）→ AsrEvent → **段列表**（core.queue.items，单 worker 串行结算）→ `pipeline::post_process`（词典 → 可选 LLM → 交付 → 历史）→ pipeline/delivery（AX 直写 | 回执式粘贴 | 焦点已变→后台追加写）→ core 版本计数 bump → 前端轮询刷新。提示事件走 `core::emit`（AppEvent，HUD 事件泵 100ms 消费→写通知槽）；浮窗显隐走 ui 门面（同步）。
+
+- **段一生单列表**（2026-11-06 定则）：段实体 spawn 即建（按下热键时 `open_live_segment`），五态流转 `Recording(按下中)→Transcribing(引擎在途)→Queued(待结算)→Settling(worker 结算中)→出队/Failed` 全在 core.queue.items；流式文字(partial)与最终文字(raw)同在段上；投影只此一处（views_of）：**cur=最新 live 段（用户最后说的），queue=其余按时间序**；rerun 数据侧即滤（不算语音链路忙）。
+- **core 红线**（模块头固化）：所有状态进 core（命名中性，不以展示端命名——AppEvent/PendingNotice/snapshot）；core 只有数据与投影没有业务；**写入必推进 version**（被轮询方按 version 去重消费的通道，写入不 bump 内容会被静默丢弃——真机回归教训）；panic/信号路径禁止进 core 锁。
 
 - **四域+基座+装配壳**（批 1-5 结构重构）：
-  - 基座：`core.rs`（全局可变状态唯一居所：队列/会话/三计数/段投影/HUD 事件槽，一把 std Mutex + 版本号）；`config/`；`util.rs`（跨域纯函数，现只有 wav_header）；`log.rs`/`crash_log.rs`。
+  - 基座：`core.rs`（全局可变状态唯一居所：段列表/会话/三计数/AppEvent 事件槽/通知槽/snapshot 唯一投影，一把 std Mutex + 版本号）；`config/`；`util.rs`（跨域纯函数，现只有 wav_header）；`log.rs`/`crash_log.rs`。
   - **capture/**（采集+决策）：`key.rs`（热键三规则+Esc 全键观察，收窗=监听线程自查 core）、`recording.rs`（会话状态机）、`audio.rs`/`feedback.rs`/`mic_watch.rs`、`screen.rs`+`active_target.rs`（活动目标一次探测，截图与浮窗共用；ScreenCaptureKit 进程内截图）、`focus.rs`（前台/焦点/AX 权限感知）、`permissions.rs`。
   - **pipeline/**（流程编排）：`mod.rs`（SessionHandoff+post_process+deliver 编排）、`segment_queue.rs`（FIFO+单 worker）、`rerun.rs`（历史重转编排：入队投影+结算回写+find_by_ts）、`delivery/`（`ax.rs` 直写/`paste.rs` 回执粘贴/键击）、`history.rs`。
   - **model/**（模型能力）：`speech/`（`contract.rs` Cmd/AsrEvent + `mod.rs` trait AsrEngine+transcribe_session 驱动器+resolve_engine + `doubao`/`zhipu`/`local` 三引擎 + `gateway.rs` 网关子进程 + `driver.rs` WS 骨架）、`dict.rs`（三级纠错+热词预算）、`llm.rs`（refine 纠错管线+自测+list_models）。
@@ -91,8 +94,11 @@
 ### 3.1 关键机制（保留有效的细节描述）
 
 - **会话闭包**：RecordingSession drop = cancel 置位 = 附属线程作废；无会话级 static（CONTRACTS 生命周期节，build.rs 不检查此条——评审保证）。
-- **会话代令牌**：SESSION_GEN/CANCELLED_GEN（pipeline.rs）防取消段被交付——已知单槽缺陷（连续取消两段时前一段可能漏判，审核 a-3，收口期候选）。
-- **引擎协议**：豆包二进制帧（gzip 全量请求/音频/收尾帧，自校正解析，X-Api-Key 连接级鉴权，热词 corpus 直传）；智谱 multipart 文件式；local=WS Realtime 子集（首帧 context 注入热词）。恰好一次 Result|NoSpeech|Error。
+- **取消**：CANCELLED_GENS 集合（连续取消多段，审核 a-3 已修）；Esc 取消目标=最新未终态 live 段（`core::latest_live_gen`，段列表 rev 找）；录音中 Esc=Abort 丢弃。取消段消费：post_process 两道闸（开头短路+交付前拦截），消费即删。
+- **交付**：前台未变→AX 直写（多信号回读+粘贴优先名单）| 回执式粘贴；**焦点已变→后台追加写**（bg_append_write：AXValue 读旧值尾部拼接+回读验证；placeholder 占位文本比对归零；pid 级焦点判定）。
+- **HUD**：poll 直通 core::snapshot（无拼装无状态）；阶段判定在前端从段状态判；**收窗定则**：全部活段成功交付起 350ms/带警告 2.5s 收，失败段未交付不收（留重试/清空），rerun 不算。
+- **历史**：单读写入口（modify_at/read_all_from，frontend-checks 闸强制）；超 history_limit 归档（archive/ 按月分段+音频截图随迁+路径改写）。
+- **引擎协议**：豆包二进制帧（gzip 全量请求/音频/收尾帧，自校正解析，X-Api-Key 连接级鉴权，热词 corpus 直传）；智谱 multipart 文件式（空转写=NoSpeech 金标）；local=WS Realtime 子集（首帧 context 注入热词；收尾窗口=max(30s, 音频秒+30s)）。恰好一次 Result|NoSpeech|Error。
 - **B5 超长**：定时器只发信号（AutoStopDue），决策在协调器（f9032c5 修复哑火）。
 - **事件面（真实）**：前端 listen 只有 `config-changed`（托盘切换配置时发）与 `update-progress`（下载进度）。Rust→WebView 的其余广播通道在打包版不可达（C43b 实测），一切状态同步走 invoke 轮询（core 版本计数 / hud_poll）。引擎事件桥的 "asr-partial"/"asr-result" 等字符串是**内部分派标签**，不是前端事件。
 - **AppState**（lib.rs）：session（当前会话）/last_audio/engine_mirror——收口期候选：并入 core。
@@ -111,7 +117,8 @@
   - `dict[]`（term/variants/guard_words/boost）、`normalizations[]`。
   - `bindings`（C54 绑定集，旧 hotkey/hotkeys 只读迁移）；`activation`（hold|press）。
   - 开关与数值：`use_llm_correction`/`clipboard_only`/`audio_feedback`/`restore_clipboard`/`trailing_newlines`/`detect_active_target`（off|active_window|active_display）/`llm_timeout_secs`(30)/`llm_max_tokens`(0)/`llm_retries`(2)/`auto_check_update`/`overlay_position`/`history_limit`(200)/`keep_audio_count`(50)/`max_recording_seconds`(1800)/`min_recording_seconds`(0.3)/`extra_tail_ms`/`mic_device_uid`/`mic_priority`/`local_service_dir`/`builtin_engine{}`。
-- **history.jsonl**：一行一条；含 NoSpeech 空记录与失败段记录（可重试）。
+- **history.jsonl**：一行一条；含 NoSpeech 空记录与失败段记录（可重试）；单读写入口（modify_at/read_all_from）。
+- **archive/**（2026-11-05 起）：超 history_limit 的记录按月分段归档（archive/history-YYYY-MM.jsonl），音频→archive/recordings/、截图→archive/screen_context/ 随迁并改写记录内路径（重放/播放可用）。
 - **recordings/**：`rec_{millis}.wav`（16k mono i16le，44B 头）；按 keep_audio_count 裁剪。
 - **llm_logs/**：每次调用全量 JSON（url/request/response_raw；截图换占位；key 不写）。
 - **screen_context/**：截图归档，保留 200 张。
@@ -124,13 +131,15 @@
 - 应用内更新（update.rs + tauri-plugin-updater）：minisign 强制验签；自下载不带 quarantine → TCC 不变；`auto_check_update` 只报告不自动装。
 - Rust 关键依赖：tauri 2（macos-private-api）、cpal、tokio-tungstenite、reqwest、objc2 系、handy-keys（fork 固定 rev，含两个 macOS 键盘状态修复）、pinyin、flate2。
 
-## 6. 已知边界 / 遗留（2026-10-24 收口期清单）
+## 6. 已知边界 / 遗留（2026-11-06 更新）
 
-- **R1 重转语义重做**（REQUIREMENTS.md 已钉死）：后台重算+回写条目+三态显示，不交付不弹 HUD。
-- **R2 Esc 取消真机无效**：已修一版（单键注册→全键观察），仍无效；候选=覆盖安装未重启旧进程/监听器并存问题；日志锚点 `[shortcut] Esc 取消命中`。
+- **R3 find_by_ts 强类型偶发解析失败**：已根治——根因是历史文件无锁并发读到半行（3b52c51 HISTORY_LOCK + ba4bf94 单入口收口后不再发生）；Value 兜底已随单入口删除。
+- **R4 网关僵尸**（两次实锤：2026-11-03 10:22 批量 NoSpeech、11:36 重转"收尾中断"）：旧网关进程活着但已不健康（日志中断、会话处理异常），新实例要等下次拉起才换——网关生命周期管理（探活收紧/崩溃自动重启）未做；下次批量出现"没听清/重转失败"时从 local-service.log 日志中断点直接确认。
+- **LLM 带图慢**（实测 deepseek-flash：无图 1.5s / 带图 9.1s，thinking 未涨、effort 未变）：候选=服务端生成速度/网络路径；治本候选=截图压缩（PNG 1MB→缩放 JPEG ~200KB）——待用户决定（对照实验切 llm2 或直接压缩）。
+- **能量边缘"没听清"**：DJI 无线麦 rms 波动（10:03 正常段 193 → 10:09 后全部 ≤111），模型对 rms<60 判空属正确行为——设备侧问题；判定探针 `~/workspace/denpa-asr/tmp/energy_timeline.py`。
+- **四处 static 迁 core**（同类问题，待批）：pipeline::SESSION_GEN（发号器）/ pipeline::CANCELLED_GENS（取消集合）/ recording::LAST_GEN（与 latest_live_gen 重复，可直接删）/ lib::ACTIVATION（激活模式）。
+- **截图清理窗口错位**：screen_context 保留 200 张滚动，老记录归档时截图为死链（保留路径不阻断）——观察项。
 - 热词 100 token 预算仅豆包/local 注入；智谱不支持。
-- CANCELLED_GEN 单槽：连续取消两段时前一段在途结果可能漏判（审核 a-3）。
-- `now_local_pub` 为 UTC+8 近似格式化（伪秒 :60 修过跨秒回退）；非本地时区用户时间戳偏差——候选改系统本地时间。
 - AppState（session/last_audio/engine_mirror）未并入 core——收口期候选。
 - 隐私：release 转写内容不落日志；llm_logs 明文（本地磁盘）。
 - 死代码已清（56b8c9e）；AGENTS.md 为模块结构权威；handover/ 为流程文档。
