@@ -64,7 +64,7 @@ pub fn start(app: tauri::AppHandle) {
             match c.queue.items.iter().position(|s| s.state == SegState::Queued) {
                 Some(pos) => {
                     let s = &mut c.queue.items[pos];
-                    s.state = SegState::Transcribing;
+                    s.state = SegState::Settling; // 结算中(Transcribing 已被"引擎在途"占用, 五态分工)
                     let taken = (s.id, s.raw.clone(), s.ho.clone(), s.asr_failed);
                     c.version += 1;
                     taken
@@ -124,29 +124,40 @@ pub fn start(app: tauri::AppHandle) {
     });
 }
 
-/// 入队一段 ASR 成功的结果(引擎 Result 事件调用)
-///
-/// 注意: 这里不再需要 app —— 队列只做入队与唤醒, 后处理由 worker 执行(见 start)。
-/// 段入流程(Live 主链路): 转写文本+会话交接 → 排队等结算。
-/// 门面名 submit_live 表达意图"提交一段转写"(原 enqueue, 批3 门面化)。
+/// 引擎 Result 到达(段推进: Transcribing→Queued, raw 落段)。
+/// 段 spawn 即建(2026-11-06): 不再创建新段, 找到本段(gen)推进并把交接
+/// 上下文(ho)整体落到段上(ctrl_stop 之前 ho 只在交接箱里)。
+/// 门面名 submit_live 表达意图"提交一段转写"。
 pub fn submit_live(_app: &tauri::AppHandle, raw: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
-    // 段已入队, 在途窗口结束(busy 从此接管 Esc 判据)
-    if let Some(h) = ho.as_ref() {
-        crate::core::engine_pending_remove(h.gen);
-    }
+    let ho = ho.unwrap_or_default();
+    let gen = ho.gen;
     let mut c = crate::core::lock();
-    let id = c.queue.next_id;
-    c.queue.next_id += 1;
-    c.queue.items.push_back(SegmentEntry {
-        id,
-        source: SegSource::Live,
-        rerun_ts: None,
-        raw,
-        ho: ho.unwrap_or_default(),
-        state: SegState::Queued,
-        reason: None,
-        asr_failed: false,
-    });
+    // 段不在(自测构造/极端时序): 兜底建段, 保证"结果必成段"
+    let id = match c.queue.items.iter_mut().find(|s| s.ho.gen == gen && s.source == SegSource::Live && s.state == SegState::Transcribing) {
+        Some(s) => {
+            s.state = SegState::Queued;
+            s.raw = raw;
+            s.partial.clear();
+            s.ho = ho;
+            s.id
+        }
+        None => {
+            let id = c.queue.next_id;
+            c.queue.next_id += 1;
+            c.queue.items.push_back(SegmentEntry {
+                id,
+                source: SegSource::Live,
+                rerun_ts: None,
+                partial: String::new(),
+                raw,
+                ho,
+                state: SegState::Queued,
+                reason: None,
+                asr_failed: false,
+            });
+            id
+        }
+    };
     c.version += 1;
     drop(c);
     log_debug("入队");
@@ -165,6 +176,7 @@ pub fn submit_rerun(ts: &str, ho: crate::pipeline::SessionHandoff) -> u64 {
         id,
         source: SegSource::Rerun,
         rerun_ts: Some(ts.to_string()),
+        partial: String::new(),
         raw: String::new(),
         ho,
         state: SegState::Transcribing,
@@ -184,37 +196,48 @@ pub fn finish_rerun(id: u64) {
     c.version += 1;
 }
 
-/// 入队一段 ASR 失败的段(引擎 Error 事件调用)
-///
-/// 先落盘音频 + 写历史(不丢段), 再以 Failed 状态留在队列里等重试;
-/// worker 不会重跑它的后处理(asr_failed=true), 只会把它标成失败。
 /// 提交一段 ASR 失败的段(引擎 Error 事件调用, 原名 enqueue_asr_failed)
 ///
-/// 先落盘音频 + 写历史(不丢段), 再以 Failed 状态留在队列里等重试;
+/// 先落盘音频 + 写历史(不丢段), 再把本段推进为 Failed 留在队列里等重试;
 /// worker 不会重跑它的后处理(asr_failed=true), 只会把它标成失败。
 pub fn submit_failed(app: &tauri::AppHandle, reason: String, ho: Option<crate::pipeline::SessionHandoff>) -> u64 {
     let ho = ho.unwrap_or_default();
-    crate::core::engine_pending_remove(ho.gen); // 段终态(失败)入队, 在途窗口结束
     // 落盘音频 + 写历史(delivered="failed") —— 保证"能重试"不是空话
     let audio = record_failed(app, "", "", false, &ho, &reason);
     let mut seg_ho = ho.clone();
     seg_ho.audio_path = audio;
+    let gen = seg_ho.gen;
     let mut c = crate::core::lock();
-    let id = c.queue.next_id;
-    c.queue.next_id += 1;
-    c.queue.items.push_back(SegmentEntry {
-        id,
-        source: SegSource::Live,
-        rerun_ts: None,
-        raw: String::new(),
-        ho: seg_ho,
-        state: SegState::Failed,
-        reason: Some(reason),
-        asr_failed: true,
-    });
+    // 段 spawn 即建: 找到本段(gen)推进为 Failed; 不在则兜底建段
+    let id = match c.queue.items.iter_mut().find(|s| s.ho.gen == gen && s.source == SegSource::Live && s.state == SegState::Transcribing) {
+        Some(s) => {
+            s.state = SegState::Failed;
+            s.reason = Some(reason.clone());
+            s.asr_failed = true;
+            s.partial.clear();
+            s.ho = seg_ho;
+            s.id
+        }
+        None => {
+            let id = c.queue.next_id;
+            c.queue.next_id += 1;
+            c.queue.items.push_back(SegmentEntry {
+                id,
+                source: SegSource::Live,
+                rerun_ts: None,
+                partial: String::new(),
+                raw: String::new(),
+                ho: seg_ho,
+                state: SegState::Failed,
+                reason: Some(reason),
+                asr_failed: true,
+            });
+            id
+        }
+    };
     c.version += 1;
     drop(c);
-    log_debug("ASR 失败段入队(已落盘+入历史)");
+    log_debug("ASR 失败段推进(已落盘+入历史)");
     id
 }
 
@@ -268,7 +291,7 @@ pub fn record_no_speech(
 ) -> Option<String> {
     use tauri::Manager;
     let ho = ho.unwrap_or_default();
-    crate::core::engine_pending_remove(ho.gen); // 段终态(NoSpeech)不入队, 在途窗口同样结束
+    crate::core::segment_discard(ho.gen); // 段删除(没听清不进失败队列, 无常驻状态)
     let mut audio = ho.audio_path.clone();
     if !ho.pcm.is_empty() {
         if let Some(p) = crate::pipeline::history::save_wav(app, &ho.pcm) {
@@ -427,6 +450,7 @@ fn debug_push(id: u64, state: SegState) {
         id,
         source: SegSource::Live,
         rerun_ts: None,
+        partial: String::new(),
         raw: format!("seg{id}"),
         ho: Default::default(),
         state,
@@ -491,11 +515,11 @@ mod tests {
         // 失败段留在队列里(可重试), 后面的段照常可被取走(不阻塞)
         assert!(crate::core::has_failed());
         assert_eq!(crate::core::first_failed_id(), Some(1));
+        // 新投影语义: cur=最新 live 段(这里=段2, Queued), 失败段在 queue 里
         let (cur, q) = crate::core::views();
-        assert!(cur.is_none());
-        assert_eq!(q.len(), 2);
+        assert_eq!(cur.as_ref().map(|c| c.text.clone()), Some("seg2".into()));
+        assert_eq!(q.len(), 1);
         assert_eq!(q[0].state, "failed");
-        assert_eq!(q[1].state, "queued");
         debug_reset();
     }
 
@@ -531,6 +555,7 @@ mod tests {
             id: 100,
             source: SegSource::Rerun,
             rerun_ts: Some("ts-x".into()),
+            partial: String::new(),
             raw: String::new(),
             ho: Default::default(),
             state: SegState::Transcribing,
@@ -538,13 +563,13 @@ mod tests {
             asr_failed: false,
         });
         crate::core::lock().version += 1;
-        assert!(crate::core::busy(), "Rerun 段算在途");
+        // 2026-11-06 新语义: rerun 是后台任务, 不算"语音链路忙"(不影响浮窗收窗,
+        // 用户定则"配置页的重新转换不算到这"), 投影整体滤掉(展示端不知道 rerun)
+        assert!(!crate::core::busy(), "Rerun 段不算语音链路在途");
         let (cur, q) = crate::core::views();
-        assert!(cur.is_none(), "Rerun 段不占 cur 位");
-        assert_eq!(q.len(), 1);
-        assert_eq!(q[0].source, "rerun");
-        assert_eq!(q[0].state, "transcribing");
-        assert_eq!(crate::core::rerun_active(), vec!["ts-x".to_string()], "进行中重转=队列投影");
+        assert!(cur.is_none(), "Rerun 段不进投影");
+        assert_eq!(q.len(), 0, "Rerun 段不进投影");
+        assert_eq!(crate::core::rerun_active(), vec!["ts-x".to_string()], "进行中重转=队列投影(rerun_active 专用)");
         finish_rerun(100);
         assert!(!crate::core::busy());
         assert!(crate::core::rerun_active().is_empty(), "出队即从投影消失");

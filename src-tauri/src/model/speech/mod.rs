@@ -184,7 +184,7 @@ pub fn transcribe(
                         // 流式文字按 gen 归属写入该段(串台修复)。gen 由会话 spawn 时
                         // 传入(录音中交接箱还是空的——不能从 handoff 读)。
                         if gen != 0 {
-                            crate::core::engine_partial(gen, &t);
+                            crate::core::segment_stream(gen, &t);
                         }
                         ("asr-partial", t)
                     }

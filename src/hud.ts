@@ -164,26 +164,25 @@ async function pollOnce() {
     if (s.version === pollVer) return;
     pollVer = s.version;
 
-    // 电平条: 只有录音中才有意义。整条(含空轨道)在非录音阶段隐藏——
-    // 空轨道在转写/润色阶段会显示成一条无意义的灰线, 看起来像坏掉的进度条(用户反馈截图)。
-    const recording = s.status === "recording";
+    // ── 状态阶段(从数据判, 不再由 Rust 侧生成展示态) ──
+    const cur = s.cur;
+    const curState = cur ? String(cur.state || "") : "";
+    const recording = !!s.recording || curState === "recording";
     const lv = Math.min(1, (s.level / 1000) * 6);
     bar.style.display = recording ? "" : "none";
     fill.style.width = recording ? `${Math.max(4, lv * 100)}%` : "0";
     fill.className = recording && lv > 0.9 ? "fill hot" : "fill";
 
-    // 收窗时长由"本轮发生的事实"决定一次(不再各处各自 scheduleHide)。
-    // 原因: 多个分支各自排程会互相覆盖——"没听清"提示的 2.5s 曾被末尾的存活规则覆盖成 350ms,
-    // 提示一闪而过(用户报"没听清一直显示"的另一面: 时长完全不由提示决定)。
+    // 收窗时长由"本轮发生的事实"决定一次。
     let hideAfter: number | null = null;
 
-    // 状态行
+    // 状态行: 录音 > 润色(通知) > 转写中(当前段) > 空
     if (recording) {
       setState("", "● 录音中", false);
-    } else if (s.status === "transcribing") {
-      setState("idle", "… 转写中");
-    } else if (s.status === "busy") {
+    } else if (s.polishing) {
       setState("idle", "✦ AI 润色中…");
+    } else if (curState === "transcribing" || curState === "queued") {
+      setState("idle", "… 转写中");
     } else {
       setState("", "", false);
     }
@@ -194,48 +193,40 @@ async function pollOnce() {
       if (!recording) hideAfter = 2500;
     }
 
-    // 左栏: 当前段(录音中显示实时文字, 始终滚到最新)
-    // 松手瞬间队列里还没有这一段(ASR 结果要几百毫秒后才到), seg_current 会短暂为空——
-    // 此时若把左栏清空, 视觉上就是"回显瞬间消失、结果到了又出现"(用户反馈)。
-    // 规则: 转写中且暂无新文本时, 保留上一份回显; 其余状态(录音重新开始/已结束)才清。
-    const cur = s.seg_current;
+    // 左栏: 当前段(=用户最后说的那条; 录音中 text 就是流式文字, 始终滚到最新)
     const curStr = cur ? String(cur.text || "") : "";
-    if (curStr || s.status !== "transcribing") {
+    if (curStr || curState !== "transcribing") {
       if (curText.textContent !== curStr) curText.textContent = curStr;
     }
-    if (cur && cur.state === "recording") curText.scrollTop = curText.scrollHeight;
+    if (recording) curText.scrollTop = curText.scrollHeight;
 
-    // 右栏: 队列(空 → 不显示右栏, 面板收回单栏宽度)
+    // 右栏: 其余段(空 → 不显示右栏, 面板收回单栏宽度)
     // 录音中不展示失败段(用户定则: 录音时不该被上一段的失败打扰; 录完再说)
-    const qAll: any[] = s.seg_queue || [];
+    const qAll: any[] = s.queue || [];
     const q = recording ? qAll.filter((r) => r.state !== "failed") : qAll;
     renderQueue(q);
     hud.classList.toggle("hasqueue", q.length > 0);
     pushWidth(); // 只改宽度(480↔664); 高度固定, 位置不动
     clearBtn.classList.toggle("show", q.some((r) => r.state === "queued"));
 
-    // 失败提示 + 存活规则(录音中不弹失败条, 录完再提示 2.5s 后自动收走)
-    const failed = !!s.seg_failed;
+    // 失败提示 + 存活规则(录音中不弹失败条, 录完再提示)
+    const failed = !!s.failed;
     showFail(failed && !recording);
     if (s.err) {
-      // 引擎/交付级错误(asr-error): 同样只在没录音时提示, 2.5s 后自动收走(与失败段同规则)
+      // 引擎/交付级错误(asr-error): 同样只在没录音时提示
       setState("err", `⚠️ ${String(s.err).slice(0, 60)}`);
       showFail(!recording);
       if (!recording) hideAfter = 2500;
     }
     // 存活规则(用户定则 2026-11-05 重申):
     //   浮窗消失的唯一前提 = 正在转写的所有内容都已**成功交付**(交付完成起等 N 秒收起)。
-    //   - 活段(录音/转写/排队中)不算完 → 不收
+    //   - 活段(录音/引擎在途/排队/结算中)不算完 → 不收
     //   - 失败段(未成功交付)也不算完 → 不收, 留着显示失败条等用户重试/清空
-    //     (issue #3 时代的"失败 2.5s 收"作废——用户明确定则: 没成功交付就不该消失)
-    //   - 重转段(rerun)不算: 历史页的后台重算与语音链路交付无关(poll 已滤 source=rerun)
-    const queueBusy = q.some((r) => r.state === "queued" || r.state === "transcribing");
-    const busy =
-      s.status === "recording" ||
-      s.status === "transcribing" ||
-      (cur && cur.state === "transcribing") ||
-      queueBusy ||
-      (!recording && failed);
+    //   - rerun 不算: 数据侧已滤, 走到这里的段全是语音链路段
+    const active = (r: any) => r.state === "recording" || r.state === "transcribing" || r.state === "queued";
+    const queueBusy = q.some(active);
+    const curBusy = curState !== "" && curState !== "failed";
+    const busy = recording || curBusy || queueBusy || (!recording && failed);
     if (busy) {
       cancelHide(); // 还有活/有失败未处理 → 不自动收
     } else if (s.finished) {

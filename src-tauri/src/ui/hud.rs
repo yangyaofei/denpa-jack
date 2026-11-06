@@ -18,50 +18,27 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 // Mutex 不再需要: 快照镜像层与 ui 侧通知槽都已迁 core(2026-11-05)
 
-/// 对外可感知的阶段。**显示文案不在这里拼**——那是视图(hud.ts)的事, 这里只表达语义。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Phase {
-    Recording,
-    Transcribing,
-    Polishing,
-}
-
-impl Phase {
-    /// 线上升值(前端按这个字符串分支; 空串 = 待命)
-    fn wire(self) -> &'static str {
-        match self {
-            Phase::Recording => "recording",
-            Phase::Transcribing => "transcribing",
-            Phase::Polishing => "busy",
-        }
-    }
-    fn wire_str(self) -> String {
-        self.wire().to_string()
-    }
-}
-
-/// 前端唯一读到的东西(整份拷贝, 无共享可变引用)
+/// 前端读到的整份快照(core::snapshot 的直通形态; 无拼装无状态)。
+/// 阶段判定(recording/busy 等)在前端, 从 cur/queue 的段状态自己判。
 #[derive(Default, Clone, serde::Serialize)]
 pub struct Snapshot {
     pub version: u64,
-    /// 阶段: recording | transcribing | busy | ""
-    pub status: String,
-    /// 录音中的实时回显(逐字)
-    pub partial: String,
+    pub recording: bool,
     /// 音量(RMS 0-1000 定点)
     pub level: u32,
-    /// 一次性提示(轮询取后清)
+    /// 当前段 = 用户最后说的那条(录音中 partial 在它的 text 上实时更新)
+    pub cur: Option<crate::core::SegView>,
+    /// 其余段(时间序: 旧→新; 含排队/转写中/失败)
+    pub queue: Vec<crate::core::SegView>,
+    /// 是否有未处理的失败段
+    pub failed: bool,
+    // ── 一次性通知(取走即清) ──
     pub msg: String,
-    /// 交付载荷(一次性; 带 warning 时前端延长提示)
+    /// 交付载荷(带 warning 时前端延长提示)
     pub finished: Option<serde_json::Value>,
-    /// 错误(一次性; 录音中不打扰, 不采纳——见 `apply_error`)
     pub err: Option<String>,
-    /// 左栏: 当前段(录音中 = 实时文字; 否则 = 正在转写的那段)
-    pub seg_current: Option<crate::core::SegView>,
-    /// 右栏: 队列里其余段(空 = 右栏不显示)
-    pub seg_queue: Vec<crate::core::SegView>,
-    /// 是否有未处理的失败段(存活规则: 只剩失败时 2.5s 后收起)
-    pub seg_failed: bool,
+    /// 最后一段进入 LLM 润色(事实, 展示端据此显示"润色中")
+    pub polishing: bool,
 }
 
 // 快照镜像层已删除(2026-11-05 用户指正): static HUD: Mutex<Snapshot> 是第二份
@@ -152,19 +129,6 @@ fn apply_event(o: &mut crate::core::PendingNotice, recording: bool, ev: &crate::
     }
 }
 
-/// status 优先级纯函数: 录音 > 润色(通知槽) > 转写中(投影) > 空
-fn derive_status(recording: bool, polishing: bool, cur_transcribing: bool, has_notice: bool) -> String {
-    if recording {
-        Phase::Recording.wire_str()
-    } else if polishing {
-        Phase::Polishing.wire_str()
-    } else if cur_transcribing && !has_notice {
-        Phase::Transcribing.wire_str()
-    } else {
-        String::new()
-    }
-}
-
 /// 事件泵(批4 起, 2026-11-05 职责纯化): 事件队列的唯一消费者。
 /// drain → apply_event 纯函数(展示保护规则: 录音中不被上一段收尾打扰)
 /// → core::notice_put 写槽(取走即清; 写入必 bump version——
@@ -214,50 +178,24 @@ pub fn resize_width(app: &tauri::AppHandle, width: f64) {
     crate::ui::overlay::resize_width(app, width.clamp(480.0, 720.0));
 }
 
-/// 前端唯一读接口: 直读 core(2026-11-05 按用户指正删除快照镜像层——
-/// 旧实现"拷进 static HUD + 事件泵改快照"是第二份事实源, 撕裂/漏刷皆源于此)。
-/// 一次 core 锁取齐持久投影+事件, 本函数只做纯组装, 无任何跨调用状态:
-///   左栏 = 录音中显示实时文字; 没在录音时 = 正在转写的那段
-///   右栏 = 队列里其余段(录音时, 正在转写的那段退到右栏)
-/// 展示保护规则(录音中不被上一段的收尾事件打扰)在此判 recording。
+/// 前端唯一读接口: **直通 core::snapshot**(2026-11-06 段一生单列表重构后,
+/// 这里不再有任何拼装——cur/queue 的组装只在 core::views_of 唯一点,
+/// 状态阶段等展示判定全在前端, 从段列表自己判)。
 pub fn poll() -> Snapshot {
     let a = crate::core::snapshot();
-    // 一次性通知(core 槽, 取走即清; 展示保护规则已在泵的 apply_event 判过)
     let o = a.oneshot;
-    // HUD 不显示重转段(用户定则: 重转是后台任务, 录音浮窗只管语音链路的段;
-    // 重转状态看主窗历史页)。views() 保持全量, 各投影端自决过滤
-    let queue: Vec<_> = a.queue.into_iter().filter(|s| s.source != "rerun").collect();
-    let mut s = Snapshot {
+    Snapshot {
         version: a.version,
-        status: String::new(),
-        partial: a.partial.clone(),
+        recording: a.recording,
         level: a.level,
+        cur: a.cur,
+        queue: a.queue,
+        failed: a.failed,
         msg: o.msg,
         finished: o.finished,
         err: o.err,
-        seg_current: if a.recording {
-            Some(crate::core::SegView { state: "recording".into(), source: "live".into(), text: a.partial })
-        } else {
-            a.cur.clone()
-        },
-        seg_queue: if a.recording {
-            // 录音时正在转写的那段退到右栏队首
-            let mut q = Vec::with_capacity(queue.len() + 1);
-            if let Some(c) = a.cur.clone() {
-                q.push(c);
-            }
-            q.extend(queue);
-            q
-        } else {
-            queue
-        },
-        seg_failed: a.failed,
-    };
-    // status 优先级: 纯函数推导
-    let cur_transcribing = a.cur.as_ref().map(|c| c.state == "transcribing").unwrap_or(false);
-    let has_notice = !s.msg.is_empty() || s.finished.is_some() || s.err.is_some();
-    s.status = derive_status(a.recording, o.polishing, cur_transcribing, has_notice);
-    s
+        polishing: o.polishing,
+    }
 }
 
 #[cfg(test)]
@@ -316,13 +254,6 @@ mod tests {
         assert!(!should_skip_hide(1_000, 0)); // 从未显示过
     }
 
-    // status 优先级: 录音 > 润色 > 转写中 > 空
-    #[test]
-    fn status_priority() {
-        assert_eq!(derive_status(true, true, true, false), "recording");
-        assert_eq!(derive_status(false, true, true, false), "busy");
-        assert_eq!(derive_status(false, false, true, false), "transcribing");
-        assert_eq!(derive_status(false, false, true, true), "", "有一次性通知时不显示转写中");
-        assert_eq!(derive_status(false, false, false, false), "");
-    }
+    // 阶段判定已迁前端(从段状态判), Rust 侧不再有 status 概念——
+    // derive_status 与其用例随镜像层/展示态一起删除(2026-11-06)
 }

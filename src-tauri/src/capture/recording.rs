@@ -200,7 +200,7 @@ pub fn ctrl_start(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> 
     // 在途登记在 spawn 时(不是松手时): 引擎会话从 spawn 到 Result 全程在途——
     // 录音中 snapshot 从 engine_gens 找本段的流式文字, 松手才登记的话
     // 录音中回显读不到(真机: 录音中不显示, 松手才出字)
-    crate::core::engine_pending_add(gen);
+    crate::core::open_live_segment(gen);
     model::transcribe(
         app.clone(),
         profile.provider.clone(),
@@ -303,9 +303,11 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
         .unwrap_or(0.3)
         .max(0.05);
     let min_bytes = (min_secs * 32000.0) as usize;
+    // 太短丢弃路径也要把段收掉(段已诞生, 不能留在列表里)
     if ho.pcm.len() < min_bytes {
         // B3 太短: Abort 引擎(关 WS 无交付), 交接箱不写 → post_process 不会跑
         let _ = cmd_tx.try_send(model::Cmd::Abort);
+        crate::core::segment_discard(ho.gen);
         session_cleanup(&app, None);
         crate::ui::dismiss(&app);
         log::log(&app, &format!("录音太短已丢弃 {}ms", ho.duration_ms));
@@ -318,14 +320,16 @@ pub fn ctrl_stop(app: tauri::AppHandle, state: &std::sync::Mutex<AppState>) -> R
     }
     *LAST_GEN.lock().unwrap() = Some(ho.gen);
     *handoff.lock().unwrap() = Some(ho.clone());
-    // 在途引擎会话登记: 已在 spawn 时完成(ctrl_start), 此处不再重复 add。
-    // 终态注销(引擎 Result/NoSpeech/失败)在 submit_live/record_no_speech/
-    // submit_failed 各自完成; Finish 发送失败就地收(见下)。
+    // 松手: 段状态推进 Recording→Transcribing(引擎在途, 等 Result)。
+    // 终态推进在 submit_live/record_no_speech/submit_failed 各自完成;
+    // Finish 发送失败就地收(见下)。
     // 审计#2: Finish 丢失=会话挂死(watchdog 只在 Finish 分支布防)——失败必须告警
     if cmd_tx.blocking_send(model::Cmd::Finish).is_err() {
         crate::log::elog("[recording] Finish 发送失败: 引擎会话已死, 发 asr-error");
         crate::core::emit(crate::core::AppEvent::Error("引擎会话异常中断".into()));
-        crate::core::engine_pending_remove(ho.gen); // 不会有 Result 来注销, 就地收
+        crate::core::segment_engine_failed(ho.gen, "引擎会话异常中断"); // 不会有 Result 来推进, 就地收
+    } else {
+        crate::core::segment_engine_waiting(ho.gen);
     }
     session_cleanup(&app, Some(crate::capture::feedback::Cue::End));
     log::log(&app, &format!("录音结束 {:.1}s", ho.duration_ms as f64 / 1000.0));
@@ -344,23 +348,11 @@ pub fn ctrl_cancel_queued(_app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 取消目标优先级: ①引擎在途但未入队的段(松手→Result 之间, 只在 core.engine_gens)
-/// ②队列里的 Queued/Transcribing 段(rev 找最新)——①永远比②新。
-/// 标记进 CANCELLED_GENS, 消费由 post_process 两道闸完成(短路或拦交付):
-/// ①的段在 Result 到达 submit_live 入队后同样被开头闸按 gen 短路。
+/// 取消目标 = 最新一个未终态 live 段(段一生单列表后只有这一个来源:
+/// rev 找最新; Recording/引擎在途/Queued/Settling 都算"未终态")。
+/// 标记进 CANCELLED_GENS, 消费由 post_process 两道闸完成(短路或拦交付)。
 fn cancel_latest_gen() -> Option<u64> {
-    let gen = crate::core::engine_pending_latest().or_else(|| {
-        let c = crate::core::lock();
-        c.queue
-            .items
-            .iter()
-            .rev()
-            .find(|s| {
-                matches!(s.state, crate::core::SegState::Queued | crate::core::SegState::Transcribing)
-                    && s.ho.gen != 0
-            })
-            .map(|s| s.ho.gen)
-    });
+    let gen = crate::core::latest_live_gen();
     if let Some(g) = gen {
         crate::pipeline::mark_cancelled(g);
         log::elog(&format!("[queue] Esc: 已标记取消段 gen={g}"));
@@ -441,7 +433,7 @@ mod gap_tests {
         // 场景: 队列里有一个 Queued 段(gen=7), 引擎在途一个更新的会话(gen=9, 未入队)。
         // Esc 应取消 gen=9(最新), 而不是队列里的 7
         crate::core::test_enqueue(crate::core::SegState::Queued, 7);
-        crate::core::engine_pending_add(9);
+        crate::core::open_live_segment(9);
         let hit = crate::capture::recording::cancel_latest_gen();
         assert_eq!(hit, Some(9), "取消最新引擎会话");
         assert!(crate::pipeline::is_cancelled(9), "取消最新引擎会话");
