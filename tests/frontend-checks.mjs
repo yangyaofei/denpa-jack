@@ -83,7 +83,8 @@ check(
     /cfg\.ax_paste_only_apps = Array\.from/.test(src),
 );
 const pipe = readFileSync("src-tauri/src/pipeline/mod.rs", "utf8");
-check("交付时命中名单跳过 AX 直写", /ax_paste_only\(&cfg_h\.ax_paste_only_apps/.test(pipe) && /粘贴优先名单命中, 跳过 AX 直写/.test(pipe));
+const injectSrc = readFileSync("src-tauri/src/pipeline/delivery/inject.rs", "utf8");
+check("交付时命中名单跳过 AX 直写(策略封装在 inject)", /paste_only_apps/.test(injectSrc) && /placeholder_showing/.test(injectSrc) && /fn choose/.test(injectSrc));
 const deliverSrc = readFileSync("src-tauri/src/pipeline/delivery/ax.rs", "utf8");
 check(
   "AX 校验改为多信号(AXValue 为主)",

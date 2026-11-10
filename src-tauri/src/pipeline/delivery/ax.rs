@@ -112,6 +112,29 @@ pub fn bg_write_report(target: &BgTarget, text: &str) -> BgWriteReport {
     }
 }
 
+/// 焦点元素是否处于"空框显示占位符"状态（AXValue == AXPlaceholderValue 且非空）。
+/// Web 编辑器（Electron/自定义 contenteditable）在此状态下收到 AX 选区写入，
+/// 会把占位符从显示态固化成内容态（2026-11-10 OpenCode 真机事故）。
+pub fn focused_placeholder_showing() -> bool {
+    unsafe {
+        let sys = AxGuard(AXUIElementCreateSystemWide());
+        if sys.0.is_null() {
+            return false;
+        }
+        let name = CFString::new(KAX_FOCUSED_ELEMENT);
+        let mut out: CFTypeRef = std::ptr::null_mut();
+        let r = AXUIElementCopyAttributeValue(sys.0, name.as_concrete_TypeRef(), &mut out);
+        if r != 0 || out.is_null() {
+            return false;
+        }
+        let el = AxGuard(out);
+        match (ax_copy(el.0, KAX_VALUE), ax_copy(el.0, KAX_PLACEHOLDER)) {
+            (Some(v), Some(ph)) => !ph.is_empty() && v == ph,
+            _ => false,
+        }
+    }
+}
+
 /// 后台追加写入(正式路径, 2026-11-03 需求: 焦点切走后仍写入按热键时快照的输入框)。
 /// 形态: 读 AXValue → 尾部拼接 → 写回 → 回读验证。非焦点元素没有选区/光标语义,
 /// AXSelectedText 路径多数 App 静默忽略(探针实测 TextEdit 即如此), value 追加是

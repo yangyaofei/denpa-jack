@@ -3,9 +3,11 @@
 // paste.rs = 回执式粘贴事务(paste_tx 归位)。
 // 感知类(frontmost_bundle/FocusLock/focused_element_info/ax_trusted)已搬 capture/focus.rs。
 pub mod ax;
+pub mod inject;
 pub mod paste;
 
 pub use ax::ax_insert;
+pub use inject::{inject_background, inject_focused};
 
 // CGEvent 按键模拟(线程安全, 无 HIToolbox 主线程断言; C39)
 #[link(name = "CoreGraphics", kind = "framework")]

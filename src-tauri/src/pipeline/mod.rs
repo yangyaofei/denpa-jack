@@ -277,11 +277,7 @@ pub fn post_process(app: tauri::AppHandle, raw: String, ho: SessionHandoff) -> O
 fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crate::capture::FocusLock) -> Result<String, String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let ax_ok = crate::capture::ax_trusted(false);
-    let focus_ok = focus.still_valid();
-    crate::log::elog(&format!(
-        "[deliver] ax_trusted={ax_ok} focus_bundle={:?} focus_ok={focus_ok}",
-        focus.bundle
-    ));
+    crate::log::elog(&format!("[deliver] ax_trusted={ax_ok} focus_bundle={:?}", focus.bundle));
     // D3: 原剪贴板快照必须在第一次写剪贴板之前取——粘贴回执后的"恢复"恢复的是这份,
     // 旧实现在 reliable_paste 内部快照, 读到的是已写入的转写文本, 恢复=没恢复。
     let saved = crate::pipeline::delivery::paste::ClipboardSnapshot::take(app);
@@ -291,51 +287,37 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         return Ok("copied-self".into());
     }
     // 1) 先无条件写剪贴板 —— 用户定则: 不管走哪条交付路径, 这段文本都必须能拿得到。
-    //    修 bug: 以前 AX 直写成功就 return, 剪贴板里什么都没有, 用户事后拿不回转写结果。
     app.clipboard().write_text(text.to_string()).map_err(|e| format!("剪贴板写入失败: {e}"))?;
-    // 3-prev) 配置提前取一次(粘贴优先名单 + paste_tx 都要用)
-    let cfg_h: crate::config::Config = crate::config::get_config(app.clone()).unwrap_or_default();
-    // 2) AX 直写光标(点不碰剪贴板式插入; 焦点校验通过才尝试, B10)。
-    //    粘贴优先名单命中 → 跳过 AX(该 App 的 AX 写入会重复输入, 见 settings 字段注释)
-    let ax_skip = ax_paste_only(&cfg_h.ax_paste_only_apps, focus.bundle.as_deref());
-    if ax_skip {
-        crate::log::elog(&format!(
-            "[deliver] 粘贴优先名单命中, 跳过 AX 直写: {}",
-            focus.bundle.as_deref().unwrap_or("?")
-        ));
-    }
-    if !clipboard_only && focus_ok && !ax_skip {
-        match crate::pipeline::delivery::ax_insert(text) {
-            Ok(()) => return Ok("pasted-ax".into()),
-            Err(e) => crate::log::elog(&format!("[deliver] ax_insert 失败: {e}")),
-        }
-    }
-    let app2_h = app.clone();
     if clipboard_only {
-        // 只复制模式: 上一步已经真写过剪贴板(审计#1 对齐 Handy clipboard.rs:74)
         return Ok("copied".into());
     }
-    // 4) 焦点已变 → 后台写入按热键时快照的输入框(2026-11-03 需求); 不可写/元素失效
-    //    → 回退原行为(只复制, B10: 焦点已变绝不把文本贴到"现在"的前台)
+    // 2) 焦点已变 → 后台注入快照的输入框(探测/追加语义封装在 delivery::inject);
+    //    不可写/元素失效 → 只复制(B10: 焦点已变绝不把文本贴到"现在"的前台)
     if !focus.still_valid() {
-        if !clipboard_only {
-            if let Some(el) = focus.element.as_ref() {
-                match crate::pipeline::delivery::ax::bg_append_write(el, text) {
-                    Ok(()) => return Ok("pasted-ax-bg".into()),
-                    Err(e) => {
-                        crate::log::elog(&format!("[deliver] 后台写入失败, 回退剪贴板: {e}"));
-                        return Ok("focus-changed-copied-only".into());
-                    }
+        if let Some(el) = focus.element.as_ref() {
+            return match crate::pipeline::delivery::inject_background(el, text) {
+                Ok(()) => Ok("pasted-ax-bg".into()),
+                Err(e) => {
+                    crate::log::elog(&format!("[deliver] 后台注入失败, 回退剪贴板: {e}"));
+                    Ok("focus-changed-copied-only".into())
                 }
-            }
+            };
         }
         return Ok("focus-changed-copied-only".into());
     }
-    // 5) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
+    // 3) 前台注入: 探测(placeholder/名单/焦点)与策略(AX→粘贴)全部封装在
+    //    delivery::inject——本函数不再感知输入框的多样性(用户定则 2026-11-10)
+    let outcome = crate::pipeline::delivery::inject_focused(app, text, false, &focus)?;
+    if outcome == "pasted-ax" {
+        return Ok(outcome);
+    }
+    // 4) 回执式可靠粘贴(Handy paste_tx 全套): 延迟供数据(lazy promise)+读取回执+安静期恢复+changeCount 守卫
     let text2 = text.to_string();
     let saved2 = saved;
+    let cfg2 = crate::config::get_config(app.clone()).unwrap_or_default();
+    let app2 = app.clone();
     let r = app.run_on_main_thread(move || {
-        let _ = crate::pipeline::delivery::paste::reliable_paste(&text2, &app2_h, &cfg_h, saved2);
+        let _ = crate::pipeline::delivery::paste::reliable_paste(&text2, &app2, &cfg2, saved2);
     });
     if r.is_err() {
         // 审计#11: 兜底也先写文本再注入(Handy clipboard.rs:74 注入失败路径同样先写)
@@ -344,14 +326,6 @@ fn deliver(app: &tauri::AppHandle, text: &str, clipboard_only: bool, focus: crat
         paste_cmd_v()?;
     }
     Ok("pasted-cmdv".into())
-}
-
-/// 粘贴优先名单匹配（纯函数, 便于单测）：bundle id 命中即跳过 AX 直写
-fn ax_paste_only(apps: &[String], bundle: Option<&str>) -> bool {
-    match bundle {
-        Some(b) => apps.iter().any(|x| x.trim() == b),
-        None => false,
-    }
 }
 
 /// 模拟 Cmd+V —— CGEvent 直发(线程安全; enigo 内部走 HIToolbox 输入法 API
@@ -433,7 +407,7 @@ fn trailing_newlines_text(text: &str, n: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ax_paste_only, format_epoch_local, format_epoch_utc8, format_tm, mark_cancelled, take_cancelled, trailing_newlines_text, CANCELLED_GENS};
+    use super::{format_epoch_local, format_epoch_utc8, format_tm, mark_cancelled, take_cancelled, trailing_newlines_text, CANCELLED_GENS};
 
     #[test]
     fn format_tm_is_the_format_contract() {
@@ -472,15 +446,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ax_paste_only_rules() {
-        let apps = vec!["com.google.GeminiMacOS".to_string(), "  com.x.y  ".to_string()];
-        assert!(ax_paste_only(&apps, Some("com.google.GeminiMacOS")), "精确命中");
-        assert!(ax_paste_only(&apps, Some("com.x.y")), "两侧空白应被容忍");
-        assert!(!ax_paste_only(&apps, Some("com.apple.Preview")), "未命中");
-        assert!(!ax_paste_only(&apps, None), "拿不到 bundle 不拦截");
-        assert!(!ax_paste_only(&[], Some("com.google.GeminiMacOS")), "空名单不拦截");
-    }
 
     #[test]
     fn cancelled_gens_consume_once_and_cap() {

@@ -169,19 +169,13 @@ pub fn ax_trusted(prompt: bool) -> bool {
     unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) }
 }
 
-/// 前台应用 bundle id(lsappinfo, 系统自带)
+/// 前台应用 bundle id(NSWorkspace 原生; lsappinfo 对部分 App 返回 "!!none",
+/// 导致粘贴优先名单永远匹配不上——OpenCode 输入框事故的隐性成因之一)。
 pub fn frontmost_bundle() -> Option<String> {
-    let front = std::process::Command::new("lsappinfo").arg("front").output().ok()?;
-    let asn = String::from_utf8_lossy(&front.stdout).trim().to_string();
-    if asn.is_empty() {
-        return None;
-    }
-    let info = std::process::Command::new("lsappinfo")
-        .args(["info", "-only", "bundleid", &asn])
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&info.stdout).trim().to_string();
-    s.split('=').next_back().map(|v| v.trim_matches('"').to_string())
+    let ws = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let app = ws.frontmostApplication()?;
+    let bid = app.bundleIdentifier()?;
+    Some(bid.to_string())
 }
 
 /// 按住热键时的焦点元素引用(AX 快照)——后台写入的目标。
