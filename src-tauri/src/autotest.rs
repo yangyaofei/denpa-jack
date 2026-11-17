@@ -18,6 +18,15 @@ pub fn maybe_spawn(app: &AppHandle) {
         std::thread::spawn(move || run_axbg(app2));
         return;
     }
+    if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("axscan") {
+        // 焦点输入框可达性属性采集(2026-11-17): 焦点元素/内容长度变化即 dump
+        // 全属性到 <数据目录>/ax_scan.txt——回答"各输入框的占位符/内容在 AX 层的
+        // 真实标记"(examples 独立探针被 TCC 拒, 宿主必须是 App)。只读不写目标。
+        // 采集窗口用 VOICEMAC_AXSCAN_SECS 覆盖(默认 120s)。
+        let app2 = app.clone();
+        std::thread::spawn(move || run_axscan(app2));
+        return;
+    }
     if std::env::var("VOICEMAC_AUTOTEST").as_deref() == Ok("quit") {
         let app2 = app.clone();
         std::thread::spawn(move || {
@@ -95,6 +104,34 @@ fn resolve_asr_wait_gateway(app: &tauri::AppHandle, cfg: &crate::config::Config)
 /// (-25204), 只有正式 App 有辅助功能权限——探针宿主非 App 莫属)。
 /// 操作节奏: 启动后 5 秒内点进目标输入框(任意 App) → 日志"快照完成"后 8 秒内
 /// 切到别的地方 → 自动后台写入 → 日志结论。锚点 [axbg]。
+/// 焦点输入框可达性属性采集(60s): 焦点元素或内容长度变化 → dump 全属性。
+/// 采样维度对齐闪电说 text_field_access 的探测集:
+/// 可写性/内容/选区/角色/占位符 + WebKit 私有 DOM 属性(class/id/tag)。
+fn run_axscan(app: AppHandle) {
+    use std::io::Write;
+    let secs: u64 = std::env::var("VOICEMAC_AXSCAN_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(120);
+    let path = crate::config::data_dir(&app).join("ax_scan.txt");
+    let mut out = std::fs::File::create(&path).expect("create ax_scan.txt");
+    let _ = writeln!(out, "# 采集窗口 {secs}s; 焦点变化即 dump。目标: OpenChamber 空框/打字态/微信/浏览器/备忘录");
+    log::log(&app, &format!("AUTOTEST-AXSCAN: 开始采集 {secs}s → {}", path.display()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut last_key = String::new();
+    let mut n = 0;
+    while std::time::Instant::now() < deadline {
+        if let Some((el, key)) = crate::pipeline::delivery::ax::focused_element_key() {
+            if key != last_key {
+                last_key = key.clone();
+                n += 1;
+                let _ = writeln!(out, "=== dump #{n} {key}");
+                let _ = writeln!(out, "{}", crate::pipeline::delivery::ax::describe_element_attrs(&el));
+                let _ = out.flush();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    log::log(&app, &format!("AUTOTEST-AXSCAN: 结束, 共 {n} 份 → {}", path.display()));
+}
+
 fn run_axbg(app: AppHandle) {
     use crate::pipeline::delivery::ax::{bg_snapshot_focused, bg_write_report};
     std::thread::sleep(std::time::Duration::from_millis(5000));

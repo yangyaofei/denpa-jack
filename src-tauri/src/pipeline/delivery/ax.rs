@@ -12,12 +12,77 @@ extern "C" {
     fn AXUIElementCopyAttributeValue(el: AXUIElementRef, attr: CFStringRef, out: *mut CFTypeRef) -> i32;
     fn AXUIElementSetAttributeValue(el: AXUIElementRef, attr: CFStringRef, val: CFTypeRef) -> i32;
     fn AXUIElementGetPid(el: AXUIElementRef, pid: *mut i32) -> i32;
+    fn AXUIElementIsAttributeSettable(el: AXUIElementRef, attr: CFStringRef, settable: *mut u8) -> i32;
 }
 
 const KAX_SELECTED_TEXT: &str = "AXSelectedText";
 const KAX_VALUE: &str = "AXValue";
 const KAX_PLACEHOLDER: &str = "AXPlaceholderValue";
 const KAX_FOCUSED_ELEMENT: &str = "AXFocusedUIElement";
+
+/// (axscan 探针用) 取当前焦点元素 + 采集 key(进程|角色|DOM标识|内容长度)。
+/// key 变化 = 需要重新 dump。
+pub fn focused_element_key() -> Option<(AXUIElementRef, String)> {
+    unsafe {
+        let sys = AxGuard(AXUIElementCreateSystemWide());
+        if sys.0.is_null() {
+            return None;
+        }
+        let name = CFString::new(KAX_FOCUSED_ELEMENT);
+        let mut out: CFTypeRef = std::ptr::null_mut();
+        let r = AXUIElementCopyAttributeValue(sys.0, name.as_concrete_TypeRef(), &mut out);
+        if r != 0 || out.is_null() {
+            return None;
+        }
+        let el = out as AXUIElementRef;
+        let role = ax_copy(el, "AXRole").unwrap_or_default();
+        let val = ax_copy(el, "AXValue").unwrap_or_default();
+        let domid = ax_copy(el, "AXDOMIdentifier").unwrap_or_default();
+        let mut pid: i32 = 0;
+        AXUIElementGetPid(el, &mut pid);
+        Some((el, format!("pid={pid} role={role} domid={domid} value_len={}", val.chars().count())))
+    }
+}
+
+/// (axscan 探针用) 焦点元素可达性属性全集的可读 dump——探测维度对齐闪电说
+/// text_field_access(可写性/内容/选区/角色/占位符) + WebKit 私有 DOM 属性。
+pub fn describe_element_attrs(el: &AXUIElementRef) -> String {
+    let mut s = String::new();
+    let attrs = [
+        "AXRole",
+        "AXSubrole",
+        "AXRoleDescription",
+        "AXValue",
+        "AXPlaceholderValue",
+        "AXNumberOfCharacters",
+        "AXSelectedText",
+        "AXSelectedTextRange",
+        "AXDescription",
+        "AXHelp",
+        "AXTitle",
+        "AXEditable",
+        "AXDOMClassList",
+        "AXDOMIdentifier",
+        "AXDOMHTMLTag",
+    ];
+    for a in attrs {
+        let v = ax_copy(*el, a).unwrap_or_else(|| "<无>".into());
+        let v = v.replace('\n', "\\n");
+        let shown: String = v.chars().take(200).collect();
+        s.push_str(&format!("  {a:22} = {shown}\n"));
+    }
+    s.push_str(&format!("  AXValueSettable        = {}\n", ax_value_settable(el)));
+    s
+}
+
+/// 探测某属性是否可写(闪电说同款: 写前先问, "Text field is not editable")
+pub fn ax_value_settable(el: &AXUIElementRef) -> bool {
+    unsafe {
+        let n = CFString::new("AXValue");
+        let mut settable: u8 = 0;
+        AXUIElementIsAttributeSettable(*el, n.as_concrete_TypeRef(), &mut settable) == 0 && settable == 1
+    }
+}
 
 fn ax_copy(el: AXUIElementRef, attr: &str) -> Option<String> {
     let name = CFString::new(attr);
@@ -112,27 +177,62 @@ pub fn bg_write_report(target: &BgTarget, text: &str) -> BgWriteReport {
     }
 }
 
-/// 焦点元素是否处于"空框显示占位符"状态（AXValue == AXPlaceholderValue 且非空）。
-/// Web 编辑器（Electron/自定义 contenteditable）在此状态下收到 AX 选区写入，
-/// 会把占位符从显示态固化成内容态（2026-11-10 OpenCode 真机事故）。
-pub fn focused_placeholder_showing() -> bool {
+/// 空框占位符判定（纯函数）：value 与 placeholder **去尾部空白后相等**即空框。
+/// 2026-11-17 axscan 实测推翻旧判据: OpenChamber 编辑器 AXValue =
+/// "占位符文本\n"(尾部带换行), 旧判据"严格相等"永不命中 → 探测形同虚设 →
+/// AX 写入照发 → 占位符固化事故。占位符属性(AXPlaceholderValue)一直都在,
+/// 是比对写严了。剩余部分只允许空白(真实内容哪怕一个字都不算空框)。
+pub fn placeholder_showing(value: &str, placeholder: &str) -> bool {
+    if placeholder.is_empty() {
+        return false;
+    }
+    let v = value.trim();
+    let p = placeholder.trim();
+    !p.is_empty() && v == p
+}
+
+/// 内容不可信判定（纯函数，2026-11-17 axscan 微信实测）：placeholder 属性缺失
+/// **且** value 含零宽字符(\u200b)——微信类编辑器把"发送给 XXX"等提示文本运行时
+/// 拼进 value 并用零宽字符排版，AX 层分不清哪段是用户输入(闪电说为其定制
+/// ReadContent 的原因)。此类框: 读到的内容不可作为任何决策依据 → 只粘贴。
+/// 有 placeholder 属性的框归 placeholder 判定管(形态①②), 不在此列。
+pub fn content_untrusted(value: &str, placeholder: &str) -> bool {
+    placeholder.is_empty() && value.contains('\u{200b}')
+}
+
+/// 焦点输入框的内容状态（探测层一次读齐：占位符显示中? 内容可信?）
+pub struct ContentState {
+    pub placeholder_showing: bool,
+    pub untrusted: bool,
+}
+
+/// 读取焦点元素的内容状态（空判据见两个纯函数的文档）
+pub fn focused_content_state() -> ContentState {
     unsafe {
         let sys = AxGuard(AXUIElementCreateSystemWide());
         if sys.0.is_null() {
-            return false;
+            return ContentState { placeholder_showing: false, untrusted: false };
         }
         let name = CFString::new(KAX_FOCUSED_ELEMENT);
         let mut out: CFTypeRef = std::ptr::null_mut();
         let r = AXUIElementCopyAttributeValue(sys.0, name.as_concrete_TypeRef(), &mut out);
         if r != 0 || out.is_null() {
-            return false;
+            return ContentState { placeholder_showing: false, untrusted: false };
         }
         let el = AxGuard(out);
-        match (ax_copy(el.0, KAX_VALUE), ax_copy(el.0, KAX_PLACEHOLDER)) {
-            (Some(v), Some(ph)) => !ph.is_empty() && v == ph,
-            _ => false,
+        let v = ax_copy(el.0, KAX_VALUE).unwrap_or_default();
+        let ph = ax_copy(el.0, KAX_PLACEHOLDER).unwrap_or_default();
+        ContentState {
+            placeholder_showing: placeholder_showing(&v, &ph),
+            untrusted: content_untrusted(&v, &ph),
         }
     }
+}
+
+/// (已由 focused_content_state 取代, 2026-11-17 探测定稿)
+/// 焦点元素是否处于"空框显示占位符"状态——见 focused_content_state。
+pub fn focused_placeholder_showing() -> bool {
+    focused_content_state().placeholder_showing
 }
 
 /// 后台追加写入(正式路径, 2026-11-03 需求: 焦点切走后仍写入按热键时快照的输入框)。
@@ -147,8 +247,12 @@ pub fn bg_append_write(el: &crate::capture::FocusElement, text: &str) -> Result<
     unsafe {
         let before = ax_copy(el.0, KAX_VALUE).ok_or("后台写: 读目标 AXValue 失败(元素已失效?)")?;
         let placeholder = ax_copy(el.0, KAX_PLACEHOLDER);
+        // 内容不可信(微信类: 提示文本拼在 value) → 读改写必然固化虚文本, 拒绝
+        if content_untrusted(&before, placeholder.as_deref().unwrap_or("")) {
+            return Err("后台写: 目标内容不可信(编辑器提示文本混入 value), 拒绝读改写".into());
+        }
         let effective_before = match &placeholder {
-            Some(ph) if !ph.is_empty() && *ph == before => "", // 读到的"内容"其实是占位符 → 空框
+            Some(ph) if placeholder_showing(&before, ph) => "", // 读到的"内容"其实是占位符(含尾部换行形态) → 空框
             _ => before.as_str(),
         };
         let merged = merge_tail(effective_before, text);
@@ -255,7 +359,7 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod bg_tests {
-    use super::merge_tail;
+    use super::{content_untrusted, merge_tail, placeholder_showing};
 
     /// 尾部拼接语义: 空框直写 / 非换行结尾补换行(多段各占一行) / 已换行直接接
     #[test]
@@ -266,12 +370,35 @@ mod bg_tests {
     }
 
     /// placeholder 陷阱(2026-11-03 真机): 空框的 AXValue 读到的是占位符文本,
-    /// 拼接前必须把"内容==placeholder"归零为空框
+    /// 拼接前必须把"内容==placeholder"归零为空框。
+    /// 2026-11-17 axscan 实测: OpenChamber 编辑器的 AXValue = 占位符+尾部换行,
+    /// 严格相等永不命中——判定改为去空白比对(见 placeholder_showing)
     #[test]
     fn placeholder_read_as_content_means_empty() {
         let placeholder = "规划、构建或提问。@ 提及，$ 技能，/ 命令";
-        let read_value = placeholder; // Web 输入框空框时 AXValue 返回的就是占位符
-        let effective = if read_value == placeholder { "" } else { read_value };
+        // 真实形态①: 值与占位符完全一致
+        assert!(placeholder_showing(placeholder, placeholder));
+        // 真实形态②(2026-11-17 实测): 尾部带换行
+        assert!(placeholder_showing(&format!("{placeholder}\n"), placeholder));
+        // 有真实内容: 不得误判(哪怕只多一个字)
+        assert!(!placeholder_showing(&format!("真实内容\n{placeholder}"), placeholder));
+        assert!(!placeholder_showing("真实内容", placeholder));
+        // 空占位符属性: 不判
+        assert!(!placeholder_showing("任意", ""));
+        // 交付语义: 判定命中 → 空框直写, 占位符不固化
+        let read_value = format!("{placeholder}\n");
+        let effective = if placeholder_showing(&read_value, placeholder) { "" } else { read_value.as_str() };
         assert_eq!(merge_tail(effective, "语音文本"), "语音文本", "占位符不得固化进正文");
+    }
+
+    /// 微信类内容不可信(2026-11-17 axscan 实测): ph 属性缺失 +
+    /// value 含零宽字符("发送给 XXX\n\u200b\n\u200b")——提示文本拼在 value 里
+    #[test]
+    fn wechat_like_content_is_untrusted() {
+        assert!(content_untrusted("发送给 PLM实验室算法组\n\u{200b}\n\u{200b}", ""));
+        // 有 ph 属性的框(哪怕 value 有零宽): 归 placeholder 判定管, 不算不可信
+        assert!(!content_untrusted("任意内容", "占位符"));
+        // 干净内容: 可信
+        assert!(!content_untrusted("用户真实输入", ""));
     }
 }

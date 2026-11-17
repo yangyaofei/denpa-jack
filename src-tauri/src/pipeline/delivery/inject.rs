@@ -22,13 +22,17 @@
 
 use crate::capture::FocusLock;
 
-/// 目标输入框的探测结果（探测层的输出，策略层的输入）
+/// 目标输入框的探测结果（探测层的输出，策略层的输入）。
+/// 判据全部来自 2026-11-17 axscan 83 份实测（四类形态见 choose 注释）。
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TargetState {
     /// 前台应用 bundle id（名单判定用；None=解析失败）
     pub bundle: Option<String>,
-    /// 空框且 AXValue 读到的是占位符文本（与 AXPlaceholderValue 相等）
+    /// 空框且 AXValue 读到的是占位符文本（与 AXPlaceholderValue 去空白相等）
     pub placeholder_showing: bool,
+    /// 内容不可信（placeholder 属性缺失且 value 含零宽字符——微信类编辑器
+    /// 把提示文本拼进 value, 读到的内容不能作为任何决策依据）
+    pub untrusted: bool,
     /// 焦点仍是快照时的目标（false=焦点已变，走后台语义）
     pub focus_ok: bool,
 }
@@ -44,7 +48,11 @@ pub enum Strategy {
 }
 
 /// 纯函数：目标状态 → 写入策略。
-/// 只读粘贴优先名单（bundle id 每行一个；命中=该 App 的 AX 写入会重复输入）。
+/// 四类形态判据(2026-11-17 axscan 83 份实测定稿)：
+/// ① ph 在 + value 去空白==ph → 空框显示占位符(OpenChamber/标准框) → 只粘贴
+/// ② ph 在 + value 干净 → 正常框 → AX→粘贴
+/// ③ ph 无 + value 含零宽字符 → 微信类(提示文本拼在 value) → 只粘贴
+/// 名单/clipboard_only/焦点失效同走只粘贴。
 pub fn choose(state: &TargetState, clipboard_only: bool, paste_only_apps: &[String]) -> Strategy {
     // clipboard_only 是全局开关（不探测，直接粘贴语义=只写剪贴板由调用方执行）
     if clipboard_only {
@@ -56,8 +64,13 @@ pub fn choose(state: &TargetState, clipboard_only: bool, paste_only_apps: &[Stri
             return Strategy::Paste;
         }
     }
-    // placeholder 显示中的空框：AX 选区写入会触发 Web 编辑器把占位符固化(见模块注释)
+    // ① placeholder 显示中的空框：AX 选区写入会触发 Web 编辑器把占位符固化(见模块注释)
     if state.placeholder_showing {
+        return Strategy::Paste;
+    }
+    // ③ 内容不可信(微信类)：读到的 value 混有编辑器自拼的提示文本，
+    //    任何"读改写"都会固化虚文本 → 只粘贴
+    if state.untrusted {
         return Strategy::Paste;
     }
     // 焦点校验失败的框不允许 AX 直写（写错目标），由调用方转后台/粘贴
@@ -67,13 +80,14 @@ pub fn choose(state: &TargetState, clipboard_only: bool, paste_only_apps: &[Stri
     Strategy::TryAxThenPaste
 }
 
-/// 探测当前前台焦点输入框的状态（读一次焦点元素属性，40µs 级）。
-/// 任何一步读不到都保守归位（None→不命中名单; placeholder 不相等→非空框）。
+/// 探测当前前台焦点输入框的状态（一次读齐：占位符判定+内容可信度+焦点有效性）。
+/// 任何一步读不到都保守归位（不命中名单; 判定 false=按正常框走，回退链兜底）。
 pub fn probe(focus: &FocusLock) -> TargetState {
-    let placeholder_showing = crate::pipeline::delivery::ax::focused_placeholder_showing();
+    let cs = crate::pipeline::delivery::ax::focused_content_state();
     TargetState {
         bundle: focus.bundle.clone(),
-        placeholder_showing,
+        placeholder_showing: cs.placeholder_showing,
+        untrusted: cs.untrusted,
         focus_ok: focus.still_valid(),
     }
 }
@@ -118,7 +132,16 @@ mod tests {
     use super::*;
 
     fn state(bundle: Option<&str>, ph: bool, focus_ok: bool) -> TargetState {
-        TargetState { bundle: bundle.map(String::from), placeholder_showing: ph, focus_ok }
+        TargetState { bundle: bundle.map(String::from), placeholder_showing: ph, untrusted: false, focus_ok }
+    }
+
+    #[test]
+    fn untrusted_content_never_ax() {
+        // 微信类(2026-11-17 axscan 实测): ph 属性缺失 + value 含零宽字符
+        // → 读到的内容混有编辑器自拼的提示文本, 读改写会固化虚文本 → 只粘贴
+        let mut s = state(Some("com.tencent.xinWeChat"), false, true);
+        s.untrusted = true;
+        assert_eq!(choose(&s, false, &[]), Strategy::Paste);
     }
 
     #[test]
