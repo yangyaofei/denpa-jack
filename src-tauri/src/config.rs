@@ -223,7 +223,7 @@ pub struct Config {
     /// - active_window：截"主窗口"（键盘焦点窗口；没有则指针下的窗口）；都没有则回退截屏
     /// - active_display：截"光标所在显示器"；截图时排除本应用自己的窗口（浮窗不入镜）
     /// 需要屏幕录制权限；截图存 `<数据目录>/screen_context/`。
-    /// 旧键 `screenshot_target` / `screenshot_context` 已废弃（不迁移，见 docs/SPEC.md §3.5.1）。
+    /// 旧键 `screenshot_target` / `screenshot_context` 已废弃（不迁移，统一由本字段表达）。
     #[serde(default = "d_detect_active_target")]
     pub detect_active_target: String,
     /// LLM 请求超时（秒）。越大越能容忍慢思考模型，但出错时用户等待也更久。

@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppThis, DictEntry } from "./types";
 
-export function dictPage(this: AppThis) {
+export function dictPage() {
   return {
     dictEdit: null as any,
     dictIsNew: false,
@@ -10,9 +10,8 @@ export function dictPage(this: AppThis) {
     dictSearch: "",
     quickTerm: "",
 
-    /// 星级展示(词典权重 boost 1-3): ★=已点亮, ☆=未点亮
-    weightStars(this: AppThis, b: number): string {
-      return "★★★".slice(0, Math.max(0, b)) + "☆☆☆".slice(0, Math.max(0, 3 - b));
+    boostCount(this: AppThis, b: number): number {
+      return Math.max(0, Math.min(3, Math.round(b || 0)));
     },
 
     filteredDict(this: AppThis): DictEntry[] {

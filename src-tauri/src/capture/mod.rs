@@ -1,4 +1,4 @@
-//! capture 域：从世界拿信号并决策（docs/ARCHITECTURE.md 四域之一）。
+//! capture 域：从世界拿信号并决策（四域之一，见 `lib.rs` 架构总览）。
 //!
 //! 门面（外部只许经 capture:: 调这些）：
 //!   - key::send_ctrl(sig) — 热键/托盘/试音的唯一信号入口

@@ -1,3 +1,20 @@
+//! Denpa Jack 后端核心（macOS 菜单栏语音输入）。
+//!
+//! # 架构：四域 + 基座 + 装配壳
+//! - **基座**（无域归属，人人可读）：`core`（全局单锁状态中枢 + 版本计数 + 段队列与事件/通知槽）、
+//!   `config`（档案制配置 + `paths`/`migrate`）、`util`（跨域纯函数）、`log`、`crash_log`
+//! - **四域**（每域经 `mod.rs` 门面导出意图动词，跨域调用由 `build.rs` 门面闸强制白名单）：
+//!   - `capture`（采集与感知）：`key`（handy-keys 热键与 Esc）、`recording`、`audio`/`feedback`/`mic_watch`、`screen`/`active_target`、`focus`、`permissions`
+//!   - `pipeline`（流程编排）：`segment_queue`（FIFO 串行队列）、`mod`（结算总装 `post_process`）、`delivery`（AX 直写 / Cmd+V 粘贴）、`history`、`rerun`
+//!   - `model`（模型能力）：`speech`（`doubao`/`zhipu`/`local` + `gateway` + `driver`）、`dict`（拼音模糊/变体/护栏）、`llm`（工具调用结构化润色）
+//!   - `ui`（展示）：`hud`（浮窗状态机与事件泵）、`overlay`（NS 坐标系窗口机制）、`tray`/`tray_events`、`update`
+//! - **装配壳**：`lib`（入口与 `send_ctrl`/`send_cancel`/`send_autostop` 分派）、`commands`、`autotest`、`transcription_coordinator`
+//!
+//! # 调用律与硬契约（详见 `build.rs` 编译期强制闸）
+//! - `capture → pipeline → core` 顺流程单向；`pipeline ⇄ model` 经门面交互；`ui` 只读 `core` 投影，反向通知一律写 `core` 计数由消费方轮询。
+//! - 音频链固定 16kHz mono i16le（显式小端）；交接数据经 `SessionHandoff` 流动，禁止新增会话级 `static`；
+//!   AppKit UI 与系统服务 API（见 `build.rs` 主线程闸）仅允许在主线程调用。
+
 // 基座: 状态中枢与横切关注点
 pub mod core;
 pub mod log;
@@ -5,7 +22,7 @@ pub mod util;
 pub mod crash_log;
 pub mod config;
 
-// 四域(docs/ARCHITECTURE.md): ui 展示 · capture 感知决策 · pipeline 流程 · model 模型
+// 四域: ui 展示 · capture 感知决策 · pipeline 流程 · model 模型
 pub mod ui;
 pub mod capture;
 pub mod pipeline;
@@ -18,7 +35,6 @@ mod transcription_coordinator;
 
 
 use tauri::Manager;
-// global-shortcut 插件仅剩 Esc 动态注册使用(见 shortcut.rs), 触发已全走 handy-keys 引擎
 
 pub struct AppState {
     pub session: Option<crate::capture::recording::RecordingSession>,
@@ -57,8 +73,8 @@ pub fn send_autostop() {
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     // 自测模式跳过单实例插件：单实例的判重基于应用名（不是 bundle id），
-    // 会让"独立 bundle id 的测试副本"在正式实例运行时被转发参数后立刻退出，导致自测无法进行。
-    // （见 docs/SPEC.md 自测通道一节：VOICEMAC_AUTOTEST=update 用副本验证更新链路）
+    // 会让"独立 bundle id 的测试副本"在正式实例运行时被转发参数后立刻退出，导致自测无法进行
+    //（如 VOICEMAC_AUTOTEST=update 用副本验证更新链路）。
     let builder = {
         let autotest = std::env::var("VOICEMAC_AUTOTEST").is_ok();
         if autotest {
@@ -75,10 +91,9 @@ pub fn run() {
     };
     builder
         .plugin(tauri_plugin_clipboard_manager::init())
-        // 内置更新：自己下载并替换自身，绕开浏览器下载带来的 quarantine（见 docs/SPEC.md「应用内更新」）
+        // 内置更新：自己下载并替换自身（无 quarantine 标记，升级后保留 TCC 权限）
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,

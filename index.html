@@ -4,35 +4,231 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Denpa Jack</title>
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("denpa_theme");
+          var sysDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.dataset.theme = saved === "dark" || saved === "light" ? saved : (sysDark ? "dark" : "light");
+        } catch (e) {}
+      })();
+    </script>
   </head>
-  <body class="settings-win" x-data="app()" x-init="init()">
-    <div class="sidebar">
-      <div class="search-box">
-        <input type="text" placeholder="搜索…" x-model="search" />
+  <body class="settings-win" :class="sideCollapsed ? 'is-side-col' : ''" x-data="app()" x-init="init()">
+    <!-- 统一矢量图标库（全界面同线宽 SVG，禁用 Emoji） -->
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+      <!-- Denpa Jack 真字形（提取自 docs/icon/icon.svg：波形 → 箭头 → 开口文档，随 currentColor 适配暗/亮主题） -->
+      <symbol id="dj-brand" viewBox="115 152 720 720" fill="none">
+        <g transform="translate(648.5 512) scale(0.75 1) translate(-648.5 -512)">
+          <path d="M453.5 386.5V386a69.5 69.5 0 0 1 69.5-69.5h251a69.5 69.5 0 0 1 69.5 69.5v252.5a69.5 69.5 0 0 1-69.5 69.5H523a69.5 69.5 0 0 1-69.5-69.5v-1" stroke="currentColor" stroke-width="40" stroke-linecap="round"/>
+          <path d="M542.5 433h211M542.5 512h211M542.5 591h153" stroke="currentColor" stroke-width="40" stroke-linecap="round"/>
+        </g>
+        <path d="M154.4 516.0L178.1 516.8L193.9 511.9L201.6 503.0L212.9 475.4L218.7 470.8L224.6 470.5L229.9 476.6L233.4 487.0L243.7 555.1L248.8 562.5L253.8 563.1L261.2 540.9L280.4 418.0L288.8 395.3L293.2 390.2L297.8 388.6L304.4 390.8L310.9 397.3L315.7 415.4L317.4 467.0L315.3 582.5L317.7 636.2L321.7 636.3L324.4 625.0L343.5 499.8L348.2 484.2L351.5 480.4L354.7 481.2L374.0 510.5L385.0 513.0" stroke="currentColor" stroke-width="29" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M381 513h71" stroke="currentColor" stroke-width="36" stroke-linecap="round"/>
+        <path d="M405.4 450.7L461.1 513.0L404.9 574.9" stroke="currentColor" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="ic-sidebar" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+        <rect x="1.8" y="2.2" width="12.4" height="11.6" rx="2"/><path d="M5.6 2.2v11.6"/>
+      </symbol>
+      <symbol id="ic-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>
+      </symbol>
+      <symbol id="ic-dict" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/>
+      </symbol>
+      <symbol id="ic-asr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 12h2.5l2-5.5 3 11 3-13 3 12 2-4.5H22"/>
+      </symbol>
+      <symbol id="ic-llm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11 3c.35 3.6 1.4 4.65 5 5-3.6.35-4.65 1.4-5 5-.35-3.6-1.4-4.65-5-5 3.6-.35 4.65-1.4 5-5z"/>
+        <path d="M18.5 14.5c.2 1.9.8 2.5 2.7 2.7-1.9.2-2.5.8-2.7 2.7-.2-1.9-.8-2.5-2.7-2.7 1.9-.2 2.5-.8 2.7-2.7z"/>
+      </symbol>
+      <symbol id="ic-general" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>
+      </symbol>
+      <symbol id="ic-about" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>
+      </symbol>
+      <symbol id="ic-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/>
+      </symbol>
+      <symbol id="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+      </symbol>
+      <symbol id="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+      </symbol>
+      <symbol id="ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+      </symbol>
+      <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 6L9 17l-5-5"/>
+      </symbol>
+      <symbol id="ic-rerun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12a9 9 0 0 0-15.5-6.4L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15.5 6.4L21 16"/><path d="M21 21v-5h-5"/>
+      </symbol>
+      <symbol id="ic-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="7 4 20 12 7 20 7 4"/>
+      </symbol>
+      <symbol id="ic-stop" viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="6" width="12" height="12" rx="2.5"/>
+      </symbol>
+      <symbol id="ic-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 9l6 6 6-6"/>
+      </symbol>
+      <symbol id="ic-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>
+      </symbol>
+      <symbol id="ic-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      </symbol>
+      <symbol id="ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M12 5v14M5 12h14"/>
+      </symbol>
+      <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+      </symbol>
+      <symbol id="ic-star" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M10 2.2l2.35 4.76 5.25.76-3.8 3.7.9 5.23L10 14.18l-4.7 2.47.9-5.23-3.8-3.7 5.25-.76L10 2.2z"/>
+      </symbol>
+      <symbol id="ic-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 15l-6-6-6 6"/>
+      </symbol>
+      <symbol id="ic-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 9l6 6 6-6"/>
+      </symbol>
+      <symbol id="ic-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M18 6L6 18M6 6l12 12"/>
+      </symbol>
+    </svg>
+
+    <!-- ══ 一体化 Overlay 顶栏（左侧齐平 228px 侧栏 + 右侧全局链路胶囊与试音） ══ -->
+    <header class="win-topbar" data-tauri-drag-region="deep">
+      <div class="top-left">
+        <div class="brand-chip" x-show="!sideCollapsed">
+          <span class="brand-mark"><svg><use href="#dj-brand"/></svg></span>
+          <span class="brand-name">Denpa Jack</span>
+        </div>
+        <button class="icon-btn" @click="toggleSidebar()" :title="sideCollapsed ? '展开导航栏' : '收起导航栏'">
+          <svg class="ic-sm"><use href="#ic-sidebar"/></svg>
+        </button>
       </div>
-      <nav>
-        <template x-for="s in filteredSections()" :key="s.id">
-          <button class="nav-item" :class="{active: section === s.id}"
-               x-text="s.title" @click="switchSection(s.id)"></button>
-        </template>
-      </nav>
-      <div class="side-status" x-text="statusLine()"></div>
-    </div>
-<div class="content-in">
-      <div class="perm-banner" x-show="missingPerms().length" @click="section = 'general'">
-        <span class="perm-dot bad"></span>
-        <span x-text="'缺少权限：' + missingPerms().map(p => p.label).join('、') + ' —— 缺权限时应用无法正常工作，点此查看'"></span>
+
+      <div class="top-right">
+        <button class="perm-pill" x-show="missingPerms().length" x-cloak @click="switchSection('general')" title="缺少必需权限，点击查看指引">
+          <svg class="ic-sm"><use href="#ic-alert"/></svg>
+          <span x-text="'缺少权限：' + missingPerms().map(p => p.label).join('、')"></span>
+        </button>
+
+        <div class="top-drag-spacer"></div>
+
+        <!-- 全局快捷链路胶囊：全页可用，无需来回切页即可切换引擎/润色/麦克风与试音 -->
+        <div class="pipe-strip" data-tauri-drag-region="false">
+          <label class="pipe-pill select-pill" title="切换语音识别引擎">
+            <svg class="ic-sm" style="color:var(--accent-text)"><use href="#ic-asr"/></svg>
+            <select @change="switchAsr($event)">
+              <option value="builtin" :selected="cfg?.active_asr_id === 'builtin'">内置本地</option>
+              <template x-for="p in (cfg?.asr_profiles || [])" :key="p.id">
+                <option :value="p.id" :selected="p.id === cfg?.active_asr_id" x-text="p.name"></option>
+              </template>
+            </select>
+            <svg class="ic-xs chev"><use href="#ic-chev-down"/></svg>
+          </label>
+
+          <button class="pipe-pill" :class="cfg?.active_llm_id ? 'is-indigo' : ''" @click="togglePolish()" title="开关大模型润色">
+            <svg class="ic-sm"><use href="#ic-llm"/></svg>
+            <span x-text="cfg?.active_llm_id ? ('润色：' + activeLlmLabel()) : '润色：关'"></span>
+          </button>
+
+          <label class="pipe-pill select-pill mic-pill" title="切换输入麦克风">
+            <svg class="ic-sm"><use href="#ic-mic"/></svg>
+            <select @change="switchMic($event)">
+              <option value="" :selected="!cfg?.mic_device_uid">自动 (默认)</option>
+              <template x-for="m in mics" :key="m.uid">
+                <option :value="m.uid" :selected="m.uid === cfg?.mic_device_uid" x-text="m.name"></option>
+              </template>
+            </select>
+            <svg class="ic-xs chev"><use href="#ic-chev-down"/></svg>
+          </label>
+        </div>
+
+        <button class="rec-btn" :class="{on: recording}" @click="toggleRecording()">
+          <svg class="ic-sm"><use :href="recording ? '#ic-stop' : '#ic-mic'"/></svg>
+          <span x-text="recording ? '停止' : '试音'"></span>
+        </button>
+
+        <button class="icon-btn bordered" @click="toggleTheme()" :title="theme === 'dark' ? '切换为浅色外观' : '切换为深色外观'">
+          <svg class="ic-sm" x-show="theme === 'dark'"><use href="#ic-sun"/></svg>
+          <svg class="ic-sm" x-show="theme === 'light'"><use href="#ic-moon"/></svg>
+        </button>
       </div>
-      <!-- 容器层 x-show: 显隐必须在容器而非仅内层 section——history 容器带 flex:1 高度链
-           (234 行), 仅隐藏 section 时容器壳仍拉伸占满剩余空间, 把短内容页(llm/about)推下去
-           约 300px 空白(2026-11-02 真机 LLM-PROBE 铁证 llmTop=312)。容器隐藏则 flex 失效。 -->
-      <div data-page="asr" x-show="section === 'asr'"></div>
-      <div data-page="history" x-show="section === 'history'"></div>
-      <div data-page="general" x-show="section === 'general'"></div>
-      <div data-page="dict" x-show="section === 'dict'"></div>
-      <div data-page="llm" x-show="section === 'llm'"></div>
-      <div data-page="about" x-show="section === 'about'"></div>
+    </header>
+
+    <!-- ══ 主工作区 ══ -->
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="side-group">
+          <div class="side-sec" x-show="!sideCollapsed">工作台</div>
+          <nav class="side-nav">
+            <template x-for="s in filteredSections('work')" :key="s.id">
+              <button class="nav-item" :class="{active: section === s.id}" @click="switchSection(s.id)" :title="s.title">
+                <svg class="ic"><use :href="s.icon"/></svg>
+                <span class="nav-label" x-show="!sideCollapsed" x-text="s.title"></span>
+                <span class="nav-count" x-show="!sideCollapsed && s.id === 'history' && history.length" x-text="history.length"></span>
+                <span class="nav-count" x-show="!sideCollapsed && s.id === 'dict' && cfg?.dict?.length" x-text="cfg.dict.length"></span>
+              </button>
+            </template>
+          </nav>
+        </div>
+
+        <div class="side-group">
+          <div class="side-sec" x-show="!sideCollapsed">管线与系统</div>
+          <nav class="side-nav">
+            <template x-for="s in filteredSections('pipe')" :key="s.id">
+              <button class="nav-item" :class="{active: section === s.id}" @click="switchSection(s.id)" :title="s.title">
+                <svg class="ic"><use :href="s.icon"/></svg>
+                <span class="nav-label" x-show="!sideCollapsed" x-text="s.title"></span>
+                <span class="nav-dot ok" x-show="s.id === 'asr' && localSvc.state === 'running'" title="内置网关运行中"></span>
+                <span class="nav-dot warn" x-show="s.id === 'asr' && localSvc.state === 'starting'" title="内置网关启动中"></span>
+                <span class="nav-dot bad" x-show="s.id === 'asr' && (localSvc.state === 'failed' || localSvc.state === 'crashed')" title="内置网关异常"></span>
+                <span class="nav-dot bad" x-show="s.id === 'general' && missingPerms().length" title="缺少必需权限"></span>
+                <span class="nav-dot warn" x-show="s.id === 'about' && updateInfo" title="发现新版本"></span>
+              </button>
+            </template>
+          </nav>
+        </div>
+
+        <div class="side-spacer"></div>
+
+        <div class="side-status">
+          <span class="side-ver mono" x-show="!sideCollapsed" x-text="version ? 'v' + version : 'v—'"></span>
+          <div class="side-hotkey" :title="'当前热键：' + (hotkeyLabel() || 'Fn')">
+            <span x-show="!sideCollapsed" class="side-hk-prefix">按住</span>
+            <template x-for="tk in hotkeyTokens()" :key="tk">
+              <kbd class="dj-kbd" x-text="tk"></kbd>
+            </template>
+          </div>
+        </div>
+      </aside>
+
+      <div class="content-in">
+        <!-- 全局异常报错条（仅 error 非空时出现，可关闭） -->
+        <div class="err-banner" x-show="error" x-cloak>
+          <svg class="ic-sm"><use href="#ic-alert"/></svg>
+          <span class="err-msg" x-text="error"></span>
+          <button class="icon-btn" @click="error = ''" title="关闭"><svg class="ic-sm"><use href="#ic-close"/></svg></button>
+        </div>
+
+        <!-- 容器层 x-show: 显隐必须在容器而非仅内层 section——history 容器带 flex:1 高度链 -->
+        <div data-page="asr" x-show="section === 'asr'" x-cloak></div>
+        <div data-page="history" x-show="section === 'history'" x-cloak></div>
+        <div data-page="general" x-show="section === 'general'" x-cloak></div>
+        <div data-page="dict" x-show="section === 'dict'" x-cloak></div>
+        <div data-page="llm" x-show="section === 'llm'" x-cloak></div>
+        <div data-page="about" x-show="section === 'about'" x-cloak></div>
+      </div>
     </div>
-  <script type="module" src="/src/main.ts"></script>
-</body>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>

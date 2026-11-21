@@ -1,84 +1,160 @@
-      <section x-show="section === 'history'" class="page page-wide">
-        <div class="topbar">
-          <select class="picker" @change="switchAsr($event)" title="切换引擎">
-            <template x-for="p in (cfg?.asr_profiles || [])" :key="p.id">
-              <option :value="p.id" :selected="p.id === cfg?.active_asr_id" x-text="'🎙 ' + p.name"></option>
-            </template>
-          </select>
-          <button class="picker" :class="{on: cfg?.active_llm_id}" @click="togglePolish()"
-               x-text="cfg?.active_llm_id ? '✦ 润色开' : '✧ 润色关'"></button>
-          <select class="picker" @change="switchMic($event)" title="切换麦克风">
-            <option value="" :selected="!cfg?.mic_device_uid">🎤 自动</option>
-            <template x-for="m in mics" :key="m.uid">
-              <option :value="m.uid" :selected="m.uid === cfg?.mic_device_uid" x-text="'🎤 ' + m.name"></option>
-            </template>
-          </select>
-          <span style="flex:1"></span>
-          <button class="rec-btn small" @click="toggleRecording()" x-text="recording ? '■ 停止' : '试音'"></button>
+<section x-show="section === 'history'" class="page page-wide">
+  <div class="queue-bar" x-show="queueView.length || recording" x-cloak>
+    <template x-for="(s, i) in queueView" :key="i">
+      <div class="qb-row" :class="s.state">
+        <span class="qb-dot" :class="s.state"></span>
+        <span class="qb-t" x-text="(s.source === 'rerun' ? '重转中 · ' : '') + (s.text ? String(s.text).slice(0, 48) : (s.state === 'failed' ? '识别失败（可重试）' : s.state === 'queued' ? '排队等待结算…' : '正在处理…'))"></span>
+      </div>
+    </template>
+    <div class="qb-row recording" x-show="recording">
+      <span class="qb-dot recording"></span>
+      <span class="qb-t">正在录音试音（16 kHz 单声道）… 点击顶栏「停止」立即结算</span>
+    </div>
+  </div>
+
+  <div class="split">
+    <!-- 左栏：搜索 + 过滤 + 列表 -->
+    <div class="pane-left">
+      <div class="hist-tools">
+        <div class="search-inp-wrap">
+          <svg class="ic-sm"><use href="#ic-search"/></svg>
+          <input class="inp plain" type="text" placeholder="搜索转写原文或终稿…" x-model="histSearch" />
+          <button class="icon-btn" x-show="histSearch" @click="histSearch = ''" title="清除"><svg class="ic-xs"><use href="#ic-close"/></svg></button>
         </div>
-        <div class="queue-bar" x-show="queueView.length || recording" x-cloak>
-          <template x-for="(s, i) in queueView" :key="i">
-            <div class="qb-row" :class="s.state">
-              <span class="qb-ic" x-text="s.state === 'failed' ? '✕' : s.state === 'transcribing' ? (s.source === 'rerun' ? '↻' : '⟳') : '•'"></span>
-              <span class="qb-t" x-text="(s.source === 'rerun' ? '重转中 ' : '') + (s.text ? String(s.text).slice(0, 40) : (s.state === 'failed' ? '识别失败(可重试)' : s.state === 'queued' ? '排队中…' : ''))"></span>
+        <div class="seg-mini">
+          <button :class="histFilter === 'all' ? 'on' : ''" @click="histFilter = 'all'">全部</button>
+          <button :class="histFilter === 'llm' ? 'on' : ''" @click="histFilter = 'llm'">润色</button>
+          <button :class="histFilter === 'warn' ? 'on' : ''" @click="histFilter = 'warn'">问题</button>
+        </div>
+      </div>
+
+      <div class="hist-list">
+        <template x-for="h in filteredHist()" :key="h.ts">
+          <div class="hist-item" :class="{sel: selHist?.ts === h.ts}" @click="selectHist(h)">
+            <div class="hi-meta">
+              <span class="mono" x-text="h.ts"></span>
+              <span x-text="h.engine"></span>
             </div>
-          </template>
-          <div class="qb-row recording" x-show="recording">
-            <span class="qb-ic">●</span><span class="qb-t">正在录音…</span>
+            <div class="hi-text" x-text="h.final_text || h.raw || '（空转写）'"></div>
+            <div class="hi-tags" x-show="rerunning.has(h.ts) || h.llm_used || h.warning || !(h.delivered||'').includes('paste')">
+              <span class="tag info" x-show="rerunning.has(h.ts)">重算中</span>
+              <span class="tag indigo" x-show="h.llm_used">LLM 润色</span>
+              <span class="tag err" x-show="h.warning" x-text="(h.warning || '').slice(0, 28)"></span>
+              <span class="tag" x-show="!(h.delivered||'').includes('paste') && !h.warning" x-text="deliveryLabel(h.delivered)"></span>
+            </div>
+          </div>
+        </template>
+        <div class="hist-empty-list" x-show="!filteredHist().length">无匹配记录（按住热键说话即自动收录）</div>
+      </div>
+    </div>
+
+    <!-- 右栏：详情 / 空态引导 -->
+    <div class="pane-right" x-ref="paneRight">
+      <template x-if="selHist">
+        <div class="detail">
+          <div class="detail-head">
+            <div class="d-meta">
+              <span class="mono" x-text="selHist.ts"></span>
+              <span>·</span>
+              <span x-text="selHist.engine"></span>
+              <span>·</span>
+              <span class="tag" :class="(selHist.delivered||'').includes('paste') ? 'green' : ''" x-text="deliveryLabel(selHist.delivered)"></span>
+              <span class="tag indigo" x-show="selHist.llm_used">LLM 润色</span>
+            </div>
+            <div class="btns">
+              <button class="mini primary" @click="copyHist(selHist)">
+                <svg class="ic-xs"><use :href="copiedKey === ('hist-' + selHist.ts) ? '#ic-check' : '#ic-copy'"/></svg>
+                <span x-text="copiedKey === ('hist-' + selHist.ts) ? '已复制' : '复制'"></span>
+              </button>
+              <button class="mini" :disabled="rerunning.has(selHist.ts)" @click="rerunHist(selHist)">
+                <svg class="ic-xs"><use href="#ic-rerun"/></svg>
+                <span x-text="rerunning.has(selHist.ts) ? '重算中…' : '重转'"></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="d-card-main">
+            <div class="d-label">最终结果</div>
+            <div class="d-text strong" x-text="selHist.final_text || selHist.raw || '（无内容）'"></div>
+          </div>
+
+          <div class="d-diff-box" x-show="selHist.raw && selHist.raw !== selHist.final_text">
+            <div class="d-diff-head">
+              <span class="d-label" style="margin:0">原始转写（已由词典 / LLM 修正）</span>
+              <button class="link-mini" @click="addTermFromHist(selHist)">把本条加为词条</button>
+            </div>
+            <div class="d-text dim2" x-text="selHist.raw"></div>
+          </div>
+
+          <div class="d-card-sub err-box" x-show="selHist.warning">
+            <div class="d-label" style="color:var(--err-text)">处理警告</div>
+            <div class="d-text" style="color:var(--err-text)" x-text="selHist.warning"></div>
+          </div>
+
+          <div class="d-audio-bar" x-show="selHist.audio_path">
+            <div class="d-audio-info">
+              <button class="play-circle" @click="playHist(selHist)" title="播放录音">
+                <svg class="ic-sm"><use href="#ic-play"/></svg>
+              </button>
+              <div>
+                <div class="row-title">原始录音留存</div>
+                <div class="row-hint mono truncate" x-text="selHist.audio_path"></div>
+              </div>
+            </div>
+            <div class="btns">
+              <button class="mini" @click="openAudio(selHist)">
+                <svg class="ic-xs"><use href="#ic-folder"/></svg>
+                <span>在访达中显示</span>
+              </button>
+              <button class="mini" @click="addTermFromHist(selHist)">加为词条</button>
+            </div>
+          </div>
+
+          <div class="btns" x-show="!selHist.audio_path">
+            <button class="mini" @click="addTermFromHist(selHist)">把本条加为词条</button>
+          </div>
+
+          <details class="think" x-show="selHist.llm_thinking">
+            <summary>展开 LLM 思考过程</summary>
+            <pre class="d-text dim2" x-text="selHist.llm_thinking"></pre>
+          </details>
+        </div>
+      </template>
+
+      <div class="empty-wrap" x-show="!selHist">
+        <div class="stat-cards">
+          <div class="stat-card">
+            <div class="stat-num mono" x-text="histStats().total"></div>
+            <div class="stat-label">历史总条数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num mono" x-text="histStats().llmCount"></div>
+            <div class="stat-label">LLM 润色</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num mono" x-text="histStats().pastedCount"></div>
+            <div class="stat-label">直写 / 粘贴</div>
           </div>
         </div>
-        <div class="split">
-          <div class="pane-left">
-            <input class="inp" type="text" placeholder="搜索转写内容…" x-model="histSearch" />
-            <div class="hist-list">
-              <template x-for="h in filteredHist()" :key="h.ts">
-                <div class="hist-item" :class="{sel: selHist?.ts === h.ts}" @click="selectHist(h)">
-                  <div class="hi-meta"><span x-text="h.ts"></span><span x-text="h.engine"></span></div>
-                  <div class="hi-text" x-text="h.final_text || h.raw"></div>
-                  <div class="hi-tags">
-                    <span class="chip" x-show="rerunning.has(h.ts)" style="color:#59c1ff">↻ 重算中</span>
-                    <span class="chip" x-show="h.llm_used">✦LLM</span>
-                    <span class="chip" x-show="h.warning" style="color:#ff6961" x-text="'⚠ ' + (h.warning||'').slice(0,24)"></span>
-                    <span class="chip" x-text="h.delivered"></span>
-                  </div>
-                </div>
+        <div class="guide-card">
+          <div class="guide-row">
+            <span class="guide-keys">
+              <template x-for="tk in hotkeyTokens()" :key="tk">
+                <kbd class="dj-kbd" x-text="tk"></kbd>
               </template>
-              <div class="dim" x-show="!filteredHist().length" style="padding:20px">无记录（按住热键说话即产生）</div>
-            </div>
+            </span>
+            <span>按住说话，松开自动转写并写入当前光标</span>
           </div>
-  <div class="pane-right" x-ref="paneRight">
-            <template x-if="selHist">
-              <div class="detail">
-                <div class="d-row"><label>最终结果</label><div class="d-text strong" x-text="selHist.final_text || selHist.raw"></div>
-                  <div class="btns"><button class="mini" @click="copyHist(selHist)">复制</button><button class="mini" :disabled="rerunning.has(selHist.ts)" @click="rerunHist(selHist)" x-text="rerunning.has(selHist.ts) ? '重算中…' : '重转'"></button></div></div>
-                <div class="d-row" x-show="selHist.raw && selHist.raw !== selHist.final_text"><label>原始转写</label><div class="d-text dim2" x-text="selHist.raw"></div></div>
-                <div class="d-row" x-show="selHist.llm_thinking"><label>LLM 思考</label>
-                  <details class="think"><summary>展开思考链</summary><pre class="d-text dim2" x-text="selHist.llm_thinking"></pre></details>
-                </div>
-                <div class="d-row" x-show="selHist.warning"><label>问题</label><div class="d-text" style="color:#ff6961" x-text="selHist.warning"></div></div>
-                <div class="d-meta">
-                  <span x-text="selHist.ts"></span> · <span x-text="selHist.engine"></span> ·
-                  <span x-text="selHist.delivered"></span> · LLM <span x-text="selHist.llm_used ? '✓' : '—'"></span>
-                </div>
-                <div class="btns">
-                  <button class="mini" x-show="selHist.audio_path" @click="playHist(selHist)">▶ 播放</button>
-                  <button class="mini" x-show="selHist.audio_path" @click="openAudio(selHist)">显示录音</button>
-                  <button class="mini" @click="addTermFromHist(selHist)">把本条加为词条</button>
-                </div>
-              </div>
-            </template>
-            <div class="empty-wrap" x-show="!selHist">
-              <div class="stat-cards">
-                <div class="stat-card"><div class="stat-num" x-text="history.length"></div><div class="stat-label">总条数</div></div>
-                <div class="stat-card"><div class="stat-num" x-text="history.filter(h => h.llm_used).length"></div><div class="stat-label">LLM 润色</div></div>
-                <div class="stat-card"><div class="stat-num" x-text="history.filter(h => (h.delivered||'').includes('paste')).length"></div><div class="stat-label">成功粘贴</div></div>
-              </div>
-              <div class="guide-card">
-                <div>按住 <kbd x-text="hotkeyLabel() || 'F5'"></kbd> 说话，松开即转写并粘贴</div>
-                <div>录音中按 <kbd>Esc</kbd> 取消本次</div>
-                <div>左侧选中记录可复制 / 重转 / 播放 / 加为词条</div>
-              </div>
-            </div>
+          <div class="guide-row">
+            <span class="guide-keys"><kbd class="dj-kbd">Esc</kbd></span>
+            <span>录音期间按下立即丢弃本次音频</span>
+          </div>
+          <div class="guide-foot">
+            <span class="row-hint">想直接测试麦克风与识别链路？</span>
+            <button class="mini primary" @click="toggleRecording()" x-text="recording ? '停止试音' : '立即试音'"></button>
           </div>
         </div>
-      </section>
+      </div>
+    </div>
+  </div>
+</section>

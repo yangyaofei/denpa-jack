@@ -1,12 +1,20 @@
-"""把干净字形(icon3.svg)烘焙成 app 图标与状态栏图标。
+"""把干净字形（icon.svg）烘焙成 app 图标与状态栏图标。
 
-用法: uv run --with numpy --with pillow --no-project python3 bake_app_icon.py [light|blue]
+用法：
+  cd docs/icon
+  uv run --with numpy --with pillow --with scipy --with scikit-image python3 build5.py  # 提取字形 → icon.svg
+  uv run --with numpy --with pillow --no-project python3 bake_app_icon.py bw            # 定稿：白卡片+纯黑字形
 
-背景(实测):
-- qlmanage 不渲染 SVG feDropShadow, 且输出 PNG 带不透明白底 → 手工 knock_out_white
-- macOS 26 会给所有 app 图标加一层浅灰底板(macOS 自带), 因此卡片必须与浅灰底板有明显色差,
-  否则渲染出来只剩一圈灰边(用户指出的问题)。闪电说=橙色卡片, Handy=粉色卡片。
-- 字形留白: 设计稿字形宽/卡片=0.86, 之前只有 0.76 → 放大并居中。
+目录资产（唯一权威来源，装机目标在 src-tauri/icons/）：
+  - icon.svg：干净矢量字形母版（波形→箭头→开口文档，无卡片阴影）
+  - icon-app-1024.png / icon-app.icns：app 图标定稿（白卡片 80.4%、圆角 25%、字形宽占卡片 86%）
+  - menubar.png：菜单栏恒定 template 图标（32@2x 纯黑 alpha，tray.rs 录音态只改染色）
+  - ref2_1024.png：规范化 1024 参考基准图
+
+设计背景（实测）：
+  - qlmanage 不渲染 SVG feDropShadow，且输出 PNG 带不透明白底 → 手工 knock_out_white
+  - macOS 26 会给所有 app 图标叠一层浅灰底板；逐一验证蓝/粉/黑/白卡片后定稿为纯白卡片 + 纯黑字形
+    （验收以打包后 Finder 真实渲染为准）。
 """
 import subprocess
 import sys

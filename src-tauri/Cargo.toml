@@ -34,8 +34,6 @@ base64 = "0.23.1"
 sha2 = "0.10.9"
 pinyin = "0.11.0"
 reqwest = { version = "0.13.4", features = ["json", "multipart"] }
-enigo = "0.6.1"
-tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-clipboard-manager = "2.3.3"
 regex = "1.13.1"
 tauri-plugin-single-instance = "2.4.4"
@@ -62,7 +60,9 @@ tauri-plugin-process = "2.3.1"
 tempfile = "3"
 
 [patch.crates-io]
-# handy-keys 0.3.4 打了两个 macOS 键盘状态修复，以 fork 的固定 commit 引入（见 docs/DEPENDENCIES.md）。
-# 用 rev 而非 branch：Cargo.lock 也钉死该版本，分支后续变动不会影响构建。
-# 上游合并发布新版本后：删除本段，改回 crates.io 的修复版。
+# handy-keys 0.3.4 含两处 macOS 键盘状态修复，以 fork 固定 rev 引入（上游 PR #37）：
+#   1. FlagsChanged 全量对账：进入 FlagsChanged 即调用 reconcile_modifiers() 用事件 flags 修正状态，
+#      防 tap 被禁期间丢修饰键抬起事件后纯修饰热键（如 Fn）失灵；
+#   2. 按下/抬起改用事件 flags 真值（Fn 走 flags_have_fn()），避免丢一次抬起导致状态永久反转。
+# 用 rev 而非 branch 钉死 Cargo.lock；上游合并发版后删本段改回 crates.io 修复版即可。
 handy-keys = { git = "https://github.com/yangyaofei/handy-keys", rev = "27edee4e7af2689630f5450887197a8dce7a0a1d" }

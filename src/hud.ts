@@ -1,4 +1,4 @@
-// 录音浮窗(用户定则, 分段队列方案 D —— 与 docs/SPEC.md、src-tauri/src/segment_queue.rs 同源)
+// 录音浮窗（分段队列方案 D —— 与 src-tauri/src/pipeline/segment_queue.rs、src-tauri/src/ui/hud.rs 同源）
 //
 // 布局:
 //   左栏 = 当前(录音中=实时文字; 没在录音时=正在转写的那段), 可换行/多行(最多 8 行后框内滚动)
@@ -47,6 +47,7 @@ function cancelHide() {
 
 function setState(cls: string, msg: string, keepText = true) {
   dot.className = "dot " + cls;
+  hud.dataset.phase = cls || "recording";
   statusEl.textContent = msg;
   if (!keepText) curText.textContent = "";
   failActions.classList.remove("show");
@@ -63,7 +64,7 @@ function pushWidth() {
   invoke("hud_resize", { width: w }).catch(() => {});
 }
 
-// 右栏: 队列列表(只有状态图标 + 文字; 失败行标红)
+// 右栏: 队列列表(只有状态圆点/旋转环 + 文字; 失败行标红)
 let queueSig = "";
 function renderQueue(rows: any[]) {
   // 键控签名: 状态 + 文本; 一样就不动 DOM(避免 150ms 一次的重绘打断滚动/闪动)。
@@ -74,13 +75,12 @@ function renderQueue(rows: any[]) {
   queueSig = sig;
   qlist.innerHTML = rows
     .map((r) => {
-      const icon = r.state === "failed" ? "✕" : r.state === "transcribing" ? "⟳" : "•";
       // 失败段可能没有文本(ASR 阶段就失败, 没有原文) → 给一个可读短标签,
-      // 否则那一行只剩一个 ✕, 用户看不出发生了什么(issue #3)
+      // 否则那一行只剩一个红点, 用户看不出发生了什么(issue #3)
       const raw = String(r.text || "");
       const label = raw || (r.state === "failed" ? "识别失败" : "");
       const text = label.replace(/[<>&]/g, (c: string) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!));
-      return `<div class="qrow ${r.state}"><span class="b">${icon}</span><span class="t">${text}</span></div>`;
+      return `<div class="qrow ${r.state}"><span class="b"></span><span class="t">${text}</span></div>`;
     })
     .join("");
 }
@@ -168,9 +168,10 @@ async function pollOnce() {
     const cur = s.cur;
     const curState = cur ? String(cur.state || "") : "";
     const recording = !!s.recording || curState === "recording";
+    curText.dataset.rec = recording ? "1" : "0";
     const lv = Math.min(1, (s.level / 1000) * 6);
     bar.style.display = recording ? "" : "none";
-    fill.style.width = recording ? `${Math.max(4, lv * 100)}%` : "0";
+    fill.style.width = recording ? `${Math.max(6, lv * 100)}%` : "0";
     fill.className = recording && lv > 0.9 ? "fill hot" : "fill";
 
     // 收窗时长由"本轮发生的事实"决定一次。
@@ -178,16 +179,16 @@ async function pollOnce() {
 
     // 状态行: 录音 > 润色(通知) > 转写中(当前段) > 空
     if (recording) {
-      setState("", "● 录音中", false);
+      setState("", "录音中", false);
     } else if (s.polishing) {
-      setState("idle", "✦ AI 润色中…");
+      setState("polishing", "AI 润色中…");
     } else if (curState === "transcribing" || curState === "queued") {
-      setState("idle", "… 转写中");
+      setState("idle", "转写中");
     } else {
       setState("", "", false);
     }
     if (s.msg) {
-      setState("idle", s.msg, false);
+      setState("warn", s.msg, false);
       // 一次性提示(如"没听清(转写为空)"/"录音太短已丢弃")留 2.5s;
       // 录音中不排程(静音提醒也走 msg, 但录音还在进行, 收窗由阶段决定)。
       if (!recording) hideAfter = 2500;
@@ -214,7 +215,7 @@ async function pollOnce() {
     showFail(failed && !recording);
     if (s.err) {
       // 引擎/交付级错误(asr-error): 同样只在没录音时提示
-      setState("err", `⚠️ ${String(s.err).slice(0, 60)}`);
+      setState("err", String(s.err).slice(0, 60));
       showFail(!recording);
       if (!recording) hideAfter = 2500;
     }
@@ -236,7 +237,7 @@ async function pollOnce() {
       const sig = JSON.stringify(d);
       if (sig !== lastFinal) {
         lastFinal = sig;
-        setState(d.warning ? "idle" : "ok", d.warning ? `⚠️ ${String(d.warning).slice(0, 40)}` : `✓ ${d.delivered === "copied" ? "已复制" : "已粘贴"}`);
+        setState(d.warning ? "warn" : "ok", d.warning ? String(d.warning).slice(0, 44) : (d.delivered === "copied" ? "已复制" : "已粘贴"));
         hideAfter = d.warning ? 2500 : 350;
       }
     } else if (s.version !== 0) {

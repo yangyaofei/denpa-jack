@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppThis } from "./types";
 
-export function aboutPage(this: AppThis) {
+export function aboutPage() {
   return {
     // 应用内更新状态(关于页): idle=未检查 / checking / latest=已是最新 / available=有新版本 / error
     updateState: "idle" as "idle" | "checking" | "latest" | "available" | "error",

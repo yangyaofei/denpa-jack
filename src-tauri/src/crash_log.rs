@@ -11,7 +11,16 @@
 //! 3. `install_signal_handlers`：收到致命信号时先落一行日志，再交还默认处理（保留系统崩溃报告）
 //! 4. `begin_session`/`end_session`：会话文件判定"上次是否正常退出"，并扫描新的系统崩溃报告
 //! 5. `spawn_heartbeat`：每分钟记录内存与线程数，用于区分"崩溃"与"被系统/外部结束"
-//! 6. 自测通道：`VOICEMAC_AUTOTEST=panic`（后台线程 panic）与 `=abort`（自杀信号），用于验证以上链路
+//! 6. 自测通道：`VOICEMAC_AUTOTEST=panic`（后台线程 panic）、`=abort`（SIGABRT，生成 `.ips`）、`=quit`（正常退出删 `.session.json`）
+//!
+//! # 日志与静默退出判读
+//! - 文件位置（`<数据目录>` 默认 `~/Library/Application Support/io.github.yangyaofei.denpajack/`）：
+//!   `app.log`（主日志）、`.session.json`（存活期存在，正常退出删除）、`.crash_reports_seen.json`；
+//!   系统崩溃报告在 `~/Library/Logs/DiagnosticReports/denpa-jack-*.ips`。
+//! - 关键前缀：`[app] 会话开始` / `[app] 正常退出` / `[crash] panic` / `[crash] killed by signal` /
+//!   `[crash] 发现系统崩溃报告` / `[hb] uptime=… rss=… threads=…` / `[ctx] 截图…`。
+//! - 判读：有 `killed by signal` 查同名 `.ips` 栈；有 `panic` 直接看栈顶；无信号无 panic 但 `[hb]` 中断
+//!   多为外部结束或系统回收；有 `正常退出` 则非崩溃。
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};

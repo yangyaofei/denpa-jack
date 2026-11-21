@@ -1,6 +1,19 @@
-// 录音浮窗(对齐 Handy overlay.rs): 定位/显隐
-// C41: 定位全链路 NS 坐标系(NSEvent.mouseLocation → NSScreen.frame → NSWindow.setFrameOrigin)
-// 此前混用 tauri cursor_position(NS y-up) 与 monitor.position(CG y-down), 跨屏必判错屏。
+//! 录音浮窗窗口机制：定位、显隐与宽度调整（坐标系写入的唯一落点，由 `build.rs` 强制）。
+//!
+//! # macOS 三套坐标系（互不兼容，一次计算严禁混用）
+//! - **NS（AppKit）**：主屏左下为原点，y 向上（`NSEvent.mouseLocation` / `NSScreen.frame` / `NSWindow.setFrameOrigin`）
+//! - **CG（CoreGraphics）**：主屏左上为原点，y 向下（`CGDisplayBounds` / `CGEventGetLocation` / Tauri `monitor.position()`）
+//! - **Tauri logical/physical**：封装 CG（y 向下）
+//! 本模块浮窗定位全链路走 NS 坐标系（避免混用 NS y-up 与 CG y-down 导致多屏错屏）；
+//! 读显示器列表时仅在局部用 CG 换算 `DisplayTarget` 后再交消费方。
+//!
+//! # 浮窗窗口语义清单（缺一项即破坏体验）
+//! - 不激活 App / 不抢焦点：`set_focusable(false)`（等价 `NSPanel + .nonactivatingPanel`）
+//! - 无标题栏：`decorations(false)`
+//! - 全屏 App 上可见：`set_visible_on_all_workspaces(true)`（`.canJoinAllSpaces + .fullScreenAuxiliary`）
+//! - 顶层悬浮：`always_on_top(true)`（`.statusBar` 层级）
+//! - 不进 Mission Control / 窗口列表：`skip_taskbar(true)`
+//! - 线程约束：`NSWindow::setFrameOrigin` 仅允许在主线程调用，须经 `run_on_main_thread` 调度。
 use objc2_app_kit::{NSEvent, NSScreen, NSWindow};
 use tauri::Manager;
 

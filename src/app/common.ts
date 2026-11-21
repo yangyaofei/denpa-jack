@@ -1,38 +1,49 @@
-// 公共域(阶段A 第5步从 main.ts 拆出): 配置加载/保存、轮询、试音、权限、版本、mock。
-// 跨页共享的状态与方法都住这里; 页域模块只管自己页面的编辑态。
+// 公共域：配置加载/保存、前后端版本轮询、试音、权限、版本、mock。
+// 跨页共享的状态与方法均在此维护；各页域模块只管各自页面编辑态。
+//
+// # 前后端同步契约（打包版 Rust emit → 前端 listen 不可靠，故以 invoke 轮询为主路径）
+// - 主窗状态（历史/配置/设备/录音态/在途队列/重转集合）：800ms `poll_versions` 差量拉取（`startVersionPolling`）
+// - 录音浮窗：150ms `hud_poll` 幂等全量重绘（见 `src/hud.ts`）
+// - 本地 ASR 网关状态与日志尾：2s `pollLocalSvc`
+// - 事件监听仅保留一次性提示补充：`config-changed`、`update-progress`；禁止新增"只发事件"的同步路径。
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { marked } from "marked";
 import type { AppThis, HistoryRecord } from "./types";
 
-export function common(this: AppThis) {
+export function common() {
   return {
     section: "history",
-    search: "",
     recording: false,
     error: "",
     cfg: null as AppThis["cfg"],
+    theme: ((typeof localStorage !== "undefined" && localStorage.getItem("denpa_theme")) ||
+      (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light")) as "dark" | "light",
+    sideCollapsed: (typeof localStorage !== "undefined" && localStorage.getItem("denpa_sidebar_col") === "1"),
+    copiedKey: "",
     /** 保存前快照的 data_dir: saveCfg 比对, 变了提示重启生效(D10——后端缓存不中途切换) */
     _prevDataDir: "" as string,
-    // 权限总检查(麦克风 + 辅助功能): 启动即查, 缺项顶部横幅 + 通用页卡片
+    // 权限总检查(麦克风 + 辅助功能): 启动即查, 缺项顶栏告警 + 通用页卡片
     perms: [] as any[],
     // 应用版本(关于页显示): 从 tauri.conf.json 的 version 读, 避免页面上硬编码后与发布版本漂移
     version: "",
     prioSel: 0,
+    autostartOn: false,
     mics: [] as { uid: string; name: string }[],
     activeMic: null as [string, string] | null,
     micToAdd: "",
 
     sections: [
-      { id: "history", title: "历史", keywords: "历史 记录 录音 播放 重转 复制" },
-      { id: "dict", title: "词典", keywords: "词典 纠错 变体 护栏 权重" },
-      { id: "general", title: "通用", keywords: "通用 快捷键 试音 开关" },
-      { id: "asr", title: "语音识别", keywords: "asr 档案 麦克风 热词 引擎 key 设备" },
-      { id: "llm", title: "大模型", keywords: "llm 润色 档案 提示词 deepseek 智谱" },
-      { id: "about", title: "关于", keywords: "关于 版本" },
+      { id: "history", title: "历史", icon: "#ic-history", group: "work", keywords: "历史 记录 录音 播放 重转 复制" },
+      { id: "dict", title: "词典", icon: "#ic-dict", group: "work", keywords: "词典 纠错 变体 护栏 权重" },
+      { id: "asr", title: "语音识别", icon: "#ic-asr", group: "pipe", keywords: "asr 档案 麦克风 热词 引擎 key 设备" },
+      { id: "llm", title: "大模型", icon: "#ic-llm", group: "pipe", keywords: "llm 润色 档案 提示词 deepseek 智谱" },
+      { id: "general", title: "通用", icon: "#ic-general", group: "pipe", keywords: "通用 快捷键 试音 开关 权限" },
+      { id: "about", title: "关于", icon: "#ic-about", group: "pipe", keywords: "关于 版本 更新" },
     ],
 
     async init(this: AppThis) {
+      document.documentElement.dataset.theme = this.theme;
       const _w = window as any;
       if (_w.__denpaInited) return; // 幂等: 只初始化一次(同窗口重复实例不再重复起轮询)
       _w.__denpaInited = true;
@@ -82,6 +93,7 @@ export function common(this: AppThis) {
     async loadCfg(this: AppThis) {
       try {
         this.cfg = await invoke("get_config");
+        if (!this.cfg) return;
         this.axPasteOnlyText = (this.cfg.ax_paste_only_apps ?? []).join("\n");
         this._prevDataDir = this.cfg.data_dir ?? "";
         if (typeof this.refreshHotwords === "function") this.refreshHotwords();
@@ -118,19 +130,34 @@ export function common(this: AppThis) {
       this.section = id;
       if (id === "asr" || id === "general") this.refreshMics();
     },
-    // 顶栏状态条: 当前组合一眼可见
-    statusLine(this: AppThis): string {
-      if (!this.cfg) return "加载中…";
-      const asr = this.cfg.asr_profiles.find((p: any) => p.id === this.cfg.active_asr_id)?.name ?? "未设置";
-      const llm = this.cfg.active_llm_id
-        ? (this.cfg.llm_profiles.find((p: any) => p.id === this.cfg.active_llm_id)?.name ?? "关")
-        : "关";
-      const mic = this.activeMicName();
-      const hk = this.hotkeyLabel() || "F5";
-      return `${asr} · ${mic} · 按住 ${hk}`;
+    toggleTheme(this: AppThis) {
+      this.theme = this.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = this.theme;
+      try { localStorage.setItem("denpa_theme", this.theme); } catch {}
+    },
+    toggleSidebar(this: AppThis) {
+      this.sideCollapsed = !this.sideCollapsed;
+      try { localStorage.setItem("denpa_sidebar_col", this.sideCollapsed ? "1" : "0"); } catch {}
+    },
+    async copyWithFeedback(this: AppThis, key: string, text: string) {
+      try {
+        if ((window as any).__TAURI_INTERNALS__) await invoke("copy_text", { text });
+        else if (navigator.clipboard) await navigator.clipboard.writeText(text);
+        this.copiedKey = key;
+        setTimeout(() => { if (this.copiedKey === key) this.copiedKey = ""; }, 1200);
+      } catch (e) { console.error(e); }
+    },
+    activeAsrLabel(this: AppThis): string {
+      if (!this.cfg) return "加载中";
+      if (this.cfg.active_asr_id === "builtin") return "内置本地";
+      return this.cfg.asr_profiles.find((p: any) => p.id === this.cfg!.active_asr_id)?.name ?? "未设置";
+    },
+    activeLlmLabel(this: AppThis): string {
+      if (!this.cfg?.active_llm_id) return "关";
+      return this.cfg.llm_profiles.find((p: any) => p.id === this.cfg!.active_llm_id)?.name ?? "关";
     },
     activeMicName(this: AppThis): string {
-      return this.activeMic?.name ?? "自动(默认麦克风)";
+      return this.activeMic?.[1] ?? "自动 (默认)";
     },
     // 重扫设备列表 + 当前输入设备(事件驱动: CoreAudio 设备变化 → poll_versions.mics 变化时调用)
     async refreshMics(this: AppThis) {
@@ -143,10 +170,8 @@ export function common(this: AppThis) {
     micName(this: AppThis, uid: string): string {
       return this.mics.find((m: any) => m.uid === uid)?.name ?? uid;
     },
-    filteredSections(this: AppThis) {
-      const q = this.search.trim().toLowerCase();
-      if (!q) return this.sections;
-      return this.sections.filter((s: any) => s.title.includes(q) || s.keywords.includes(q));
+    filteredSections(this: AppThis, group?: string) {
+      return group ? this.sections.filter((s: any) => s.group === group) : this.sections;
     },
     mdRender(this: AppThis, src: string): string {
       try {
@@ -223,6 +248,12 @@ export function common(this: AppThis) {
 
     // headless 自测 mock: 无 Tauri 环境时提供示例数据
     async initMock(this: AppThis) {
+      this.version = "0.3.29";
+      this.perms = [
+        { key: "microphone", label: "麦克风", required: true, granted: true, status: "granted", purpose: "采集录音", impact: "无法语音输入", settings_url: "" },
+        { key: "accessibility", label: "辅助功能", required: true, granted: true, status: "granted", purpose: "监听热键与自动写入光标", impact: "无法快捷键触发与自动粘贴", settings_url: "" },
+        { key: "screen_recording", label: "屏幕录制", required: false, granted: false, status: "denied", purpose: "截图上下文识别", impact: "仅回退纯文本纠错", settings_url: "" },
+      ];
       this.mics = [
           { uid: "mock-uid-1", name: "Wireless Mic Rx (DJI)" },
           { uid: "mock-uid-2", name: "MacBook Pro麦克风" },
@@ -238,7 +269,7 @@ export function common(this: AppThis) {
           { term: "谢克数学", variants: ["些克数学", "歇课数学"], guard_words: [], boost: 3 },
           { term: "腾讯云", variants: ["腾讯营"], guard_words: [], boost: 2 },
         ], normalizations: [], active_llm_id: "l1", active_asr_id: "a1",
-        use_llm_correction: false, clipboard_only: false,
+        use_llm_correction: false, clipboard_only: false, detect_active_target: "active_window",
         activation: "hold", audio_feedback: true, restore_clipboard: true,
         keep_in_clipboard: false, trailing_newlines: 0, ax_paste_only_apps: [], local_autostart: true, local_service_dir: "~/workspace/denpa-asr",
         builtin_engine: { model: "Qwen/Qwen3-ASR-1.7B", vad: "", twopass: true, chunk_size_sec: 0.5, max_context_sec: 120, endpointing: "energy", max_sessions: 4 },
@@ -248,12 +279,12 @@ export function common(this: AppThis) {
         auto_check_update: true,
         extra_tail_ms: 0, mic_device_uid: "", mic_priority: ["Wireless Mic Rx (DJI)"],
         data_dir: "",
-        bindings: { transcribe: { current: ["f5"] } },
+        bindings: { transcribe: { current: ["fn"] } },
       } as any;
       this.autostartOn = false;
       this.history = [
-        { ts: "2026-09-02 13:00:01", engine: "volcengine", raw: "歇课数学很厉害", final_text: "谢克数学很厉害", llm_used: true, delivered: "clipboard+paste", audio_path: "" },
-        { ts: "2026-09-02 12:58:10", engine: "volcengine", raw: "我们在腾讯营上部署", final_text: "我们在腾讯云上部署", llm_used: false, delivered: "clipboard", audio_path: "" },
+        { ts: "2026-09-02 13:00:01", engine: "volcengine", raw: "歇课数学很厉害", final_text: "谢克数学很厉害", llm_used: true, delivered: "pasted-ax", audio_path: "" },
+        { ts: "2026-09-02 12:58:10", engine: "volcengine", raw: "我们在腾讯营上部署", final_text: "我们在腾讯云上部署", llm_used: false, delivered: "copied", audio_path: "" },
       ] as HistoryRecord[];
     },
   };

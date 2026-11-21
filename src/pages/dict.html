@@ -1,46 +1,89 @@
-      <section x-show="section === 'dict'" class="page">
-        <h1>词典</h1>
-        <div class="btns" style="margin-bottom: 10px">
-          <input class="inp" type="text" placeholder="快速添加词条(回车入库)…" x-model="quickTerm" @keydown.enter="addQuickTerm()" style="flex:1" />
-        </div>
-        <p class="hint">变体=常见误识别写法; 护栏=出现该词则不纠错; 权重影响热词直传优先级(拼音模糊仅 3 字以上词条)</p>
-        <input class="inp" style="margin-top: 10px" placeholder="搜索词条或变体…" x-model="dictSearch" />
-        <table class="tbl" x-show="cfg?.dict?.length">
-          <thead><tr><th>词条</th><th>变体</th><th>护栏</th><th>权重</th><th></th></tr></thead>
-          <tbody>
-            <template x-for="e in filteredDict()" :key="e.term">
-              <tr>
-                <td class="strong" x-text="e.term"></td>
-                <td><template x-for="v in e.variants" :key="v"><span class="chip" x-text="v"></span></template>
-                    <span class="dim" x-show="!e.variants.length">—</span></td>
-                <td class="dim" x-text="e.guard_words.join(', ') || '—'"></td>
-                <td x-text="weightStars(e.boost)"></td>
-                <td class="btns">
-                  <button class="mini" @click="editDict(e)">编辑</button>
-                  <button class="mini red" @click="delDict(e)">删除</button>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-        <p class="hint" x-show="!cfg?.dict?.length">词典为空 — 添加常用专有名词提升识别率</p>
-        <button class="add-btn" @click="newDict()">+ 添加词条</button>
+<section x-show="section === 'dict'" class="page">
+  <div class="page-head">
+    <div>
+      <h1>词典</h1>
+      <p class="hint">变体命中即替换；护栏词同时出现时跳过替换；权重越高越优先分配进 ASR 热词预算（3 字以上支持拼音模糊）</p>
+    </div>
+    <button class="mini primary" @click="newDict()">
+      <svg class="ic-xs"><use href="#ic-plus"/></svg>
+      <span>添加词条</span>
+    </button>
+  </div>
 
-        <!-- 词条编辑 sheet -->
-        <template x-if="dictEdit"><div class="overlay" @click.self="dictEdit = null">
-          <div class="sheet">
-            <h2 x-text="dictIsNew ? '添加词条' : '编辑词条'"></h2>
-            <label>词条<input class="inp" x-model="dictEdit.term" placeholder="正确写法, 如: 谢克数学" /></label>
-            <label>变体<span class="row-hint">(逗号分隔)</span>
-              <input class="inp" x-model="dictEdit.variants" placeholder="些克数学, 歇课数学" /></label>
-            <label>护栏词<span class="row-hint">(出现该词则不纠错, 逗号分隔)</span>
-              <input class="inp" x-model="dictEdit.guard_words" /></label>
-            <label>权重 (热词直传优先级)
-              <input class="inp num" type="number" min="0" max="5" x-model.number="dictEdit.boost" /></label>
-            <div class="btns end">
-              <button class="mini" @click="dictEdit = null">取消</button>
-              <button class="mini primary" @click="saveDict()">保存</button>
-            </div>
-          </div>
-        </div></template>
-      </section>
+  <div class="card toolbar-card">
+    <div class="search-inp-wrap" style="flex:1">
+      <svg class="ic-sm"><use href="#ic-plus"/></svg>
+      <input class="inp plain" type="text" placeholder="快速添加词条（回车直接设为高权重入库）…" x-model="quickTerm" @keydown.enter="addQuickTerm()" />
+    </div>
+    <div class="search-inp-wrap" style="width:220px">
+      <svg class="ic-sm"><use href="#ic-search"/></svg>
+      <input class="inp plain" placeholder="搜索词条或变体…" x-model="dictSearch" />
+    </div>
+  </div>
+
+  <div class="card table-card" x-show="cfg?.dict?.length">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>词条</th>
+          <th>变体</th>
+          <th>护栏</th>
+          <th>权重</th>
+          <th class="right">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="e in filteredDict()" :key="e.term">
+          <tr>
+            <td class="strong" x-text="e.term"></td>
+            <td>
+              <template x-for="v in e.variants" :key="v"><span class="chip" x-text="v"></span></template>
+              <span class="dim" x-show="!e.variants.length">—</span>
+            </td>
+            <td>
+              <template x-for="g in e.guard_words" :key="g"><span class="chip muted" x-text="g"></span></template>
+              <span class="dim" x-show="!e.guard_words.length">—</span>
+            </td>
+            <td>
+              <span class="stars" :title="'权重 ' + e.boost">
+                <template x-for="n in [1,2,3]" :key="n">
+                  <svg class="star-ic" :class="n <= boostCount(e.boost) ? 'lit' : ''"><use href="#ic-star"/></svg>
+                </template>
+              </span>
+            </td>
+            <td class="btns right">
+              <button class="mini" @click="editDict(e)">编辑</button>
+              <button class="mini red" @click="delDict(e)">删除</button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card empty-note" x-show="!cfg?.dict?.length">
+    <p class="hint">词典为空 — 添加常用专有名词、人名或项目术语，可显著提高识别准确率</p>
+  </div>
+
+  <!-- 词条编辑 sheet -->
+  <template x-if="dictEdit"><div class="overlay" @click.self="dictEdit = null">
+    <div class="sheet">
+      <h2 x-text="dictIsNew ? '添加词条' : '编辑词条'"></h2>
+      <label>词条<input class="inp" x-model="dictEdit.term" placeholder="正确写法，如：Denpa Jack" /></label>
+      <label>变体<span class="row-hint">(逗号分隔)</span>
+        <input class="inp" x-model="dictEdit.variants" placeholder="电波夹克, 歇课数学" /></label>
+      <label>护栏词<span class="row-hint">(同句出现该词时不纠错，逗号分隔)</span>
+        <input class="inp" x-model="dictEdit.guard_words" /></label>
+      <label>权重（热词直传优先级）
+        <div class="unit-input" style="width:130px">
+          <input class="inp" type="number" min="0" max="5" x-model.number="dictEdit.boost" />
+          <span class="unit-tag">级</span>
+        </div>
+      </label>
+      <div class="btns end">
+        <button class="mini" @click="dictEdit = null">取消</button>
+        <button class="mini primary" @click="saveDict()">保存</button>
+      </div>
+    </div>
+  </div></template>
+</section>

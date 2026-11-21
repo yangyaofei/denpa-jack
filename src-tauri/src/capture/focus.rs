@@ -1,6 +1,6 @@
 //! capture/focus：前台与焦点感知（从 delivery 归位的"感知世界"能力）。
 //!
-//! 归位依据（docs/ARCHITECTURE.md）：焦点探测是 capture 性质（感知当前环境），
+//! 归位依据（见 `lib.rs` 调用律）：焦点探测是 capture 性质（感知当前环境），
 //! delivery 只留动作（写入/键击）。此前 recording 反向调用 delivery 的探测函数，
 //! 方向律修复后依赖才顺：capture → pipeline 单向。
 //!

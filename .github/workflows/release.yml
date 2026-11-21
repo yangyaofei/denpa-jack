@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build-sign-release:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       # 版本号：tag 触发用 ref 名；手动触发用输入
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

@@ -1,11 +1,10 @@
-//! C54 重构: 键盘快捷键统一模块(照抄 Handy 架构)
+//! 键盘快捷键统一模块（基于带 macOS 修复补丁的 `handy-keys` crate）。
 //!
-//! 引擎 = handy-keys crate(Handy 同款): Manager 线程独占 HotkeyManager,
-//! 命令经 mpsc(带同步 response), 事件 try_recv 分发。Fn/纯修饰/精确匹配
-//! 全部由 crate 提供——自研 CGEventTap/flags 轮询(key_engine/flags_hotkey)已废弃。
-//!
-//! 绑定模型: bindings: Map<"transcribe", BindingSet{current: Vec<String>}>
-//! 一动作多键; 旧 hotkey/hotkeys 字段自动迁移并入。
+//! - Manager 线程独占 `HotkeyManager`，命令经 mpsc（带同步 response），事件 `try_recv` 分发；
+//!   Fn / 纯修饰键组合 / 精确匹配全部由 `handy-keys` 提供（权限门槛 = 辅助功能，不需要输入监控）。
+//! - 回调在主线程触发，**只发信号（`send_ctrl` / `send_cancel`）**，禁止回调内同步调用主线程 AppKit API。
+//! - 补丁详情见 `src-tauri/Cargo.toml` 的 `[patch.crates-io]` 注释（FlagsChanged 全量对账 + flags 真值判定）。
+//! - 绑定模型：`bindings: Map<"transcribe", BindingSet{current: Vec<String>}>` 一动作多键，旧字段自动迁移。
 
 use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState};
 use std::collections::HashMap;

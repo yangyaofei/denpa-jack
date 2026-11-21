@@ -52,19 +52,25 @@ export interface AppThis {
   $nextTick: (fn: () => void) => void;
   $refs: Record<string, any>;
   // —— 公共状态(common) ——
-  section: string; search: string; recording: boolean;
+  section: string; recording: boolean;
   error: string; cfg: Config | null;
+  /** 外观主题与侧栏折叠状态(前端 localStorage 持久化) */
+  theme: "dark" | "light";
+  sideCollapsed: boolean;
+  copiedKey: string;
   /** 保存前快照的 data_dir(D10 提示用) */
   _prevDataDir: string;
   perms: any[]; version: string;
   prioSel: number;
   autostartOn: boolean; // 未在数据里声明的动态字段(toggleAutostart 用, 保留现状)
   mics: { uid: string; name: string }[]; activeMic: [string, string] | null; micToAdd: string;
-  sections: { id: string; title: string; keywords: string }[];
-  // —— 热键录制(general) ——
+  sections: { id: string; title: string; icon: string; group: string; keywords: string }[];
+  // —— 热键录制与通用页折叠(general) ——
   hkCapturing: boolean; hkCurrent: string; hkFinal: string; _capTimer: any;
+  genAdvancedOpen: boolean; permDetailOpen: boolean;
   // —— ASR 页 ——
   asrEdit: AsrProfile | null; asrIsNew: boolean; builtinDirty: boolean;
+  asrTuningOpen: boolean; asrLogOpen: boolean;
   localSvc: LocalSvcState;
   // —— LLM 页 ——
   llmEdit: LlmProfile | null; llmIsNew: boolean; llmModels: string[]; llmModelsError: string;
@@ -72,7 +78,7 @@ export interface AppThis {
   // —— 词典页 ——
   dictEdit: any; dictIsNew: boolean; dictSearch: string; hotwordsPreview: string[]; quickTerm: string;
   // —— 历史页 ——
-  history: HistoryRecord[]; selHist: HistoryRecord | null; histSearch: string;
+  history: HistoryRecord[]; selHist: HistoryRecord | null; histSearch: string; histFilter: "all" | "llm" | "warn";
   /** R1: 进行中的历史重转 ts 集合(poll_versions.reruns 的镜像) */
   rerunning: Set<string>;
   /** 在途转写段一览(poll_versions.queue 的镜像)——主窗状态条 */
@@ -91,8 +97,12 @@ export interface AppThis {
   saveCfg(): Promise<void>;
   toggleRecording(): Promise<void>;
   switchSection(id: string): void;
-  statusLine(): string;
-  filteredSections(): { id: string; title: string; keywords: string }[];
+  toggleTheme(): void;
+  toggleSidebar(): void;
+  copyWithFeedback(key: string, text: string): Promise<void>;
+  activeLlmLabel(): string;
+  activeAsrLabel(): string;
+  filteredSections(group?: string): { id: string; title: string; icon: string; group: string; keywords: string }[];
   mdRender(src: string): string;
   uiSelftest(): Promise<void>;
   openConfigFile(): Promise<void>;
@@ -110,7 +120,9 @@ export interface AppThis {
   openPermSettings(p: any): Promise<void>;
   // general
   describeCombo(s: string): string;
+  comboTokens(s: string): string[];
   hotkeyLabel(): string;
+  hotkeyTokens(): string[];
   hkList(): string[];
   removeHotkey(combo: string): Promise<void>;
   startHotkeyRecord(): Promise<void>;
@@ -124,6 +136,7 @@ export interface AppThis {
   onDetectTargetChange(): Promise<void>;
   openScreenContextDir(): Promise<void>;
   switchMic(ev: Event): Promise<void>;
+  genAdvancedSummary(): string;
   // asr
   newAsr(): void;
   editAsr(p: AsrProfile): void;
@@ -134,6 +147,7 @@ export interface AppThis {
   pollLocalSvc(): Promise<void>;
   localSvcAction(act: "start" | "stop"): Promise<void>;
   localSvcText: string; // getter
+  builtinSummary(): string[];
   saveAsr(): Promise<void>;
   switchAsr(ev: Event): Promise<void>;
   // llm
@@ -149,7 +163,7 @@ export interface AppThis {
   runLlmSelftest(): Promise<void>;
   togglePolish(): Promise<void>;
   // dict
-  weightStars(b: number): string;
+  boostCount(b: number): number;
   filteredDict(): DictEntry[];
   newDict(): void;
   editDict(e: DictEntry): void;
@@ -165,4 +179,11 @@ export interface AppThis {
   playHist(h: HistoryRecord): Promise<void>;
   rerunHist(h: HistoryRecord): Promise<void>;
   filteredHist(): HistoryRecord[];
+  selectHist(h: HistoryRecord): void;
+  deliveryLabel(d: string): string;
+  histStats(): { total: number; llmCount: number; pastedCount: number };
+  // about
+  updateStateText(): string;
+  checkUpdate(silent?: boolean): Promise<void>;
+  installUpdate(): Promise<void>;
 }

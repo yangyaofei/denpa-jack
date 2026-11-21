@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Voice 输入需要使用麦克风进行语音转写</string>
+    <string>Denpa Jack 需要使用麦克风进行语音转写</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>用于将转写结果粘贴到当前应用</string>
 </dict>

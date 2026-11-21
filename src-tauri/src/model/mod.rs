@@ -1,4 +1,4 @@
-//! model 域：模型能力的接驳层（docs/ARCHITECTURE.md 四域之一）。
+//! model 域：模型能力的接驳层（四域之一，见 `lib.rs` 架构总览）。
 //!
 //! 门面（外部只许经 model:: 调这些）：
 //!   - speech::resolve(cfg) · speech::transcribe(...) — ASR 引擎分派与识别

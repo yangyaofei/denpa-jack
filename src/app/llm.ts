@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { uid } from "./util";
 import type { AppThis, LlmProfile } from "./types";
 
-export function llmPage(this: AppThis) {
+export function llmPage() {
   return {
     llmEdit: null as LlmProfile | null,
     llmIsNew: false,
@@ -94,10 +94,11 @@ export function llmPage(this: AppThis) {
     },
     async editLlm(this: AppThis, p: LlmProfile) {
       this.llmIsNew = false;
-      this.llmEdit = JSON.parse(JSON.stringify(p));
+      const ed: LlmProfile = JSON.parse(JSON.stringify(p));
+      this.llmEdit = ed;
       // prompt 空则回填内置默认(直接显示真实将发送的内容)
-      if (!this.llmEdit.prompt) {
-        try { this.llmEdit.prompt = await invoke<string>("get_default_prompt"); } catch {}
+      if (!ed.prompt) {
+        try { ed.prompt = await invoke<string>("get_default_prompt"); } catch {}
       }
       this.fetchLlmModels();
     },

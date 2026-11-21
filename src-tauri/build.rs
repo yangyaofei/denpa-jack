@@ -1,5 +1,13 @@
-// 跨边界契约的编译期强制(docs/CONTRACTS.md 的执行者):
-// 坐标 API 只准 overlay.rs 出现——模块收口从"约定"升级为"编译失败"
+// 跨边界技术契约与四域门面的编译期强制闸（递归扫描 src/，违反即编译失败）：
+//   1. 坐标系闸：NS（主屏左下、y 向上）/ CG（主屏左上、y 向下）/ Tauri 三套坐标系互不兼容，
+//      所有坐标写入 API 仅允许出现在 ui/overlay.rs。
+//   2. HUD 单一入口闸：浮窗状态与窗口控制只允许在 ui/hud.rs 与 ui/overlay.rs 出现，
+//      其余模块只向 core 写事实或调 ui:: 门面。
+//   3. 主线程 AppKit 闸：NSStatusItem / NSPasteboard / setFrameOrigin / NSSound 仅限主线程，
+//      使用文件必须显式含 run_on_main_thread 或 MainThreadMarker 调度标记。
+//   4. 四域门面闸：capture / model / pipeline / ui 跨域引用必须命中 FACADE 白名单
+//      （门面动词表达意图，禁止暴露通道/线程等机制词；豁免表已清零）。
+//   5. Tauri ACL 编译：末尾调用 tauri_build::build() 生成 capabilities 与 ACL 清单到 OUT_DIR。
 fn main() {
     println!("cargo:rerun-if-changed=src/");
     // 递归收集 src/ 下全部 .rs(域子目录 engine/ 等同样受闸——搬家不豁免契约)
@@ -11,20 +19,20 @@ fn main() {
         for api in overlay_only {
             if name != "overlay.rs" && content.contains(api) {
                 panic!(
-                    "契约违规: 坐标 API `{api}` 只允许出现在 overlay.rs(全 NS 链路), 发现于 {name}。\
-                     见 docs/CONTRACTS.md 坐标系一节——三套坐标系互不兼容, 新坐标代码进 overlay.rs 并注明体系。"
+                    "契约违规: 坐标 API `{api}` 只允许出现在 ui/overlay.rs(全 NS 链路), 发现于 {name}。\
+                     三套坐标系互不兼容, 新坐标代码进 ui/overlay.rs 并注明体系。"
                 );
             }
         }
-        // HUD 单一入口契约: 浮窗状态与窗口只允许 hud.rs(状态机/策略)与 overlay.rs(窗口机制)操作,
-        // 其他模块只能调用 hud 模块的接口报"发生了什么事实"。见 docs/CONTRACTS.md 与 src/hud.rs 顶部。
+        // HUD 单一入口契约: 浮窗状态与窗口只允许 ui/hud.rs(状态机/策略)与 ui/overlay.rs(窗口机制)操作,
+        // 其他模块只能调用 ui:: 门面或向 core 报事实(见 ui/hud.rs 顶部注释)。
         let hud_only = ["hud_set", "HudSnapshot", "show_hud(", "hide_hud(", "show_hud_msg("];
         if name != "hud.rs" && name != "overlay.rs" && name != "build.rs" {
             for api in hud_only {
                 if content.contains(api) {
                     panic!(
-                        "契约违规: `{api}` 只允许出现在 hud.rs / overlay.rs——\
-                         HUD 的状态与显隐必须由 hud 模块统一管理, 其他模块只能调用它的接口(见 src/hud.rs 顶部)。\
+                        "契约违规: `{api}` 只允许出现在 ui/hud.rs / ui/overlay.rs——\
+                         HUD 的状态与显隐必须由 hud 模块统一管理(见 ui/hud.rs 顶部注释)。\
                          发现于 {name}。"
                     );
                 }
@@ -39,13 +47,11 @@ fn main() {
             && !content.contains("MainThreadMarker")
         {
             panic!(
-                "契约违规: {name} 使用主线程-only AppKit API 但未见 run_on_main_thread/MainThreadMarker 调度。\
-                 见 docs/CONTRACTS.md 线程模型一节。"
+                "契约违规: {name} 使用主线程-only AppKit API 但未见 run_on_main_thread/MainThreadMarker 调度。"
             );
         }
-        // ───────── 门面闸(docs/ARCHITECTURE.md §1)─────────
-        // 域文件引用他域只许: ① crate::域::{门面符号}(FACADE 表) ② EXEMPT 登记的
-        // 存量前缀(每条带批4 去向)。根目录文件=装配壳+基座, 豁免。
+        // ───────── 四域门面闸（见 lib.rs 顶部架构契约）─────────
+        // 域文件引用他域只许经 crate::域::{门面符号}（FACADE 白名单）；根目录文件=装配壳+基座，豁免。
         let src_domain = rel.split('/').next().unwrap_or("");
         let is_domain_file = matches!(src_domain, "capture" | "ui" | "pipeline" | "model");
         if is_domain_file {
@@ -55,7 +61,7 @@ fn main() {
                 ("pipeline", &["SessionHandoff", "mark_cancelled", "cancel_latest", "submit_live", "submit_failed", "record_no_speech", "is_cancelled", "clear_cancelled_for_test"]),
                 ("ui", &["recording_started", "recording_ended", "dismiss", "refresh_status", "display_scale", "DisplayTarget", "cursor_point", "display_target_at", "main_display_target"]),
             ];
-            // 存量豁免(前缀匹配): 批5 已清零——domain 间只剩门面符号与 core 两条通道。
+            // 存量豁免(前缀匹配): 已清零——domain 间只剩门面符号与 core 两条通道。
             // 新增跨域需求: 进 FACADE 门面, 或反向通知走 core; 严禁再登记豁免。
             let exempt: &[(&str, &str)] = &[];
             for dom in ["capture", "model", "pipeline", "ui"] {
@@ -84,7 +90,7 @@ fn main() {
                     if !ok_facade && !ok_exempt {
                         panic!(
                             "门面违规: `crate::{}::{}` 不在 {} 域门面白名单, 也不在豁免登记表——\
-                             外部只许经门面符号调用(docs/ARCHITECTURE.md §1)。发现于 {}。\n\
+                             外部只许经门面符号调用(见 lib.rs 与各域 mod.rs 门面说明)。发现于 {}。\n\
                              豁免表登记项: {:?}",
                             dom, seg, dom, rel, exempt
                         );
@@ -94,6 +100,9 @@ fn main() {
             }
         }
     }
+    // 生成 Tauri ACL 与 capabilities 到 OUT_DIR（供 tauri::generate_context! 解析权限，
+    // 缺此步会导致 capabilities/default.json 里的 core:window:allow-start-dragging 等全部失效）
+    tauri_build::build();
 }
 
 /// 递归收集 .rs 文件: (相对路径, 文件名, 内容)。文件名用 basename 判等——子目录里的

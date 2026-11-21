@@ -8,8 +8,8 @@
 //     随时查看状态与跳转设置; 不计入 missing(), 不参与启动提示与录音拦截。
 //
 // **不需要"输入监控"**: 只有"自研 CGEventTap listen-only 引擎"才需要它, 该引擎已在 C54 删除。
-// 现在键盘层 = handy-keys(HotkeyManager/KeyboardListener, 内部 CGEventTap), 但库自己的权限要求是
-// 辅助功能(listener.rs: AXIsProcessTrusted 检查); 录音期间的 esc 走 Carbon 全局快捷键(global-shortcut 插件)。
+// 现在键盘层 = handy-keys(HotkeyManager/KeyboardListener, 内部 CGEventTap), 库自己的权限要求是
+// 辅助功能(listener.rs: AXIsProcessTrusted 检查); 录音期间的 Esc 取消同样走 handy-keys 监听。
 // 实机验证: 只授予辅助功能时热键/录制/AX 写入全部正常。
 use serde::Serialize;
 

@@ -1,23 +1,37 @@
 // 通用页域(阶段A 第5步从 main.ts 拆出): 热键绑定/触发模式/麦克风优先级/活动目标/粘贴名单文本域。
 import { invoke } from "@tauri-apps/api/core";
-import { describeCombo } from "./util";
+import { comboTokens, describeCombo } from "./util";
 import type { AppThis } from "./types";
 
-export function generalPage(this: AppThis) {
+export function generalPage() {
   return {
     hkCapturing: false,
     hkCurrent: "",
     hkFinal: "",
     _capTimer: 0 as any,
+    genAdvancedOpen: false,
+    permDetailOpen: false,
     /** 粘贴优先名单的文本域(每行一个 bundle id; saveCfg 转数组, loadCfg 反向填充) */
     axPasteOnlyText: "" as string,
 
     // ── 快捷键录制 ──
     describeCombo,
+    comboTokens,
     hotkeyLabel(this: AppThis) {
       // C54: 顶部文案取 bindings 列表第一个(迁移后单一真源)
       const first = this.cfg?.bindings?.["transcribe"]?.current?.[0];
       return first ? describeCombo(first) : "";
+    },
+    hotkeyTokens(this: AppThis): string[] {
+      const first = this.cfg?.bindings?.["transcribe"]?.current?.[0];
+      return first ? comboTokens(first) : ["Fn"];
+    },
+    genAdvancedSummary(this: AppThis): string {
+      if (!this.cfg) return "";
+      const nl = this.cfg.trailing_newlines ? `末尾 +${this.cfg.trailing_newlines} 换行` : "不追加换行";
+      const rec = `保留 ${this.cfg.keep_audio_count ?? 50} 条录音`;
+      const appN = (this.cfg.ax_paste_only_apps || []).length;
+      return appN ? `${nl} · ${rec} · ${appN} 个粘贴优先 App` : `${nl} · AX 直写优先 · ${rec}`;
     },
 
     // C54: 绑定列表(bindings.transcribe.current 字符串数组, 单一真源)
@@ -120,7 +134,7 @@ export function generalPage(this: AppThis) {
     // 活动目标: 保存后若不是"关闭", 主动申请屏幕录制权限并刷新权限列表(缺权限时卡片会给出提示)
     async onDetectTargetChange(this: AppThis) {
       await this.saveCfg();
-      if (this.cfg.detect_active_target !== "off") {
+      if (this.cfg && this.cfg.detect_active_target !== "off") {
         try { await invoke("request_screen_permission"); } catch (e) { console.warn("request_screen_permission 失败", e); }
       }
       await this.checkPerms();

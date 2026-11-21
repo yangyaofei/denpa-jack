@@ -1,4 +1,4 @@
-//! pipeline 域：流程编排——识别之后到落屏之间的一切（docs/ARCHITECTURE.md 四域之一）。
+//! pipeline 域：流程编排——识别之后到落屏之间的一切（四域之一，见 `lib.rs` 架构总览）。
 //!
 //! 门面（外部只许经 pipeline:: 调这些）：
 //!   - submit_live / enqueue_* — 段入流程（Live 主链路）

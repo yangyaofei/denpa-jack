@@ -3,12 +3,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { uid } from "./util";
 import type { AppThis, AsrProfile } from "./types";
 
-export function asrPage(this: AppThis) {
+export function asrPage() {
   return {
     asrEdit: null as AsrProfile | null,
     asrIsNew: false,
     builtinDirty: false as boolean,
+    asrTuningOpen: false,
+    asrLogOpen: false,
     localSvc: { state: "unknown" as string, port: 0 as number, elapsed_secs: null as number | null, exit: null as string | null, tail: [] as string[], busy: false },
+
+    builtinSummary(this: AppThis): string[] {
+      const be = this.cfg?.builtin_engine;
+      if (!be) return [];
+      const modelShort = (be.model || "未配置模型").split("/").pop() || be.model;
+      return [
+        modelShort,
+        `VAD ${be.vad || "关"}`,
+        be.endpointing || "energy",
+        be.twopass ? "二遍开" : "二遍关",
+        `分块 ${be.chunk_size_sec}s`,
+      ];
+    },
 
     // ── ASR 档案 ──
     newAsr(this: AppThis) {
@@ -73,13 +88,14 @@ export function asrPage(this: AppThis) {
         this.localSvc.busy = false;
       }
     },
-    get localSvcText(this: AppThis): string {
-      const s = this.localSvc.state;
+    get localSvcText(): string {
+      const svc = (this as unknown as AppThis).localSvc;
+      const s = svc.state;
       if (s === "running") return "运行中";
       if (s === "starting")
-        return `启动中… ${this.localSvc.elapsed_secs ?? 0}s（模型加载约 40s，日志见下）`;
-      if (s === "failed") return `启动失败（退出: ${this.localSvc.exit ?? "?"}，看下方日志）`;
-      if (s === "crashed") return `运行中崩溃（退出: ${this.localSvc.exit ?? "?"}，可重新启动）`;
+        return `启动中… ${svc.elapsed_secs ?? 0}s（模型加载约 40s，日志见下）`;
+      if (s === "failed") return `启动失败（退出: ${svc.exit ?? "?"}，看下方日志）`;
+      if (s === "crashed") return `运行中崩溃（退出: ${svc.exit ?? "?"}，可重新启动）`;
       return "未运行";
     },
 

@@ -6,75 +6,267 @@
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { background: transparent; overflow: hidden; }
-      body { font-family: -apple-system, "PingFang SC", sans-serif; -webkit-font-smoothing: antialiased; user-select: none; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
       /* 浮窗布局(分段队列方案 D, 用户定稿):
          单栏 480px(只有当前段) ↔ 出现队列时 664px(左=当前 / 右=队列)。
          右栏只在真的排队时才出现, 队列空了就收回 480 —— 不默认占地方。
-         高度固定(与队列化之前一致): 窗口 480x200 / 664x200, 面板最多 196px,
+         高度固定: 窗口 480x200 / 664x200, 面板最多 196px,
          长文本在文本框内滚动(见 .cur-text) —— 不做动态改高, 位置就不会漂。 */
       .hud {
         width: 480px;
         min-height: 92px;
         max-height: 196px;
         padding: 12px 16px 14px;
-        border-radius: 14px;
-        background: rgba(24, 24, 28, 0.94);
-        backdrop-filter: blur(20px);
-        color: #f2f2f7;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
-        display: flex; flex-direction: column;
-        transition: width 0.18s ease;
+        border-radius: 15px;
+        background: linear-gradient(180deg, rgba(32, 34, 41, 0.95) 0%, rgba(20, 21, 26, 0.96) 100%);
+        backdrop-filter: blur(22px) saturate(150%);
+        color: #f4f5f8;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13);
+        display: flex;
+        flex-direction: column;
+        position: relative;
+        overflow: hidden;
+        transition: width 0.18s cubic-bezier(0.22, 1, 0.36, 1);
       }
+      .hud::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 18px;
+        right: 18px;
+        height: 1.5px;
+        border-radius: 2px;
+        background: linear-gradient(90deg, transparent, rgba(255, 69, 58, 0.9), transparent);
+        transition: background 0.22s ease;
+      }
+      .hud[data-phase="idle"]::before {
+        background: linear-gradient(90deg, transparent, #3b82f6, #64d2ff, transparent);
+      }
+      .hud[data-phase="polishing"]::before {
+        background: linear-gradient(90deg, transparent, #8b5cf6, #c084fc, transparent);
+      }
+      .hud[data-phase="ok"]::before {
+        background: linear-gradient(90deg, transparent, #32d74b, transparent);
+      }
+      .hud[data-phase="warn"]::before {
+        background: linear-gradient(90deg, transparent, #ff9f0a, transparent);
+      }
+      .hud[data-phase="err"]::before {
+        background: linear-gradient(90deg, transparent, #ff453a, transparent);
+      }
+
       .hud.hasqueue { width: 664px; }
-      .status { font-size: 12px; color: #98989f; display: flex; align-items: center; gap: 7px; letter-spacing: 0.2px; flex: none; }
-      .dot { width: 7px; height: 7px; border-radius: 50%; background: #ff453a; animation: pulse 1.1s infinite; flex: none; }
-      .dot.idle { background: #ffd60a; animation: none; }
-      .dot.ok { background: #34c759; animation: none; }
-      .dot.err { background: #ff453a; animation: none; }
-      .hint { margin-left: auto; font-size: 11px; color: #636366; display: flex; align-items: center; gap: 8px; }
-      /* 「清空」只在队列里有排队段时出现; 两步确认(点一下变"确认清空？"), 防误触(用户定则) */
-      .hint button { font-size: 10px; padding: 2px 7px; border-radius: 5px; cursor: pointer; color: #8e8e93;
-                     border: 1px solid rgba(255, 255, 255, 0.16); background: transparent; display: none; }
-      .hint button.show { display: inline-block; }
-      .hint button.confirm { color: #ff9f0a; border-color: #ff9f0a; }
-      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-      .body { display: flex; margin-top: 8px; min-height: 22px; }
-      /* 左栏: 当前段。正在录音的内容必须能换行、多行显示(用户定则), 超出后在框内滚动。
-         max-height 110px 与队列化之前完全一致(那时窗口固定 480x200, 文本区 110px 后滚动)。 */
-      .cur { flex: 1; min-width: 0; }
-      .cur-text { font-size: 15px; line-height: 1.45; color: #f2f2f7; word-break: break-all;
-                  max-height: 110px; overflow-y: auto; }
-      .cur-text:empty::before { content: "…"; color: #636366; }
-      .cur-text::-webkit-scrollbar { width: 3px; }
-      .cur-text::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 2px; }
-      /* 右栏: 队列。一行一段, 单行截断; 只有状态图标+文字, 不带段号/不带"已交付"字样(用户定则) */
-      .queue { display: none; width: 250px; flex: none; margin-left: 16px; padding-left: 14px;
-               border-left: 0.5px solid rgba(255, 255, 255, 0.14); }
-      .hud.hasqueue .queue { display: block; }
-      .qlist { display: flex; flex-direction: column; gap: 6px; max-height: 118px; overflow: hidden; }
-      .qrow { display: flex; gap: 7px; font-size: 13px; line-height: 1.35; color: #8e8e93; }
-      .qrow .b { flex: none; width: 13px; text-align: center; color: #636366; }
-      .qrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .qrow.failed .b, .qrow.failed .t { color: #ff6961; }
-      .bar { margin-top: 9px; height: 3px; border-radius: 1.5px; background: rgba(255, 255, 255, 0.1); overflow: hidden; flex: none; }
-      .bar .fill { height: 100%; width: 0; background: linear-gradient(90deg, #0a84ff, #64d2ff); border-radius: 1.5px; transition: width 0.08s; }
-      .bar .fill.hot { background: linear-gradient(90deg, #ff9f0a, #ffd60a); }
-      .fail-actions { margin-top: 10px; display: none; gap: 8px; align-items: center; flex: none; }
-      .fail-actions.show { display: flex; }
-      .fail-actions .msg { font-size: 12px; color: #ff6961; flex: 1; }
-      .fail-actions button {
-        font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2);
-        background: rgba(255, 255, 255, 0.08); color: #f2f2f7; cursor: pointer;
+
+      .status {
+        font-size: 12px;
+        font-weight: 500;
+        color: #d6dae3;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        letter-spacing: -0.01em;
+        flex: none;
       }
-      .fail-actions button.primary { background: #0a84ff; border-color: #0a84ff; }
+
+      /* 单一活态指示灯（消灭重复圆点） */
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ff453a;
+        position: relative;
+        flex: none;
+        box-shadow: 0 0 8px rgba(255, 69, 58, 0.5);
+      }
+      .dot::after {
+        content: "";
+        position: absolute;
+        inset: -3px;
+        border-radius: 50%;
+        background: rgba(255, 69, 58, 0.55);
+        animation: beacon 1.35s cubic-bezier(0.2, 0.8, 0.4, 1) infinite;
+      }
+      .dot.idle {
+        background: transparent;
+        box-shadow: none;
+        border: 2px solid rgba(100, 210, 255, 0.24);
+        border-top-color: #64d2ff;
+        animation: spin 0.85s linear infinite;
+      }
+      .dot.idle::after { display: none; }
+      .dot.polishing {
+        background: #c084fc;
+        box-shadow: 0 0 10px rgba(192, 132, 252, 0.7);
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      .dot.polishing::after { display: none; }
+      .dot.ok { background: #32d74b; box-shadow: 0 0 9px rgba(50, 215, 75, 0.65); }
+      .dot.ok::after { display: none; }
+      .dot.warn { background: #ff9f0a; box-shadow: 0 0 8px rgba(255, 159, 10, 0.6); }
+      .dot.warn::after { display: none; }
+      .dot.err { background: #ff453a; box-shadow: 0 0 8px rgba(255, 69, 58, 0.65); }
+      .dot.err::after { display: none; }
+
+      @keyframes beacon {
+        0% { transform: scale(0.9); opacity: 0.75; }
+        70% { transform: scale(1.9); opacity: 0; }
+        100% { transform: scale(1.9); opacity: 0; }
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+      .hint { margin-left: auto; font-size: 11px; color: #7c8290; display: flex; align-items: center; gap: 8px; }
+      /* 「清空」只在队列里有排队段时出现; 两步确认, 防误触(用户定则) */
+      .hint button {
+        font-size: 10.5px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+        color: #c2c7d1;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.05);
+        display: none;
+        transition: background 0.12s, border-color 0.12s;
+      }
+      .hint button:hover { background: rgba(255, 255, 255, 0.11); }
+      .hint button.show { display: inline-block; }
+      .hint button.confirm { color: #ffb946; border-color: #ff9f0a; background: rgba(255, 159, 10, 0.14); }
+
+      .body { display: flex; margin-top: 9px; min-height: 24px; }
+      /* 左栏: 当前段。正在录音的内容可换行、多行显示, 超出后在框内滚动 */
+      .cur { flex: 1; min-width: 0; }
+      .cur-text {
+        font-size: 15px;
+        line-height: 1.5;
+        color: #f3f4f7;
+        overflow-wrap: anywhere;
+        word-break: normal;
+        max-height: 110px;
+        overflow-y: auto;
+        -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 84%, transparent 100%);
+        mask-image: linear-gradient(180deg, #000 0%, #000 84%, transparent 100%);
+      }
+      .cur-text:empty::before { content: "…"; color: #707787; }
+      .cur-text[data-rec="1"]:empty::before { content: "聆听中…"; color: #848b9c; animation: pulse 1.5s ease-in-out infinite; }
+      .cur-text::-webkit-scrollbar { width: 3px; }
+      .cur-text::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.22); border-radius: 2px; }
+
+      /* 右栏: 队列。一行一段, 单行截断; 只有状态指示+文字, 不带段号/多余字(用户定则) */
+      .queue {
+        display: none;
+        width: 250px;
+        flex: none;
+        margin-left: 16px;
+        padding-left: 14px;
+        border-left: 1px solid rgba(255, 255, 255, 0.13);
+      }
+      .hud.hasqueue .queue { display: block; }
+      .qlist { display: flex; flex-direction: column; gap: 5px; max-height: 118px; overflow: hidden; }
+      .qrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+        line-height: 1.35;
+        color: #9ba0ad;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .qrow.transcribing { background: rgba(255, 255, 255, 0.07); color: #eceef3; }
+      .qrow .b {
+        flex: none;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #6b7280;
+      }
+      .qrow.transcribing .b {
+        width: 10px;
+        height: 10px;
+        background: transparent;
+        border: 1.8px solid rgba(100, 210, 255, 0.25);
+        border-top-color: #64d2ff;
+        animation: spin 0.85s linear infinite;
+      }
+      .qrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .qrow.failed .b { background: #ff453a; }
+      .qrow.failed .t { color: #ff8078; }
+
+      /* 细刻度居中声纹槽：沿用既有 s.level 宽度赋值，带高光刻度视觉 */
+      .bar {
+        margin-top: 10px;
+        height: 5px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+        flex: none;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .bar::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image: repeating-linear-gradient(
+          90deg,
+          transparent 0px,
+          transparent 4px,
+          rgba(20, 21, 26, 0.85) 4px,
+          rgba(20, 21, 26, 0.85) 6px
+        );
+        pointer-events: none;
+        z-index: 2;
+      }
+      .bar .fill {
+        height: 100%;
+        width: 0;
+        background: linear-gradient(90deg, #3b82f6, #64d2ff, #3b82f6);
+        box-shadow: 0 0 10px rgba(100, 210, 255, 0.45);
+        border-radius: 999px;
+        transition: width 0.08s ease-out;
+      }
+      .bar .fill.hot {
+        background: linear-gradient(90deg, #ff9f0a, #ffd60a, #ff9f0a);
+        box-shadow: 0 0 12px rgba(255, 190, 30, 0.55);
+      }
+
+      .fail-actions {
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        display: none;
+        gap: 8px;
+        align-items: center;
+        flex: none;
+      }
+      .fail-actions.show { display: flex; }
+      .fail-actions .msg { font-size: 12px; color: #ff8078; flex: 1; }
+      .fail-actions button {
+        font-size: 11.5px;
+        font-weight: 500;
+        padding: 4px 11px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.08);
+        color: #f2f2f7;
+        cursor: pointer;
+      }
+      .fail-actions button.primary { background: #3b82f6; border-color: #3b82f6; color: #fff; }
       .fail-actions button:disabled { opacity: 0.4; cursor: default; }
     </style>
   </head>
   <body>
-    <div class="hud" id="hud">
+    <div class="hud" id="hud" data-phase="recording">
       <div class="status">
         <span class="dot" id="dot"></span>
-        <span id="status">● 录音中</span>
+        <span id="status">录音中</span>
         <span class="hint" id="hint">
           <button id="clearBtn">清空</button>
         </span>

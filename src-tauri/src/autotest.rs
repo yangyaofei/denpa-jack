@@ -529,10 +529,13 @@ fn run_ui_chain(app: tauri::AppHandle) {
                    }) : [];
                    const llm = document.querySelector('[data-page="llm"]');
                    const h1 = llm ? llm.querySelector('h1') : null;
+                   const h1Top = h1 ? Math.round(h1.getBoundingClientRect().top) : -1;
+                   const ciTop = ci ? Math.round(ci.getBoundingClientRect().top) : 0;
                    const r = {
                      kids,
                      llmTop: llm ? llm.offsetTop : -1,
-                     h1Top: h1 ? Math.round(h1.getBoundingClientRect().top) : -1,
+                     h1Top,
+                     h1Gap: h1 ? (h1Top - ciTop) : -1,
                      ciScrollTop: ci ? ci.scrollTop : -1,
                      ciPadding: ci ? getComputedStyle(ci).paddingTop : '?',
                      ciScrollH: ci ? ci.scrollHeight : -1,
@@ -550,7 +553,7 @@ fn run_ui_chain(app: tauri::AppHandle) {
             crate::log::elog(&format!("[ui-chain] 大模型页布局: {}", line2.trim()));
             assert!(line2.contains("LLM-PROBE {"), "llm 布局探针未回传");
             assert!(line2.contains("\"llmTop\":20"), "llm 页被上方隐藏容器挤下(幽灵 flex 高度回归)");
-            assert!(line2.contains("\"h1Top\":20"), "llm 标题不在页首(空白回归)");
+            assert!(line2.contains("\"h1Gap\":20"), "llm 标题不在页首(空白回归)");
             let log = std::fs::read_to_string(dir.join("app.log")).unwrap_or_default();
             let line = log.lines().rev().find(|l| l.contains("SCROLL-PROBE")).unwrap_or("");
             crate::log::elog(&format!("[ui-chain] 滚动链: {}", line.trim()));

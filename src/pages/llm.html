@@ -1,107 +1,131 @@
-      <section x-show="section === 'llm'" class="page">
-        <h1>大模型</h1>
+<section x-show="section === 'llm'" class="page">
+  <div class="page-head">
+    <div>
+      <h1>大模型</h1>
+      <p class="hint">词典纠错之后的可选结构化润色（tool_calls 回传，失败自动降级绝不阻塞交付）</p>
+    </div>
+    <button class="mini primary" @click="newLlm()">
+      <svg class="ic-xs"><use href="#ic-plus"/></svg>
+      <span>添加模型档案</span>
+    </button>
+  </div>
 
-        <p class="hint">润色档案; 系统提示词留空时使用内置提示词</p>
-        <template x-for="p in cfg?.llm_profiles ?? []" :key="p.id">
-          <div class="card profile" :class="{active: p.id === cfg?.active_llm_id}">
-            <div class="row">
-              <div>
-                <div class="row-title">
-                  <span x-text="p.name"></span>
-                  <span class="tag" x-text="p.provider"></span>
-                  <span class="tag green" x-show="p.id === cfg?.active_llm_id">使用中</span>
-                  <span class="tag" x-show="p.thinking">思考</span>
-                </div>
-                <div class="row-hint">
-                  <span x-text="p.model"></span> ·
-                  Key: <span x-text="p.api_key ? p.api_key.slice(0,8) + '…' : '(用 Key 池兜底)'"></span>
-                </div>
-              </div>
-              <div class="btns">
-                <button class="mini" @click="useLlm(p)">使用</button>
-                <button class="mini" @click="editLlm(p)">编辑</button>
-                <button class="mini red" @click="delLlm(p)">删除</button>
-              </div>
-            </div>
+  <template x-for="p in cfg?.llm_profiles ?? []" :key="p.id">
+    <div class="card profile" :class="{active: p.id === cfg?.active_llm_id}">
+      <div class="row">
+        <div>
+          <div class="row-title">
+            <span x-text="p.name"></span>
+            <span class="tag mono" x-text="p.provider"></span>
+            <span class="tag accent" x-show="p.id === cfg?.active_llm_id">使用中</span>
+            <span class="tag indigo" x-show="p.thinking">思考</span>
           </div>
-        </template>
-        <button class="add-btn" @click="newLlm()">+ 添加模型档案</button>
-
-        <div class="card">
-          <div class="row">
-            <div>
-              <div class="row-title">调用参数</div>
-              <div class="row-hint">三个档案共用；改动随「保存」写入配置。超时越大越能容忍慢思考模型（出错时等待也更久）；最大输出 token 留 0 = 不传该字段（用服务端默认），思考型模型正文为空时可调大；重试只针对传输失败 / 响应读不出 / 5xx / 429 / 无有效输出，配置类错误（模型名、Key、参数）不重试</div>
-            </div>
+          <div class="row-hint mono">
+            <span x-text="p.model"></span> ·
+            Key: <span x-text="p.api_key ? p.api_key.slice(0,8) + '…' : '(Key 池兜底)'"></span>
           </div>
-          <label class="row">
-            <div><div class="row-title">请求超时（秒）</div></div>
-            <input class="inp sm" type="number" min="5" max="600" x-model.number="cfg.llm_timeout_secs" @change="saveCfg()" />
-          </label>
-          <label class="row">
-            <div><div class="row-title">最大输出 token</div><div class="row-hint">0 = 不传（服务端默认）</div></div>
-            <input class="inp sm" type="number" min="0" max="100000" step="256" x-model.number="cfg.llm_max_tokens" @change="saveCfg()" />
-          </label>
-          <label class="row">
-            <div><div class="row-title">失败重试次数</div><div class="row-hint">0 = 不重试；每次重试间隔 0.4s、0.8s…递增</div></div>
-            <input class="inp sm" type="number" min="0" max="5" x-model.number="cfg.llm_retries" @change="saveCfg()" />
-          </label>
         </div>
+        <div class="btns">
+          <button class="mini" @click="useLlm(p)" x-show="p.id !== cfg?.active_llm_id">使用</button>
+          <button class="mini" @click="editLlm(p)">编辑</button>
+          <button class="mini red" @click="delLlm(p)">删除</button>
+        </div>
+      </div>
+    </div>
+  </template>
 
-        <!-- LLM 编辑 sheet -->
-        <template x-if="llmEdit"><div class="overlay" @click.self="llmEdit = null">
-          <div class="sheet wide">
-            <h2 x-text="llmIsNew ? '添加模型' : '编辑模型'"></h2>
-            <label>名称<input class="inp" x-model="llmEdit.name" /></label>
-            <label>供应商
-              <select class="inp" x-model="llmEdit.provider" @change="onLlmProviderChange()">
-                <option value="deepseek">DeepSeek</option>
-                <option value="zhipu">智谱 (OpenAI 兼容)</option>
-              </select>
-            </label>
-            <label>模型
-              <div style="display:flex; gap:6px; align-items:center">
-                <select class="inp" x-model="llmEdit.model" style="flex:1; min-width:0">
-                  <option value="" x-show="!llmModels.length">先刷新拉取…</option>
-                  <template x-for="mo in llmModels" :key="mo"><option :value="mo" x-text="mo"></option></template>
-                </select>
-                <button class="mini" style="flex:none" @click="fetchLlmModels()">刷新</button>
-              </div>
-              <div class="row-hint" x-show="llmModelsError" x-text="llmModelsError" style="color:#ff6b6b"></div>
-            </label>
-            <label>接口地址
-              <input class="inp" x-model="llmEdit.base_url" placeholder="留空=按供应商默认; 可填自建/中转网关" />
-            </label>
-            <label>API Key<span class="row-hint">(留空用 Key 池)</span>
-              <input class="inp" type="password" x-model="llmEdit.api_key" /></label>
-            <div class="row">
-              <div>
-                <div class="row-title">思考模式</div>
-                <div class="row-hint">开 = 模型先思考再回答; 关 = 直接回答</div>
-              </div>
-              <input type="checkbox" class="switch" x-model="llmEdit.thinking" />
-            </div>
-            <label>思考强度
-              <select class="inp" x-model="llmEdit.effort">
-                <template x-for="ev in effortOptions()" :key="ev">
-                  <option :value="ev" x-text="ev"></option>
-                </template>
-              </select>
-            </label>
-            <label>系统提示词
-              <div class="btns" style="margin: 4px 0">
-                <span class="row-hint">随档案保存; 新档案回填内置默认</span>
-                <span style="flex:1"></span>
-                <button class="mini" @click="togglePromptPreview()" x-text="editLlmPromptPreview ? '← 编辑' : 'Markdown 预览'"></button>
-              </div>
-              <textarea class="ta tall" x-show="!editLlmPromptPreview" x-model="llmEdit.prompt"></textarea>
-              <div class="ta tall md-preview" x-show="editLlmPromptPreview" x-html="mdRender(llmEdit?.prompt ?? '')"></div></label>
-            <div class="btns end">
-              <button class="mini" @click="runLlmSelftest()" :disabled="selftesting" x-text="selftesting ? '测试中…' : '测试'"></button>
-              <span style="flex:1"></span>
-              <button class="mini" @click="llmEdit = null">取消</button>
-              <button class="mini primary" @click="saveLlm()">保存</button>
-            </div>
-            <pre x-show="selftestResult" x-text="selftestResult" style="white-space: pre-wrap; margin: 10px 0 0; padding: 10px 12px; background: rgba(120,120,128,0.08); border: 1px solid rgba(120,120,128,0.2); border-radius: 8px; font: 12px/1.6 ui-monospace, Menlo, monospace;"></pre>
-          </div>        </div></template>
-      </section>
+  <!-- 紧凑三栏数值调参卡 -->
+  <div class="card">
+    <div class="row">
+      <div class="row-title">共用调用参数</div>
+      <span class="row-hint">仅传输失败 / 限流 / 5xx 重试；配置错误不重试</span>
+    </div>
+    <div class="grid-3">
+      <label class="param-box">
+        <span>请求超时</span>
+        <div class="unit-input">
+          <input class="inp" type="number" min="5" max="600" x-model.number="cfg.llm_timeout_secs" @change="saveCfg()" />
+          <span class="unit-tag">秒</span>
+        </div>
+      </label>
+      <label class="param-box">
+        <span>最大输出（0 = 默认）</span>
+        <div class="unit-input">
+          <input class="inp" type="number" min="0" max="100000" step="256" x-model.number="cfg.llm_max_tokens" @change="saveCfg()" />
+          <span class="unit-tag">token</span>
+        </div>
+      </label>
+      <label class="param-box">
+        <span>失败重试</span>
+        <div class="unit-input">
+          <input class="inp" type="number" min="0" max="5" x-model.number="cfg.llm_retries" @change="saveCfg()" />
+          <span class="unit-tag">次</span>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <!-- LLM 编辑 sheet -->
+  <template x-if="llmEdit"><div class="overlay" @click.self="llmEdit = null">
+    <div class="sheet wide">
+      <h2 x-text="llmIsNew ? '添加模型' : '编辑模型'"></h2>
+      <div class="grid-2">
+        <label>名称<input class="inp" x-model="llmEdit.name" /></label>
+        <label>供应商
+          <select class="inp" x-model="llmEdit.provider" @change="onLlmProviderChange()">
+            <option value="deepseek">DeepSeek</option>
+            <option value="zhipu">智谱 (OpenAI 兼容)</option>
+          </select>
+        </label>
+      </div>
+      <label>模型
+        <div class="btns">
+          <select class="inp" x-model="llmEdit.model" style="flex:1;min-width:0">
+            <option value="" x-show="!llmModels.length">先刷新拉取…</option>
+            <template x-for="mo in llmModels" :key="mo"><option :value="mo" x-text="mo"></option></template>
+          </select>
+          <button class="mini" @click="fetchLlmModels()">刷新</button>
+        </div>
+        <div class="err" x-show="llmModelsError" x-text="llmModelsError"></div>
+      </label>
+      <div class="grid-2">
+        <label>接口地址
+          <input class="inp mono" x-model="llmEdit.base_url" placeholder="留空按供应商默认" />
+        </label>
+        <label>API Key<span class="row-hint">(留空用 Key 池)</span>
+          <input class="inp mono" type="password" x-model="llmEdit.api_key" />
+        </label>
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-title">思考模式</div>
+          <div class="row-hint">开 = 先推理再纠错（适合复杂上下文）</div>
+        </div>
+        <input type="checkbox" class="switch" x-model="llmEdit.thinking" />
+      </div>
+      <label>思考强度
+        <select class="inp" x-model="llmEdit.effort">
+          <template x-for="ev in effortOptions()" :key="ev">
+            <option :value="ev" x-text="ev"></option>
+          </template>
+        </select>
+      </label>
+      <label>系统提示词
+        <div class="btns" style="margin:4px 0">
+          <span class="row-hint">留空回填内置默认提示词</span>
+          <span style="flex:1"></span>
+          <button class="mini" @click="togglePromptPreview()" x-text="editLlmPromptPreview ? '← 编辑' : 'Markdown 预览'"></button>
+        </div>
+        <textarea class="ta tall" x-show="!editLlmPromptPreview" x-model="llmEdit.prompt"></textarea>
+        <div class="ta tall md-preview" x-show="editLlmPromptPreview" x-html="mdRender(llmEdit?.prompt ?? '')"></div>
+      </label>
+      <div class="btns end">
+        <button class="mini" @click="runLlmSelftest()" :disabled="selftesting" x-text="selftesting ? '测试中…' : '测试链路'"></button>
+        <span style="flex:1"></span>
+        <button class="mini" @click="llmEdit = null">取消</button>
+        <button class="mini primary" @click="saveLlm()">保存</button>
+      </div>
+      <pre class="log-box" x-show="selftestResult" x-text="selftestResult" style="margin-top:6px"></pre>
+    </div>
+  </div></template>
+</section>

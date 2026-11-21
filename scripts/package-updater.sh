@@ -2,8 +2,8 @@
 # 打包"应用内更新"产物：把**已代码签名**的 .app 打成 tar.gz，并用 minisign 密钥签名。
 #
 # 为什么必须单独一步：`tauri build` 会在代码签名之前就生成 updater 的 tar.gz，
-# 里面装的是 ad-hoc 签名的 app —— 用它做更新会导致更新后身份变化、TCC 授权全部丢失（实测踩过，见
-# docs/SPEC.md §5.1）。所以流程固定为：先 rcodesign 签 .app → 再用本脚本重打包 + 签名。
+# 里面装的是 ad-hoc 签名的 app —— 用它做更新会导致更新后身份变化、TCC 授权全部丢失。
+# 所以流程固定为：先 rcodesign 签 .app → 再用本脚本重打包 + 签名（详见 docs/CI-CD.md）。
 #
 # 用法: scripts/package-updater.sh <版本号> [输出目录（默认 dist-release）]
 # 需要环境变量: TAURI_SIGNING_PRIVATE_KEY（私钥内容）、TAURI_SIGNING_PRIVATE_KEY_PASSWORD

@@ -2,17 +2,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppThis, HistoryRecord } from "./types";
 
-export function historyPage(this: AppThis) {
+export function historyPage() {
   return {
     history: [] as HistoryRecord[],
     selHist: null as HistoryRecord | null,
     histSearch: "",
+    histFilter: "all" as "all" | "llm" | "warn",
 
     // ── 历史 ──
     async refreshHistory(this: AppThis) {
       // E: 详情是快照——列表刷新时按 ts 重找, 保证重转/重跑后详情同步
-      if (this.selHist) {
-        const fresh = (this.history || []).find((h: any) => h.ts === this.selHist.ts);
+      const sel = this.selHist;
+      if (sel) {
+        const fresh = (this.history || []).find((h: any) => h.ts === sel.ts);
         if (fresh) this.selHist = fresh;
       }
       try { this.history = await invoke("get_history", { limit: 500 }); }
@@ -20,9 +22,28 @@ export function historyPage(this: AppThis) {
     },
     filteredHist(this: AppThis) {
       const q = this.histSearch.trim().toLowerCase();
-      if (!q) return this.history;
-      return this.history.filter((h: any) =>
-        (h.raw || "").toLowerCase().includes(q) || (h.final_text || "").toLowerCase().includes(q));
+      return this.history.filter((h: any) => {
+        if (this.histFilter === "llm" && !h.llm_used) return false;
+        if (this.histFilter === "warn" && !h.warning) return false;
+        if (!q) return true;
+        return (h.raw || "").toLowerCase().includes(q) || (h.final_text || "").toLowerCase().includes(q);
+      });
+    },
+    deliveryLabel(this: AppThis, d: string): string {
+      if (d === "pasted-ax" || d === "clipboard+paste") return "AX 直写";
+      if (d === "pasted-cmdv") return "Cmd+V 粘贴";
+      if (d === "copied" || d === "copied-self" || d === "focus-changed-copied-only") return "仅复制";
+      if (d === "failed") return "失败";
+      if (d === "cancelled") return "已取消";
+      return d || "未知";
+    },
+    histStats(this: AppThis) {
+      const h = this.history || [];
+      return {
+        total: h.length,
+        llmCount: h.filter((x: any) => x.llm_used).length,
+        pastedCount: h.filter((x: any) => (x.delivered || "").includes("paste")).length,
+      };
     },
     selectHist(this: AppThis, h: HistoryRecord) {
       this.selHist = h;
@@ -31,7 +52,7 @@ export function historyPage(this: AppThis) {
       this.$nextTick(() => { const el = (this.$refs as any).paneRight; if (el) el.scrollTop = 0; });
     },
     async copyHist(this: AppThis, h: HistoryRecord) {
-      try { await invoke("copy_text", { text: h.final_text }); } catch (e) { console.error(e); }
+      await this.copyWithFeedback("hist-" + h.ts, h.final_text || h.raw);
     },
     async openAudio(this: AppThis, h: HistoryRecord) {
       if (!h.audio_path) return;

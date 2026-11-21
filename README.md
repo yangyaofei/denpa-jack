@@ -16,8 +16,9 @@ and a level meter.
 
 - **Global hotkey** — `Fn`, modifier-only combos (e.g. `ctrl+option`), letters/digits/F1–F12;
   two activation modes (hold-to-talk / press-to-start, press-to-stop); record it in the UI
-- **ASR engines** — Doubao streaming 2.0 (binary WebSocket, hotwords passed upstream, live
-  partials) / Zhipu GLM-ASR (file-based, fallback) / OpenAI Realtime (module present)
+- **ASR engines** — Built-in local streaming ASR gateway (`denpa-asr`, Qwen3-ASR / MLX) /
+  Doubao streaming 2.0 (binary WebSocket, hotwords passed upstream, live partials) /
+  Zhipu GLM-ASR (file-based, fallback)
 - **Dictionary correction without an LLM** — variant replacement + regex normalisation +
   **pinyin fuzzy matching** (near-sound syllable ≈ 0.5 cost, only for ≥3-character terms),
   guarded so it cannot rewrite something already correct
@@ -69,7 +70,7 @@ npm run tauri build
 ```
 
 The first build needs network access: the keyboard layer uses a **patched `handy-keys`**
-pinned by git revision — see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+pinned by git revision — see the `[patch.crates-io]` notes in [src-tauri/Cargo.toml](src-tauri/Cargo.toml).
 
 ## Code signing & permissions
 
@@ -91,20 +92,19 @@ standard signature that passes `codesign --verify` — and TCC permissions work 
   works). Only **Developer ID + notarisation** removes that friction.
 - CI/CD: rcodesign runs on Linux runners too, and can notarise with an App Store Connect API key.
 
-Details, evidence and the pitfalls we hit: [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md).
+Details, evidence and troubleshooting: [docs/CI-CD.md](docs/CI-CD.md).
 
 ## Tests
 
 ```bash
-cd src-tauri && cargo test --lib      # unit tests (76)
+cd src-tauri && cargo test --lib      # unit tests (151)
+npx tsc --noEmit && npm run build && node tests/frontend-checks.mjs
 ./scripts/regression.sh               # gate: unit → file-replay → UI data chain → e2e → bundle+sign
 ```
 
 Self-test modes (explicit env vars, never active on a normal launch):
 `VOICEMAC_AUTOTEST=ui` (page-level data chain), `VOICEMAC_AUTOTEST=e2e` (real microphone),
 `VOICEMAC_AUTOTEST_FILE=<wav>` (audio file replay, no microphone).
-
-See [docs/TESTING.md](docs/TESTING.md) and [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md).
 
 ## Runtime data
 
@@ -117,31 +117,19 @@ moves with it except `config.json`, which stays in the default location and acts
 | File | Contents |
 |---|---|
 | `config.json` | all settings (profiles, dictionary, hotkeys, switches) |
-| `app.log` | diagnostics (`[diag]` backend, `[ui]` frontend, device & key events) |
+| `app.log` | diagnostics (`[diag]` backend, `[ui]` frontend, `[crash]`/`[hb]`, device & key events) |
 | `history.jsonl` | transcripts (raw / final / engine / delivery / audio path) |
 | `recordings/` | retained audio, trimmed to the configured limit |
 | `llm_logs/` | request and response body of every LLM call |
 
 ## Docs
 
+Architecture, cross-boundary contracts, sync model, and diagnostics live directly in module docstrings (starting from [src-tauri/src/lib.rs](src-tauri/src/lib.rs) and [src-tauri/build.rs](src-tauri/build.rs)). External docs are kept minimal:
+
 | Document | Contents |
 |---|---|
-| [AGENTS.md](AGENTS.md) | project contract for contributors and agents: layout, commands, hard rules |
-| [docs/SPEC.md](docs/SPEC.md) | requirements and architecture (features, modules, data flow) |
-| [docs/CONTRACTS.md](docs/CONTRACTS.md) | cross-boundary contracts (threading, coordinates, lifecycle), enforced at build time |
-| [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md) | signing with rcodesign straight from a `.p12`, TCC requirements, measured evidence, pitfalls |
-| [docs/CI-CD.md](docs/CI-CD.md) | GitHub Actions: test pipeline, release pipeline, repository credentials it needs |
-| [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md) | crash and silent-exit diagnostics: what the log covers, how to read it, self-test modes |
-| [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | dependency notes: the patched `handy-keys`, upstream PR, cleanup after merge |
-| [docs/TESTING.md](docs/TESTING.md) / [docs/TEST-MATRIX.md](docs/TEST-MATRIX.md) | test organisation, "every fix adds a case" matrix |
-| [docs/SYNC.md](docs/SYNC.md) | how front-end content stays in sync with back-end state |
-| [docs/HANDY-COMPAT.md](docs/HANDY-COMPAT.md) | component-by-component comparison with Handy (overlay, tray, paste, hotkeys) |
-| [docs/DEVIATION-AUDIT.md](docs/DEVIATION-AUDIT.md) | deliberate deviations from the reference implementation |
-| [docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md) | open items and explicit non-goals (with reasons) |
-| [docs/SPIKE-STREAMING.md](docs/SPIKE-STREAMING.md) | streaming ASR options (local and cloud, measured) |
-| [docs/WINDOW-SEMANTICS.md](docs/WINDOW-SEMANTICS.md) | window levels and focus semantics |
-| [docs/REFACTOR.md](docs/REFACTOR.md) | code-quality checklist (alignment with the Handy skeleton) |
-| [docs/icon/README.md](docs/icon/README.md) | app icon: final assets, generation scripts, decision history |
+| [AGENTS.md](AGENTS.md) | contributor & agent contract: module map, dev/test commands, hard rules |
+| [docs/CI-CD.md](docs/CI-CD.md) | code signing (`rcodesign`), TCC continuity, GitHub Secrets, CI/Release pipelines |
 
 ## Known limits
 

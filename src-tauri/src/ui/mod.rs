@@ -1,4 +1,4 @@
-//! ui 域：把状态呈现给人（docs/ARCHITECTURE.md 四域之一）。
+//! ui 域：把状态呈现给人（四域之一，见 `lib.rs` 架构总览）。
 //!
 //! 门面（外部只许经 ui:: 调这些）：
 //!   - hud::show_partial / show_final / show_delivered / polishing / error / no_speech / dismiss
