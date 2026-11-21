@@ -41,6 +41,21 @@ macOS 菜单栏常驻（不占 Dock）。录音时浮窗显示实时转写文本
     ──► 剪贴板 + 历史（+ 音频文件，按上限裁剪）
 ```
 
+## 安装
+
+### Homebrew（macOS Apple Silicon）
+
+```bash
+brew tap yangyaofei/tap
+brew install --cask denpa-jack
+```
+
+后续可通过 `brew upgrade --cask denpa-jack` 或应用内更新升级（签名身份固定，升级不丢麦克风与辅助功能授权）。
+
+### GitHub Releases
+
+从 [GitHub Releases](https://github.com/yangyaofei/denpa-jack/releases) 下载 `Denpa.Jack_<版本>_aarch64.dmg`（或 `.app.zip`），将 `Denpa Jack.app` 拖入「应用程序」。
+
 ## 构建
 
 ```bash
@@ -121,3 +136,7 @@ npx tsc --noEmit && npm run build && node tests/frontend-checks.mjs
 
 - 目前仅 macOS（快捷键底层含 macOS 专用补丁）
 - 自签证书：本机无摩擦，别的机器有摩擦（见上）
+
+## 开源协议
+
+[MIT](LICENSE) © 2026 yangyaofei

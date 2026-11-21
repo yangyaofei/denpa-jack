@@ -51,6 +51,21 @@ hotkey ──► cpal capture (native format → mono → 16 kHz, 200 ms chunks)
         ──► clipboard + history (+ audio file, trimmed by limit)
 ```
 
+## Install
+
+### Homebrew (macOS Apple Silicon)
+
+```bash
+brew tap yangyaofei/tap
+brew install --cask denpa-jack
+```
+
+Upgrade via Homebrew (`brew upgrade --cask denpa-jack`) or built-in in-app updates (stable signing identity preserves Microphone & Accessibility permissions).
+
+### GitHub Releases
+
+Download `Denpa.Jack_<version>_aarch64.dmg` (or `.app.zip`) from [GitHub Releases](https://github.com/yangyaofei/denpa-jack/releases) and drag `Denpa Jack.app` into `/Applications`.
+
 ## Build
 
 ```bash
@@ -135,3 +150,7 @@ Architecture, cross-boundary contracts, sync model, and diagnostics live directl
 
 - macOS only (the keyboard layer carries macOS-specific patches)
 - Self-signed: fine on this machine, friction on other machines (see above)
+
+## License
+
+[MIT](LICENSE) © 2026 yangyaofei
