@@ -12,6 +12,27 @@ LLM, then written through the accessibility API or a synthetic `Cmd+V`.
 macOS menu-bar app (no Dock icon). While recording, an overlay shows live partial text
 and a level meter.
 
+<p align="center">
+  <img src="docs/assets/main-dark.png" alt="Denpa Jack Main Window (Dark — History &amp; Dictionary/LLM Diff)" width="900" />
+</p>
+
+## Live Floating HUD &amp; Light Theme
+
+While speaking, the floating overlay streams live partials with a segmented audio meter, auto-expands from `480px` to `664px` when multiple utterances queue up, glows purple during LLM polish, and confirms delivery before dismissing:
+
+<p align="center">
+  <img src="docs/assets/hud-recording.gif" alt="Denpa Jack Floating Recording HUD Lifecycle" width="760" />
+</p>
+
+<details>
+<summary>Light theme screenshot (Dictionary &amp; Hotword Boosts)</summary>
+
+<p align="center">
+  <img src="docs/assets/main-light.png" alt="Denpa Jack Main Window (Light — Dictionary)" width="900" />
+</p>
+
+</details>
+
 ## Features
 
 - **Global hotkey** — `Fn`, modifier-only combos (e.g. `ctrl+option`), letters/digits/F1–F12;

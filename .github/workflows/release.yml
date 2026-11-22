@@ -155,3 +155,39 @@ jobs:
               --notes "$(cat .github/release-notes.md)" \
               dist-release/*
           fi
+
+      - name: Update yangyaofei/homebrew-tap (optional via HOMEBREW_TAP_TOKEN)
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::未配置 HOMEBREW_TAP_TOKEN Secret，跳过自动更新 yangyaofei/homebrew-tap（配置具备 contents:write 权限的 PAT 后启用）"
+            exit 0
+          fi
+          V="${RELEASE_TAG#v}"
+          DMG="dist-release/Denpa.Jack_${V}_aarch64.dmg"
+          SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/yangyaofei/homebrew-tap.git" tap-work
+          python3 - "$V" "$SHA" tap-work/Casks/denpa-jack.rb << 'PY'
+          import re, sys
+          from pathlib import Path
+
+          ver, sha, cask_path = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+          txt = cask_path.read_text(encoding="utf-8")
+          txt, n1 = re.subn(r'version "[^"]+"', f'version "{ver}"', txt, count=1)
+          txt, n2 = re.subn(r'sha256 "[0-9a-f]{64}"', f'sha256 "{sha}"', txt, count=1)
+          if n1 != 1 or n2 != 1:
+              raise SystemExit("Casks/denpa-jack.rb 替换失败")
+          cask_path.write_text(txt, encoding="utf-8")
+          print(f"Updated Casks/denpa-jack.rb -> {ver} ({sha[:12]}...)")
+          PY
+          cd tap-work
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/denpa-jack.rb
+          if git diff --cached --quiet; then
+            echo "homebrew-tap 已是最新版本，无需提交"
+          else
+            git commit -m "denpa-jack: bump to v${V}"
+            git push origin HEAD:main
+          fi

@@ -15,6 +15,7 @@
 | p12 密码 | `certs/denpa-jack-dev-10y.pw` | 解 p12 | `APPLE_CERT_PASSWORD` |
 | minisign 更新私钥 | `certs/denpa-jack-updater.key` | 签发 `.app.tar.gz.sig` / `latest.json` | `TAURI_SIGNING_PRIVATE_KEY` |
 | minisign 私钥口令 | `certs/updater-signing.pw` | 解 minisign 私钥 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| Homebrew Tap PAT（可选） | — | 发版后自动回写 `yangyaofei/homebrew-tap` 的 `Casks/denpa-jack.rb`（未配置时提示并跳过，不阻断发版） | `HOMEBREW_TAP_TOKEN` |
 
 > 四项必须存为 GitHub **Secrets**（绝不放明文 Variables，公开仓库 Variables 人人可见）。
 

@@ -1,0 +1,47 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Denpa Jack
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Global hotkey / Recording
+        - ASR engine (local / Doubao / Zhipu)
+        - Dictionary correction / LLM polish
+        - Text delivery (AX write / Cmd+V)
+        - Floating HUD / Main window UI
+        - In-app update / Homebrew install
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Version & macOS Environment
+      placeholder: "e.g. v0.4.0 · macOS 15.x Apple Silicon · Target app (VS Code / WeChat / Chrome)"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the actual behavior and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Hold hotkey and speak...
+        2. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant app.log excerpts (sanitized)
+      description: Paste relevant lines from `~/Library/Application Support/io.github.yangyaofei.denpajack/app.log` (remove any API keys or personal transcripts).
+      render: text

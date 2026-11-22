@@ -10,6 +10,27 @@ Denpa Jack 是未来道具研究所（Mirai Gadget Kenkyujo）的**未来道具 
 
 macOS 菜单栏常驻（不占 Dock）。录音时浮窗显示实时转写文本与音量条。
 
+<p align="center">
+  <img src="docs/assets/main-dark.png" alt="Denpa Jack 主界面（暗色主题 · 历史记录与词典/LLM 纠错对比）" width="900" />
+</p>
+
+## 悬浮录音 HUD 与亮色外观
+
+按住热键说话时，悬浮录音窗实时展示流式转写与声纹音量条；连续多句排队时平滑展开为双栏队列（`480px → 664px`），经词典纠错与 LLM 润色后自动上屏并收起：
+
+<p align="center">
+  <img src="docs/assets/hud-recording.gif" alt="Denpa Jack 悬浮录音 HUD 动态演示" width="760" />
+</p>
+
+<details>
+<summary>更多截图（亮色主题 · 词典与热词权重管理）</summary>
+
+<p align="center">
+  <img src="docs/assets/main-light.png" alt="Denpa Jack 主界面（亮色主题 · 词典页）" width="900" />
+</p>
+
+</details>
+
 ## 核心特性
 
 - **全局快捷键**：支持 `Fn`、纯修饰键组合（如 `ctrl+option`）、字母/数字/F1–F12；

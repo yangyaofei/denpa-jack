@@ -1,0 +1,24 @@
+name: Feature Request
+description: Propose a new feature or improvement for Denpa Jack
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Use case / problem
+      description: What dictation workflow or pain point would this improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe how you expect the feature to behave.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Optional notes, screenshots, or related tools.
