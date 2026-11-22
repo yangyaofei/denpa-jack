@@ -66,9 +66,10 @@ macOS 菜单栏常驻（不占 Dock）。录音时浮窗显示实时转写文本
 
 ### Homebrew（macOS Apple Silicon）
 
+一行命令直接安装（Homebrew 会自动关联软件源，无需先手动 `brew tap`）：
+
 ```bash
-brew tap yangyaofei/tap
-brew install --cask denpa-jack
+brew install --cask yangyaofei/tap/denpa-jack
 ```
 
 后续可通过 `brew upgrade --cask denpa-jack` 或应用内更新升级（签名身份固定，升级不丢麦克风与辅助功能授权）。

@@ -76,9 +76,10 @@ hotkey ──► cpal capture (native format → mono → 16 kHz, 200 ms chunks)
 
 ### Homebrew (macOS Apple Silicon)
 
+Install in a single command (Homebrew automatically adds the tap for you):
+
 ```bash
-brew tap yangyaofei/tap
-brew install --cask denpa-jack
+brew install --cask yangyaofei/tap/denpa-jack
 ```
 
 Upgrade via Homebrew (`brew upgrade --cask denpa-jack`) or built-in in-app updates (stable signing identity preserves Microphone & Accessibility permissions).
